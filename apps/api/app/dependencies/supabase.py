@@ -1,9 +1,9 @@
-from typing import Any
+from functools import lru_cache
 
-def get_supabase_client() -> Any:
-    """
-    Placeholder for Supabase client wiring.
+from app.core.config import get_settings
+from app.core.supabase import SupabaseClient
 
-    Replace with your real server-side Supabase client factory.
-    """
-    return None
+
+@lru_cache
+def get_supabase_client() -> SupabaseClient:
+    return SupabaseClient(get_settings())

@@ -3,9 +3,16 @@
   "private": true,
   "scripts": {
     "dev": "./.venv/bin/uvicorn app.main:app --reload",
-    "build": "./.venv/bin/python -m compileall app",
-    "lint": "./.venv/bin/python -m compileall app",
-    "check-types": "./.venv/bin/python -m compileall app",
-    "seed": "./.venv/bin/python seed.py"
+    "build": "./.venv/bin/python -m compileall app tests",
+    "lint": "./.venv/bin/python -m compileall app tests",
+    "check-types": "./.venv/bin/python -m compileall app tests",
+    "seed": "./.venv/bin/python seed.py",
+    "notifications:queue-test": "./.venv/bin/python queue_test_notification.py",
+    "notifications:process": "./.venv/bin/python process_notification_deliveries.py",
+    "test": "./.venv/bin/python -m unittest discover -s tests -p 'test_*.py'",
+    "openapi": "./.venv/bin/python export_openapi.py",
+    "openapi:check": "./.venv/bin/python check_openapi.py",
+    "openapi:types": "./.venv/bin/python generate_openapi_types.py",
+    "openapi:types:check": "./.venv/bin/python generate_openapi_types.py --check"
   }
 }

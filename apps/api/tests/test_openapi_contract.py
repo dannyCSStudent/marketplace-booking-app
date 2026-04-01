@@ -1,0 +1,88 @@
+import unittest
+
+from app.main import app
+
+
+class OpenAPIContractTests(unittest.TestCase):
+    def test_core_paths_exist(self):
+        schema = app.openapi()
+        paths = schema["paths"]
+
+        expected_paths = {
+            "/profiles/me",
+            "/sellers",
+            "/sellers/me",
+            "/sellers/{slug}",
+            "/listings",
+            "/listings/me",
+            "/listings/{listing_id}",
+            "/orders",
+            "/orders/me",
+            "/orders/seller",
+            "/orders/{order_id}",
+            "/bookings",
+            "/bookings/me",
+            "/bookings/seller",
+            "/bookings/{booking_id}",
+        }
+
+        self.assertTrue(expected_paths.issubset(paths.keys()))
+
+    def test_core_response_schemas_exist(self):
+        schema = app.openapi()
+        components = schema["components"]["schemas"]
+
+        for schema_name in [
+            "ProfileRead",
+            "SellerRead",
+            "ListingRead",
+            "ListingListResponse",
+            "OrderRead",
+            "BookingRead",
+        ]:
+            self.assertIn(schema_name, components)
+
+    def test_marketplace_routes_have_expected_methods(self):
+        schema = app.openapi()
+        paths = schema["paths"]
+
+        self.assertIn("get", paths["/listings"])
+        self.assertIn("post", paths["/listings"])
+        self.assertIn("patch", paths["/orders/{order_id}"])
+        self.assertIn("patch", paths["/bookings/{booking_id}"])
+
+    def test_listing_schema_exposes_real_contract_fields(self):
+        schema = app.openapi()
+        components = schema["components"]["schemas"]
+
+        listing_read = components["ListingRead"]["properties"]
+        listing_create = components["ListingCreate"]["properties"]
+
+        for field_name in [
+            "slug",
+            "status",
+            "inventory_count",
+            "requires_booking",
+            "duration_minutes",
+            "is_local_only",
+            "pickup_enabled",
+            "meetup_enabled",
+            "delivery_enabled",
+            "shipping_enabled",
+            "lead_time_hours",
+            "created_at",
+            "updated_at",
+        ]:
+            self.assertIn(field_name, listing_read)
+
+        for field_name in [
+            "slug",
+            "status",
+            "is_local_only",
+            "lead_time_hours",
+        ]:
+            self.assertIn(field_name, listing_create)
+
+
+if __name__ == "__main__":
+    unittest.main()

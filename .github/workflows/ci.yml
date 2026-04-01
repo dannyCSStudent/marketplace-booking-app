@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create API virtualenv
+        working-directory: apps/api
+        run: python -m venv .venv
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: ./.venv/bin/pip install -e .
+
+      - name: Run monorepo lint
+        run: pnpm lint
+
+      - name: Run monorepo tests
+        run: pnpm test
+
+      - name: Check OpenAPI artifact
+        run: pnpm --filter api openapi:check
+
+      - name: Check generated OpenAPI types
+        run: pnpm --filter api openapi:types:check
+
+      - name: Build web app
+        run: pnpm --filter web build

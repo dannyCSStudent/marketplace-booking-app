@@ -1,0 +1,335 @@
+# Roadmap
+
+## Overview
+
+This roadmap outlines the phased development of the local marketplace + booking platform.
+
+The goal is to move from a strong MVP to a differentiated, production-ready product with real-world usability.
+
+The roadmap is organized into phases:
+
+1. Foundation
+2. MVP (Core Commerce)
+3. Trust & Operations
+4. Differentiation
+5. Monetization
+6. Scale & Intelligence
+
+Each phase builds on the previous one.
+
+---
+
+## Phase 0 — Foundation (Week 1 Start)
+
+### Goal
+Establish a production-shaped foundation for fast and safe development.
+
+### Includes
+- Monorepo structure (Expo, Next.js, FastAPI)
+- Supabase integration
+- Environment setup
+- Shared types package
+- Initial database schema
+- AGENTS.md and docs
+- Basic API structure
+- Seed data
+
+### Deliverables
+- `pnpm dev` runs all apps
+- FastAPI health endpoint
+- Supabase connected
+- Initial migration applied
+- Docs reflect architecture
+
+---
+
+## Phase 1 — MVP: Core Commerce (Week 1)
+
+### Goal
+Deliver a full vertical slice where real transactions can happen.
+
+### Core Capabilities
+
+#### Auth & Profiles
+- Sign up / sign in (web + mobile)
+- Profile bootstrap
+- Profile editing
+
+#### Seller Onboarding
+- Create seller profile
+- Seller dashboard shell
+
+#### Listings
+- Create listing (product or service)
+- Edit listing
+- View own listings
+- Categories support
+
+#### Discovery
+- Public listing feed
+- Basic search
+- Category filtering
+- Listing detail page
+
+#### Orders (Products)
+- Create order request
+- Seller views orders
+- Buyer views orders
+- Status updates
+
+#### Bookings (Services)
+- Create booking request
+- Seller confirms/declines
+- Buyer views bookings
+- Status updates
+
+### Success Criteria
+- A user can sign up and become a seller
+- A seller can create listings
+- A buyer can browse listings
+- A buyer can place an order or booking
+- A seller can manage requests
+
+---
+
+## Phase 2 — Trust & Operations (Week 2–3)
+
+### Goal
+Make the platform feel reliable, structured, and safer.
+
+### Features
+
+#### Reviews & Ratings
+- Buyer leaves review after order/booking
+- Seller rating aggregation
+- Review display on seller profile
+
+#### Order & Booking Lifecycle
+- Expanded status tracking
+- Timeline/history of events
+- Cancellation support
+
+#### Fulfillment Improvements
+- Pickup instructions
+- Delivery notes
+- Address management
+
+#### Seller Tools
+- Basic analytics (orders count, revenue estimate)
+- Listing status (active, paused, sold out)
+
+#### Notifications (Basic)
+- Order received
+- Booking request received
+- Status changes
+
+### Success Criteria
+- Users can trust sellers based on reviews
+- Sellers can manage operations without confusion
+- Orders and bookings feel structured
+
+---
+
+## Phase 3 — Differentiation (Week 3–5)
+
+### Goal
+Make the product meaningfully better than generic marketplaces.
+
+### Features
+
+#### AI Listing Assistant
+- Generate title and description from image/text
+- Improve listing clarity
+- Suggest tags/categories
+
+#### Pricing Intelligence
+- Suggested price ranges
+- Basic demand insights
+
+#### Local Feed Enhancements
+- “Available today” listings
+- “Popular near you”
+- “New listings”
+
+#### Seller Insights
+- Repeat customers
+- Listing performance
+- Conversion hints
+
+#### Smart Discovery
+- Better search ranking
+- Category refinement
+- Location-aware feed improvements
+
+### Success Criteria
+- Sellers can create better listings faster
+- Buyers discover relevant listings quickly
+- The app feels intelligent and helpful
+
+---
+
+## Phase 4 — Monetization (Week 5+)
+
+### Goal
+Introduce sustainable revenue streams.
+
+### Features
+
+#### Platform Fees
+- Percentage per transaction
+- Configurable fee model
+
+#### Promoted Listings
+- Boost listings in feed
+- Featured placement
+
+#### Seller Subscriptions
+- Premium tools
+- Analytics upgrades
+- Priority visibility
+
+#### Delivery Fees
+- Optional integration
+- Seller or platform controlled
+
+### Success Criteria
+- Revenue is generated without harming UX
+- Sellers see value in paid features
+
+---
+
+## Phase 5 — Scale & Infrastructure
+
+### Goal
+Ensure the system can handle growth and complexity.
+
+### Features
+
+#### Performance
+- Query optimization
+- Caching strategies
+- Pagination everywhere
+
+#### Reliability
+- Error handling improvements
+- Logging and monitoring
+- Retry strategies for critical flows
+
+#### Background Jobs
+- Notifications
+- Email/SMS
+- Scheduled tasks
+
+#### Security Enhancements
+- Stronger validation
+- Rate limiting
+- Abuse detection
+
+---
+
+## Phase 6 — Advanced Intelligence
+
+### Goal
+Turn the platform into a smart commerce engine.
+
+### Features
+
+#### Trust Score System
+- Delivery reliability
+- Response time
+- Review quality
+- Dispute history
+
+#### Fraud Detection
+- Suspicious behavior flags
+- Automated alerts
+
+#### AI Operations
+- Auto-reply suggestions
+- Smart scheduling suggestions
+- Demand forecasting
+
+#### Seller Automation
+- Auto-accept bookings (rules-based)
+- Inventory alerts
+- Pricing adjustments
+
+---
+
+## Milestones Summary
+
+### Milestone 1
+- Auth, profiles, sellers
+- Listings working
+- Basic feed
+
+### Milestone 2
+- Orders and bookings working
+- Seller dashboard usable
+
+### Milestone 3
+- Reviews and trust added
+- Fulfillment improved
+
+### Milestone 4
+- AI features begin
+- Discovery improves
+
+### Milestone 5
+- Monetization added
+
+---
+
+## What Not To Build Early
+
+Avoid these until after MVP:
+
+- Complex payment systems
+- Advanced calendar scheduling
+- Chat/messaging systems
+- Map-based delivery routing
+- Overbuilt analytics dashboards
+- Over-engineered abstractions
+
+Focus on working flows first.
+
+---
+
+## Development Strategy
+
+### Build Order Priority
+1. Auth
+2. Profiles
+3. Sellers
+4. Listings
+5. Feed
+6. Orders
+7. Bookings
+8. Trust
+9. AI
+10. Monetization
+
+### Execution Style
+- Build vertical slices, not isolated features
+- Keep changes scoped
+- Commit frequently
+- Update docs as you go
+
+---
+
+## North Star
+
+Build the best platform for local sellers and service providers to:
+
+- sell
+- book
+- operate
+- grow
+
+The product should feel:
+
+- simple
+- fast
+- trustworthy
+- local
+- powerful

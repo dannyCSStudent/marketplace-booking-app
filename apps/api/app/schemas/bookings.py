@@ -11,6 +11,14 @@ class BookingCreate(BaseModel):
 
 class BookingStatusUpdate(BaseModel):
     status: str
+    seller_response_note: str | None = None
+
+class BookingStatusEventRead(BaseModel):
+    id: str
+    status: str
+    actor_role: str
+    note: str | None = None
+    created_at: datetime
 
 class BookingRead(BaseModel):
     id: str
@@ -20,4 +28,10 @@ class BookingRead(BaseModel):
     status: str
     scheduled_start: datetime
     scheduled_end: datetime
+    total_cents: int | None = None
+    currency: str = "USD"
     notes: str | None = None
+    seller_response_note: str | None = None
+    listing_title: str | None = None
+    listing_type: str | None = None
+    status_history: list[BookingStatusEventRead] = []
