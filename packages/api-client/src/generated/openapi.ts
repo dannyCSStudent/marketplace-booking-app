@@ -204,6 +204,7 @@ export type ProfileCreate = {
     email_notifications_enabled?: boolean;
     push_notifications_enabled?: boolean;
     marketing_notifications_enabled?: boolean;
+    expo_push_token?: string | null;
   };
 
 export type ProfileRead = {
@@ -217,6 +218,7 @@ export type ProfileRead = {
     email_notifications_enabled?: boolean;
     push_notifications_enabled?: boolean;
     marketing_notifications_enabled?: boolean;
+    expo_push_token?: string | null;
   };
 
 export type ProfileUpdate = {
@@ -229,6 +231,7 @@ export type ProfileUpdate = {
     email_notifications_enabled?: boolean | null;
     push_notifications_enabled?: boolean | null;
     marketing_notifications_enabled?: boolean | null;
+    expo_push_token?: string | null;
   };
 
 export type SellerCreate = {
@@ -360,6 +363,11 @@ export type ApiOperations = {
   "/notifications/me": {
     get: {
       response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/{delivery_id}/retry": {
+    post: {
+      response: NotificationDeliveryRead;
     };
   };
   "/orders": {

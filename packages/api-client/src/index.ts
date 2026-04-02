@@ -269,6 +269,12 @@ export function createApiClient(baseUrl: string) {
     return get<NotificationDelivery[]>("/notifications/me", { accessToken });
   }
 
+  function retryNotificationDelivery(deliveryId: string, accessToken: string) {
+    return post<NotificationDelivery>(`/notifications/${deliveryId}/retry`, undefined, {
+      accessToken,
+    });
+  }
+
   return {
     get,
     post,
@@ -288,6 +294,7 @@ export function createApiClient(baseUrl: string) {
     loadBuyerDashboard,
     loadSellerWorkspace,
     loadMyNotificationDeliveries,
+    retryNotificationDelivery,
   };
 }
 

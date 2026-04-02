@@ -103,5 +103,6 @@ def _build_delivery_payload(
         "actor_role": actor_role,
         "note": note,
         "subject": subject,
+        "body": message,
         "html": html,
     }

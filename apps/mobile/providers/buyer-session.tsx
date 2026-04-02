@@ -11,17 +11,23 @@ import {
 import { getSupabaseRealtimeClient } from '@repo/auth';
 
 import {
+  ApiError,
   buildNotifications,
   createBuyerBooking,
   createBuyerOrder,
   createBuyerProfile,
   loadBuyerDashboard,
+  loadBuyerNotificationDeliveries,
   loadPublicListings,
+  refreshBuyerSession,
+  registerBuyerExpoPushToken,
+  retryBuyerNotificationDelivery,
   signInBuyer,
   signUpBuyer,
   type Booking,
   type BuyerSession,
   type Listing,
+  type NotificationDelivery,
   type NotificationItem,
   type Order,
   type Profile,
@@ -29,13 +35,17 @@ import {
   type ProfileUpdateInput,
   updateBuyerProfile,
 } from '@/lib/api';
+import { getExpoPushToken } from '@/lib/push-notifications';
 import {
   clearBuyerAccessToken,
   clearBuyerNotificationsSeenAt,
+  clearBuyerRefreshToken,
   getBuyerAccessToken,
   getBuyerNotificationsSeenAt,
+  getBuyerRefreshToken,
   setBuyerAccessToken,
   setBuyerNotificationsSeenAt,
+  setBuyerRefreshToken,
 } from '@/lib/session-storage';
 
 type BuyerSessionValue = {
@@ -45,6 +55,7 @@ type BuyerSessionValue = {
   orders: Order[];
   bookings: Booking[];
   notifications: NotificationItem[];
+  notificationDeliveries: NotificationDelivery[];
   unreadNotificationCount: number;
   loading: boolean;
   refreshing: boolean;
@@ -60,6 +71,8 @@ type BuyerSessionValue = {
     push_notifications_enabled?: boolean;
     marketing_notifications_enabled?: boolean;
   }) => Promise<void>;
+  syncPushToken: () => Promise<boolean>;
+  retryNotificationDelivery: (deliveryId: string) => Promise<void>;
   createOrder: (input: {
     sellerId: string;
     listingId: string;
@@ -80,17 +93,43 @@ const BuyerSessionContext = createContext<BuyerSessionValue | null>(null);
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
+function isExpiredAuthError(error: unknown) {
+  if (error instanceof ApiError) {
+    return error.status === 401 || error.status === 403 || error.message.includes('bad_jwt');
+  }
+
+  if (error instanceof Error) {
+    return error.message.includes('bad_jwt') || error.message.includes('token is expired');
+  }
+
+  return false;
+}
+
 export function BuyerSessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<BuyerSession | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [notificationDeliveries, setNotificationDeliveries] = useState<NotificationDelivery[]>([]);
   const [notificationsSeenAt, setNotificationsSeenAtState] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [restoring, setRestoring] = useState(true);
+  const [syncingPushToken, setSyncingPushToken] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const clearSessionState = useCallback((message?: string) => {
+    startTransition(() => {
+      setSession(null);
+      setProfile(null);
+      setOrders([]);
+      setBookings([]);
+      setNotificationDeliveries([]);
+      setNotificationsSeenAtState(null);
+      setError(message ?? null);
+    });
+  }, []);
 
   const refreshMarketplace = useCallback(async () => {
     setRefreshing(true);
@@ -103,21 +142,32 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       });
 
       if (session) {
-        const dashboard = await loadBuyerDashboard(session.access_token);
+        const [dashboard, deliveries] = await Promise.all([
+          loadBuyerDashboard(session.access_token),
+          loadBuyerNotificationDeliveries(session.access_token),
+        ]);
 
         startTransition(() => {
           setListings(dashboard.listings);
           setProfile(dashboard.profile);
           setOrders(dashboard.orders);
           setBookings(dashboard.bookings);
+          setNotificationDeliveries(deliveries);
         });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to refresh marketplace');
+    if (isExpiredAuthError(err)) {
+        await clearBuyerAccessToken();
+        await clearBuyerRefreshToken();
+        await clearBuyerNotificationsSeenAt();
+        clearSessionState('Your session expired. Sign in again.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Unable to refresh marketplace');
+      }
     } finally {
       setRefreshing(false);
     }
-  }, [session]);
+  }, [clearSessionState, session]);
 
   const notifications = useMemo(
     () => buildNotifications({ audience: 'buyer', orders, bookings }),
@@ -139,8 +189,12 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
 
     try {
       const nextSession = await signInBuyer(email, password);
-      const dashboard = await loadBuyerDashboard(nextSession.access_token);
+      const [dashboard, deliveries] = await Promise.all([
+        loadBuyerDashboard(nextSession.access_token),
+        loadBuyerNotificationDeliveries(nextSession.access_token),
+      ]);
       await setBuyerAccessToken(nextSession.access_token);
+      await setBuyerRefreshToken(nextSession.refresh_token);
 
       startTransition(() => {
         setSession(nextSession);
@@ -148,6 +202,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
         setProfile(dashboard.profile);
         setOrders(dashboard.orders);
         setBookings(dashboard.bookings);
+        setNotificationDeliveries(deliveries);
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign in');
@@ -164,8 +219,12 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     try {
       const nextSession = await signUpBuyer(email, password);
       await createBuyerProfile(nextSession.access_token, profileInput);
-      const dashboard = await loadBuyerDashboard(nextSession.access_token);
+      const [dashboard, deliveries] = await Promise.all([
+        loadBuyerDashboard(nextSession.access_token),
+        loadBuyerNotificationDeliveries(nextSession.access_token),
+      ]);
       await setBuyerAccessToken(nextSession.access_token);
+      await setBuyerRefreshToken(nextSession.refresh_token);
 
       startTransition(() => {
         setSession(nextSession);
@@ -173,6 +232,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
         setProfile(dashboard.profile);
         setOrders(dashboard.orders);
         setBookings(dashboard.bookings);
+        setNotificationDeliveries(deliveries);
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create account');
@@ -184,16 +244,11 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await clearBuyerAccessToken();
+    await clearBuyerRefreshToken();
     await clearBuyerNotificationsSeenAt();
-    startTransition(() => {
-      setSession(null);
-      setProfile(null);
-      setOrders([]);
-      setBookings([]);
-      setNotificationsSeenAtState(null);
-    });
+    clearSessionState();
     await refreshMarketplace();
-  }, [refreshMarketplace]);
+  }, [clearSessionState, refreshMarketplace]);
 
   const markNotificationsSeen = useCallback(async () => {
     const latestTimestamp = notifications[0]?.createdAt ?? new Date().toISOString();
@@ -220,35 +275,108 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     });
   }, [session]);
 
+  const retryNotificationDelivery = useCallback(async (deliveryId: string) => {
+    if (!session) {
+      throw new Error('Sign in before retrying notification deliveries.');
+    }
+
+    await retryBuyerNotificationDelivery(session.access_token, deliveryId);
+    const deliveries = await loadBuyerNotificationDeliveries(session.access_token);
+
+    startTransition(() => {
+      setNotificationDeliveries(deliveries);
+    });
+  }, [session]);
+
+  const syncPushToken = useCallback(async () => {
+    if (!session?.access_token || !profile) {
+      return false;
+    }
+
+    if (profile.push_notifications_enabled === false) {
+      return false;
+    }
+
+    setSyncingPushToken(true);
+
+    try {
+      const expoPushToken = await getExpoPushToken();
+      if (!expoPushToken) {
+        return false;
+      }
+
+      if (expoPushToken === profile.expo_push_token) {
+        return true;
+      }
+
+      const updatedProfile = await registerBuyerExpoPushToken(session.access_token, expoPushToken);
+      startTransition(() => {
+        setProfile(updatedProfile);
+      });
+      return true;
+    } finally {
+      setSyncingPushToken(false);
+    }
+  }, [profile, session]);
+
   useEffect(() => {
-    startTransition(async () => {
+    void (async () => {
       try {
         const token = await getBuyerAccessToken();
+        const refreshToken = await getBuyerRefreshToken();
         const storedNotificationsSeenAt = await getBuyerNotificationsSeenAt();
         const listings = await loadPublicListings();
-        if (!token) {
+        if (!token || !refreshToken) {
           setListings(listings);
           setNotificationsSeenAtState(storedNotificationsSeenAt);
           return;
         }
 
-        const dashboard = await loadBuyerDashboard(token);
+        let restoredSession: BuyerSession = {
+          access_token: token,
+          refresh_token: refreshToken,
+        };
+
+        try {
+          await loadBuyerDashboard(token);
+        } catch (err) {
+          if (!isExpiredAuthError(err)) {
+            throw err;
+          }
+
+          restoredSession = await refreshBuyerSession(refreshToken);
+          await setBuyerAccessToken(restoredSession.access_token);
+          await setBuyerRefreshToken(restoredSession.refresh_token);
+        }
+
+        const [dashboard, deliveries] = await Promise.all([
+          loadBuyerDashboard(restoredSession.access_token),
+          loadBuyerNotificationDeliveries(restoredSession.access_token),
+        ]);
 
         startTransition(() => {
-          setSession({ access_token: token });
+          setSession(restoredSession);
           setListings(dashboard.listings);
           setProfile(dashboard.profile);
           setOrders(dashboard.orders);
           setBookings(dashboard.bookings);
+          setNotificationDeliveries(deliveries);
           setNotificationsSeenAtState(storedNotificationsSeenAt);
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to restore session');
+        if (isExpiredAuthError(err)) {
+          await clearBuyerAccessToken();
+          await clearBuyerRefreshToken();
+          await clearBuyerNotificationsSeenAt();
+          clearSessionState('Your session expired. Sign in again.');
+        } else {
+          setError(err instanceof Error ? err.message : 'Unable to restore session');
+        }
       } finally {
         setRestoring(false);
       }
-    });
-  }, []);
+    })();
+  }, [clearSessionState]);
 
   useEffect(() => {
     if (!session?.access_token || !profile) {
@@ -293,6 +421,24 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       void client.removeChannel(channel);
     };
   }, [profile, refreshMarketplace, session]);
+
+  useEffect(() => {
+    if (!session?.access_token || !profile) {
+      return;
+    }
+
+    if (syncingPushToken || profile.expo_push_token || profile.push_notifications_enabled === false) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        await syncPushToken();
+      } catch {
+        // Push token registration is opportunistic; auth and commerce flows should continue.
+      }
+    })();
+  }, [profile, session, syncPushToken, syncingPushToken]);
 
   const createOrder = useCallback(async (input: {
     sellerId: string;
@@ -353,6 +499,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       orders,
       bookings,
       notifications,
+      notificationDeliveries,
       unreadNotificationCount,
       loading,
       refreshing,
@@ -364,6 +511,8 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       refreshMarketplace,
       markNotificationsSeen,
       updateNotificationPreferences,
+      syncPushToken,
+      retryNotificationDelivery,
       createOrder,
       createBooking,
     }),
@@ -374,6 +523,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       orders,
       bookings,
       notifications,
+      notificationDeliveries,
       unreadNotificationCount,
       loading,
       refreshing,
@@ -385,6 +535,8 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       refreshMarketplace,
       markNotificationsSeen,
       updateNotificationPreferences,
+      syncPushToken,
+      retryNotificationDelivery,
       createOrder,
       createBooking,
     ],

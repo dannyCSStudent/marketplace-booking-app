@@ -1,7 +1,11 @@
 "use client";
 
 import { startTransition, useCallback, useEffect, useState } from "react";
-import { authenticateWithSupabase, getSupabaseRealtimeClient } from "@repo/auth";
+import {
+  authenticateWithSupabase,
+  getSupabaseRealtimeClient,
+  refreshSupabaseSession,
+} from "@repo/auth";
 
 import { ApiError, buildNotifications, createApiClient, formatCurrency } from "@/app/lib/api";
 import type {
@@ -44,7 +48,21 @@ const apiBaseUrl =
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const api = createApiClient(apiBaseUrl);
+const SELLER_ACCESS_TOKEN_KEY = "seller_access_token";
+const SELLER_REFRESH_TOKEN_KEY = "seller_refresh_token";
 const SELLER_NOTIFICATIONS_SEEN_AT_KEY = "seller_notifications_seen_at";
+
+function isExpiredAuthError(error: unknown) {
+  if (error instanceof ApiError) {
+    return error.status === 401 || error.status === 403 || error.message.includes("bad_jwt");
+  }
+
+  if (error instanceof Error) {
+    return error.message.includes("bad_jwt") || error.message.includes("token is expired");
+  }
+
+  return false;
+}
 
 export function SellerWorkspace() {
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
@@ -65,6 +83,7 @@ export function SellerWorkspace() {
   const [responseNotes, setResponseNotes] = useState<Record<string, string>>({});
   const [notificationsSeenAt, setNotificationsSeenAt] = useState<string | null>(null);
   const [notificationDeliveries, setNotificationDeliveries] = useState<NotificationDelivery[]>([]);
+  const [deliveryRetryLoading, setDeliveryRetryLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [accountProfile, setAccountProfile] = useState<Profile | null>(null);
@@ -78,6 +97,21 @@ export function SellerWorkspace() {
     "product",
   );
   const [price, setPrice] = useState("2400");
+
+  const clearSellerSession = useCallback((message?: string) => {
+    window.localStorage.removeItem(SELLER_ACCESS_TOKEN_KEY);
+    window.localStorage.removeItem(SELLER_REFRESH_TOKEN_KEY);
+    window.localStorage.removeItem(SELLER_NOTIFICATIONS_SEEN_AT_KEY);
+    setWorkspace(null);
+    setAccountProfile(null);
+    setNotificationDeliveries([]);
+    setNotificationsSeenAt(null);
+    setListingDrafts({});
+    setResponseNotes({});
+    setError(message ?? null);
+    setCreateError(null);
+    setCreateMessage(null);
+  }, []);
 
   const loadWorkspace = useCallback(async (accessToken: string) => {
     const profile = await api.get<Profile>("/profiles/me", { accessToken });
@@ -121,26 +155,49 @@ export function SellerWorkspace() {
   }, []);
 
   useEffect(() => {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    const refreshToken = window.localStorage.getItem(SELLER_REFRESH_TOKEN_KEY);
     setNotificationsSeenAt(window.localStorage.getItem(SELLER_NOTIFICATIONS_SEEN_AT_KEY));
-    if (!accessToken) {
+    if (!accessToken || !refreshToken) {
       return;
     }
 
     setLoading(true);
     startTransition(async () => {
       try {
-        await loadWorkspace(accessToken);
+        let restoredAccessToken = accessToken;
+
+        try {
+          await loadWorkspace(accessToken);
+        } catch (err) {
+          if (!isExpiredAuthError(err)) {
+            throw err;
+          }
+
+          const refreshedSession = await refreshSupabaseSession(refreshToken, {
+            supabaseUrl,
+            anonKey: supabaseAnonKey,
+          });
+
+          window.localStorage.setItem(SELLER_ACCESS_TOKEN_KEY, refreshedSession.access_token);
+          window.localStorage.setItem(SELLER_REFRESH_TOKEN_KEY, refreshedSession.refresh_token);
+          restoredAccessToken = refreshedSession.access_token;
+          await loadWorkspace(restoredAccessToken);
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to restore workspace");
+        if (isExpiredAuthError(err)) {
+          clearSellerSession("Your session expired. Sign in again.");
+        } else {
+          setError(err instanceof Error ? err.message : "Unable to restore workspace");
+        }
       } finally {
         setLoading(false);
       }
     });
-  }, [loadWorkspace]);
+  }, [clearSellerSession, loadWorkspace]);
 
   useEffect(() => {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken || !workspace) {
       return;
     }
@@ -185,15 +242,7 @@ export function SellerWorkspace() {
   }, [loadWorkspace, workspace]);
 
   function handleSignOut() {
-    window.localStorage.removeItem("seller_access_token");
-    window.localStorage.removeItem(SELLER_NOTIFICATIONS_SEEN_AT_KEY);
-    setWorkspace(null);
-    setAccountProfile(null);
-    setNotificationDeliveries([]);
-    setNotificationsSeenAt(null);
-    setError(null);
-    setCreateError(null);
-    setCreateMessage(null);
+    clearSellerSession();
   }
 
   function handleAuth() {
@@ -233,7 +282,8 @@ export function SellerWorkspace() {
           }
         }
 
-        window.localStorage.setItem("seller_access_token", session.access_token);
+        window.localStorage.setItem(SELLER_ACCESS_TOKEN_KEY, session.access_token);
+        window.localStorage.setItem(SELLER_REFRESH_TOKEN_KEY, session.refresh_token);
         await loadWorkspace(session.access_token);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to continue");
@@ -244,7 +294,7 @@ export function SellerWorkspace() {
   }
 
   function handleCreateSellerProfile() {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken) {
       setError("Sign in before creating a seller profile.");
       return;
@@ -282,7 +332,7 @@ export function SellerWorkspace() {
       return;
     }
 
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken) {
       setCreateError("Sign in again before creating a listing.");
       return;
@@ -325,7 +375,7 @@ export function SellerWorkspace() {
   }
 
   function updateOrderStatus(orderId: string, status: string) {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken) {
       setError("Sign in again before updating orders.");
       return;
@@ -356,7 +406,7 @@ export function SellerWorkspace() {
   }
 
   function updateBookingStatus(bookingId: string, status: string) {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken) {
       setError("Sign in again before updating bookings.");
       return;
@@ -387,7 +437,7 @@ export function SellerWorkspace() {
   }
 
   function updateListingStatus(listingId: string, status: ListingUpdateInput["status"]) {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken || !status) {
       setCreateError("Sign in again before updating listings.");
       return;
@@ -428,7 +478,7 @@ export function SellerWorkspace() {
   }
 
   function saveListingDetails(listing: Listing) {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     const draft = listingDrafts[listing.id];
     if (!accessToken || !draft) {
       setCreateError("Sign in again before updating listings.");
@@ -491,7 +541,7 @@ export function SellerWorkspace() {
       | "marketing_notifications_enabled"
     >,
   ) {
-    const accessToken = window.localStorage.getItem("seller_access_token");
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken) {
       setError("Sign in again before updating notification settings.");
       return;
@@ -508,9 +558,30 @@ export function SellerWorkspace() {
     });
   }
 
+  function retryNotificationDelivery(deliveryId: string) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      setError("Sign in again before retrying notification deliveries.");
+      return;
+    }
+
+    setDeliveryRetryLoading(deliveryId);
+    setError(null);
+    startTransition(async () => {
+      try {
+        await api.retryNotificationDelivery(deliveryId, accessToken);
+        await loadWorkspace(accessToken);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to retry notification delivery");
+      } finally {
+        setDeliveryRetryLoading(null);
+      }
+    });
+  }
+
   return (
     <section className="grid gap-6 lg:grid-cols-[0.86fr_1.14fr]">
-      <div className="card-shadow rounded-[2rem] border border-border bg-surface p-6">
+      <div className="card-shadow rounded-4xl border border-border bg-surface p-6">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-foreground/52">
           Seller Onboarding
         </p>
@@ -611,7 +682,7 @@ export function SellerWorkspace() {
         </div>
       </div>
 
-      <div className="card-shadow rounded-[2rem] border border-border bg-[#fff8ed] p-6">
+      <div className="card-shadow rounded-4xl border border-border bg-[#fff8ed] p-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-foreground/52">
@@ -645,7 +716,7 @@ export function SellerWorkspace() {
               <MiniStat label="Bookings" value={String(workspace.bookings.length)} />
             </div>
 
-            <div className="rounded-[1.5rem] border border-border bg-white px-4 py-4">
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
@@ -689,7 +760,7 @@ export function SellerWorkspace() {
             </div>
 
             {accountProfile ? (
-              <div className="rounded-[1.5rem] border border-border bg-white px-4 py-4">
+              <div className="rounded-3xl border border-border bg-white px-4 py-4">
                 <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
                   Delivery Preferences
                 </p>
@@ -740,7 +811,7 @@ export function SellerWorkspace() {
               </div>
             ) : null}
 
-            <div className="rounded-[1.5rem] border border-border bg-white px-4 py-4">
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
@@ -796,6 +867,16 @@ export function SellerWorkspace() {
                           <p className="mt-1 text-xs text-foreground/52">
                             {new Date(delivery.created_at).toLocaleString()}
                           </p>
+                          {delivery.delivery_status === "failed" ? (
+                            <button
+                              className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                              disabled={deliveryRetryLoading === delivery.id}
+                              onClick={() => retryNotificationDelivery(delivery.id)}
+                              type="button"
+                            >
+                              {deliveryRetryLoading === delivery.id ? "Retrying..." : "Retry"}
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -1311,7 +1392,7 @@ export function SellerWorkspace() {
             </div>
           </div>
         ) : (
-          <div className="mt-6 space-y-4 rounded-[1.5rem] border border-dashed border-border bg-white/55 p-6 text-sm leading-7 text-foreground/68">
+          <div className="mt-6 space-y-4 rounded-3xl border border-dashed border-border bg-white/55 p-6 text-sm leading-7 text-foreground/68">
             <p>
               Sign in with an existing seller account, or create an account and then publish a
               seller profile here.

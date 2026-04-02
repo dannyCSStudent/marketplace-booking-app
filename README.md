@@ -1,159 +1,116 @@
-# Turborepo starter
+# Marketplace Booking App
 
-This Turborepo starter is maintained by the Turborepo core team.
+Marketplace and service-booking monorepo built with:
 
-## Using this example
+- Expo for mobile
+- Next.js for web
+- FastAPI for backend business logic
+- Supabase for auth, database, storage, and realtime
+- pnpm workspaces + Turborepo
 
-Run the following command:
+## Apps
 
-```sh
-npx create-turbo@latest
-```
+- `apps/api`: FastAPI backend
+- `apps/mobile`: Expo buyer app
+- `apps/web`: Next.js seller workspace
 
-## What's inside?
-
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+## Core Scripts
 
 ```sh
-cd my-turborepo
-turbo build
+pnpm dev
+pnpm dev:docker
+pnpm dev:frontend
+pnpm dev:web
+pnpm dev:mobile
+pnpm lint
+pnpm test
+pnpm --filter web build
+pnpm --filter api seed
 ```
 
-Without global `turbo`, use your package manager:
+Use the scripts like this:
+
+- `pnpm dev`: all-local mode. Starts API, web, and mobile on the host.
+- `pnpm dev:docker`: Docker/Compose mode. Starts API, web, mobile, worker, and maintenance in containers.
+- `pnpm dev:frontend`: frontend-only host mode. Use this when Docker already owns the backend.
+- `pnpm dev:web`: only the Next.js app on the host.
+- `pnpm dev:mobile`: only the Expo app on the host.
+
+## Notification Delivery
+
+The backend now has two runtime processes:
+
+- `api`: serves FastAPI
+- `notification-worker`: continuously processes queued notification deliveries
+
+One-shot processing:
 
 ```sh
-cd my-turborepo
-npx turbo build
-yarn dlx turbo build
-pnpm exec turbo build
+pnpm --filter api notifications:process
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+Long-running worker:
 
 ```sh
-turbo build --filter=docs
+pnpm --filter api notifications:worker
 ```
 
-Without global `turbo`:
+Queue a test delivery:
 
 ```sh
-npx turbo build --filter=docs
-yarn exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
+pnpm --filter api notifications:queue-test --email you@example.com --channel email
 ```
 
-### Develop
+## Deployment
 
-To develop all apps and packages, run the following command:
+The repo root includes a [Procfile](/home/dee/Documents/Demos/marketplace-booking-app/Procfile) with separate `api` and `notification-worker` processes.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+If you use Docker/Compose, the repo also includes:
+
+- [compose.yaml](/home/dee/Documents/Demos/marketplace-booking-app/compose.yaml)
+- [Dockerfile](/home/dee/Documents/Demos/marketplace-booking-app/apps/api/Dockerfile)
+- [Makefile](/home/dee/Documents/Demos/marketplace-booking-app/Makefile)
+
+Common Docker workflow:
 
 ```sh
-cd my-turborepo
-turbo dev
+make deps
+make up
+make frontend
+make backend
+make api-health
+make web-logs
+make mobile-logs
+make frontend-logs
+make notifications-test-email TARGET_EMAIL=you@example.com
+make worker-logs
 ```
 
-Without global `turbo`, use your package manager:
+When Docker Compose is running, it now starts:
+
+- `api` on `http://127.0.0.1:8000`
+- `web` on `http://127.0.0.1:3000`
+- `mobile` Expo dev server on `8081`, `19000`, and `19001`
+- `notification-worker`
+- `notification-maintenance`
+
+The `web` container uses plain `next dev` in Compose instead of Turbopack. That is intentional: Turbopack was unstable in the containerized dev loop even though the app code itself was fine.
+
+Compose now installs frontend workspace dependencies through a one-shot `frontend-deps` service before `web` and `mobile` start. That avoids both frontend containers running `pnpm install` at the same time against the same mounted workspace, which can trigger noisy rebuilds and apparent refresh loops.
+
+The web container also keeps `.next` on an isolated Docker volume instead of writing it back into the repo mount. That reduces self-triggered rebuild loops in containerized Next development.
+
+Do not run root `pnpm dev` at the same time as Compose unless you intentionally want duplicate local processes. If Compose already owns the API on port `8000`, use:
 
 ```sh
-cd my-turborepo
-npx turbo dev
-yarn exec turbo dev
-pnpm exec turbo dev
+pnpm dev:frontend
 ```
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+only when you are running frontend apps outside Docker. For one-off host runs, `pnpm dev:web` and `pnpm dev:mobile` are the direct equivalents.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+See [deployment.md](/home/dee/Documents/Demos/marketplace-booking-app/docs/deployment.md) for:
 
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-yarn exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-yarn exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-yarn exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+- required env vars
+- worker runtime configuration
+- Procfile-based deployment shape
+- post-deploy smoke checks

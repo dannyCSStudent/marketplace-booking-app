@@ -1,4 +1,4 @@
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { startTransition, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -11,6 +11,7 @@ export default function BuyerScreen() {
     orders,
     bookings,
     notifications,
+    notificationDeliveries,
     unreadNotificationCount,
     loading,
     restoring,
@@ -20,13 +21,18 @@ export default function BuyerScreen() {
     signOut,
     markNotificationsSeen,
     updateNotificationPreferences,
+    syncPushToken,
+    retryNotificationDelivery,
   } = useBuyerSession();
+  const router = useRouter();
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [retryingDeliveryId, setRetryingDeliveryId] = useState<string | null>(null);
+  const [syncingPush, setSyncingPush] = useState(false);
 
   function handleAuth() {
     setLocalError(null);
@@ -139,6 +145,10 @@ export default function BuyerScreen() {
             <SnapshotCard label="Orders" value={String(orders.length)} />
             <SnapshotCard label="Bookings" value={String(bookings.length)} />
             <SnapshotCard label="Unread" value={String(unreadNotificationCount)} />
+            <SnapshotCard
+              label="Email jobs"
+              value={String(notificationDeliveries.filter((delivery) => delivery.channel === 'email').length)}
+            />
           </View>
         ) : (
           <Text style={styles.emptyText}>Sign in to see live buyer activity.</Text>
@@ -175,6 +185,41 @@ export default function BuyerScreen() {
               })
             }
           />
+          <View style={styles.pushStatusRow}>
+            <View style={styles.pushStatusCopy}>
+              <Text style={styles.preferenceLabel}>Push token</Text>
+              <Text style={styles.helperText}>
+                {profile.expo_push_token
+                  ? 'Registered and ready for Expo push delivery.'
+                  : profile.push_notifications_enabled === false
+                    ? 'Push alerts are disabled for this buyer.'
+                    : 'No Expo push token is stored yet. Run sync on a real device.'}
+              </Text>
+            </View>
+            <Pressable
+              style={[styles.syncPushButton, syncingPush && styles.syncPushButtonDisabled]}
+              disabled={syncingPush}
+              onPress={() =>
+                startTransition(async () => {
+                  try {
+                    setLocalError(null);
+                    setSyncingPush(true);
+                    const synced = await syncPushToken();
+                    if (!synced && !profile.expo_push_token) {
+                      setLocalError('Push token sync requires a real device, notification permission, and EXPO_PUBLIC_EAS_PROJECT_ID.');
+                    }
+                  } catch (err) {
+                    setLocalError(err instanceof Error ? err.message : 'Unable to sync push token');
+                  } finally {
+                    setSyncingPush(false);
+                  }
+                })
+              }>
+              <Text style={styles.syncPushButtonText}>
+                {syncingPush ? 'Syncing...' : 'Sync Push'}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       ) : null}
 
@@ -210,6 +255,81 @@ export default function BuyerScreen() {
           ))
         ) : (
           <Text style={styles.emptyText}>Seller updates will show up here.</Text>
+        )}
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>Delivery History</Text>
+        {notificationDeliveries.length > 0 ? (
+          notificationDeliveries.slice(0, 8).map((delivery) => (
+            <View key={delivery.id} style={styles.deliveryCard}>
+              <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: '/notifications/[id]',
+                    params: { id: delivery.id },
+                  })
+                }
+                style={styles.deliveryBody}>
+                <View style={styles.deliveryHeader}>
+                  <Text style={styles.activityLabel}>
+                    {delivery.channel} delivery
+                  </Text>
+                  <View
+                    style={[
+                      styles.deliveryStatusPill,
+                      delivery.delivery_status === 'sent'
+                        ? styles.deliveryStatusSent
+                        : delivery.delivery_status === 'failed'
+                          ? styles.deliveryStatusFailed
+                          : styles.deliveryStatusQueued,
+                    ]}>
+                    <Text style={styles.deliveryStatusText}>{delivery.delivery_status}</Text>
+                  </View>
+                </View>
+                <Text style={styles.activityValue}>
+                  {getDeliverySummary(delivery.payload)}
+                </Text>
+                <Text style={styles.activityMeta}>
+                  {new Date(delivery.created_at).toLocaleString()} • attempts {delivery.attempts}
+                </Text>
+                {delivery.failure_reason ? (
+                  <Text style={styles.deliveryFailure}>{delivery.failure_reason}</Text>
+                ) : (
+                  <Text style={styles.activityNote}>
+                    {getDeliveryRecipient(delivery.payload)}
+                  </Text>
+                )}
+              </Pressable>
+              {delivery.delivery_status === 'failed' ? (
+                <Pressable
+                  onPress={() =>
+                    startTransition(async () => {
+                      try {
+                        setLocalError(null);
+                        setRetryingDeliveryId(delivery.id);
+                        await retryNotificationDelivery(delivery.id);
+                      } catch (err) {
+                        setLocalError(
+                          err instanceof Error ? err.message : 'Unable to retry notification delivery',
+                        );
+                      } finally {
+                        setRetryingDeliveryId(null);
+                      }
+                    })
+                  }
+                  style={styles.retryButton}>
+                  <Text style={styles.retryButtonText}>
+                    {retryingDeliveryId === delivery.id ? 'Retrying...' : 'Retry Delivery'}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.emptyText}>
+            Email and push delivery attempts for your account will show up here.
+          </Text>
         )}
       </View>
 
@@ -294,6 +414,28 @@ function PreferenceRow({
   );
 }
 
+function getDeliverySummary(payload: Record<string, unknown>) {
+  const subject = typeof payload.subject === 'string' ? payload.subject : null;
+  const eventType = typeof payload.event_type === 'string' ? payload.event_type : null;
+  const status = typeof payload.status === 'string' ? payload.status : null;
+
+  return subject ?? eventType ?? status ?? 'Notification delivery';
+}
+
+function getDeliveryRecipient(payload: Record<string, unknown>) {
+  const recipient = payload.to;
+
+  if (typeof recipient === 'string') {
+    return recipient;
+  }
+
+  if (Array.isArray(recipient)) {
+    return recipient.filter((value): value is string => typeof value === 'string').join(', ');
+  }
+
+  return 'Recipient resolved from your account profile';
+}
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -373,6 +515,33 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+  pushStatusRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  pushStatusCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  syncPushButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  syncPushButtonDisabled: {
+    opacity: 0.55,
+  },
+  syncPushButtonText: {
+    color: '#4d4338',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
   notificationsHeader: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -385,6 +554,64 @@ const styles = StyleSheet.create({
     backgroundColor: '#f7efe2',
     padding: 14,
     gap: 6,
+  },
+  deliveryCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e4d6bf',
+    backgroundColor: '#f7efe2',
+    padding: 14,
+    gap: 8,
+  },
+  deliveryBody: {
+    gap: 8,
+  },
+  deliveryHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  deliveryStatusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  deliveryStatusQueued: {
+    backgroundColor: '#ccb68c',
+  },
+  deliveryStatusSent: {
+    backgroundColor: '#1f351f',
+  },
+  deliveryStatusFailed: {
+    backgroundColor: '#a13428',
+  },
+  deliveryStatusText: {
+    color: '#fff8ee',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  deliveryFailure: {
+    color: '#a13428',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  retryButtonText: {
+    color: '#4d4338',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   markSeenButton: {
     borderRadius: 999,

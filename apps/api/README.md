@@ -14,3 +14,31 @@ FastAPI backend for the marketplace and booking app.
 - `pnpm --filter api lint`: compile Python sources to catch syntax errors
 - `pnpm --filter api test`: run service-level regression tests
 - `pnpm --filter api seed`: seed demo users and marketplace data into Supabase
+- `pnpm --filter api notifications:process`: process one batch of queued notification deliveries
+- `pnpm --filter api notifications:prune`: delete old sent/failed delivery rows based on retention settings
+- `pnpm --filter api notifications:requeue`: requeue failed notification deliveries for another attempt
+- `pnpm --filter api notifications:maintenance`: run the notification maintenance loop continuously
+- `pnpm --filter api notifications:worker`: run the notification worker loop continuously
+
+## Notification Worker
+
+The outbound delivery path now has two modes:
+
+- One-shot batch: `pnpm --filter api notifications:process`
+- Long-running worker: `pnpm --filter api notifications:worker`
+
+Relevant env vars in `apps/api/.env`:
+
+- `NOTIFICATION_EMAIL_PROVIDER=log|webhook|resend`
+- `NOTIFICATION_PUSH_PROVIDER=log|webhook`
+- `NOTIFICATION_FROM_EMAIL=...`
+- `RESEND_API_KEY=...`
+- `NOTIFICATION_MAX_ATTEMPTS=3`
+- `NOTIFICATION_WORKER_POLL_SECONDS=30`
+- `NOTIFICATION_WORKER_BATCH_SIZE=25`
+
+Recommended production shape:
+
+1. Run the FastAPI API as one process.
+2. Run `pnpm --filter api notifications:worker` as a separate process.
+3. Point both at the same `apps/api/.env` values.

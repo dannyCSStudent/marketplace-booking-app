@@ -19,7 +19,13 @@ class Settings:
     notification_push_webhook_url: str | None = None
     notification_max_attempts: int = 3
     resend_api_key: str | None = None
+    expo_access_token: str | None = None
     notification_from_email: str | None = None
+    notification_worker_poll_seconds: int = 30
+    notification_worker_batch_size: int = 25
+    notification_sent_retention_days: int = 14
+    notification_failed_retention_days: int = 30
+    notification_maintenance_poll_seconds: int = 21600
 
 
 def get_settings() -> Settings:
@@ -40,7 +46,15 @@ def get_settings() -> Settings:
     notification_push_webhook_url = os.getenv("NOTIFICATION_PUSH_WEBHOOK_URL")
     notification_max_attempts = int(os.getenv("NOTIFICATION_MAX_ATTEMPTS", "3"))
     resend_api_key = os.getenv("RESEND_API_KEY")
+    expo_access_token = os.getenv("EXPO_ACCESS_TOKEN")
     notification_from_email = os.getenv("NOTIFICATION_FROM_EMAIL", "onboarding@resend.dev")
+    notification_worker_poll_seconds = int(os.getenv("NOTIFICATION_WORKER_POLL_SECONDS", "30"))
+    notification_worker_batch_size = int(os.getenv("NOTIFICATION_WORKER_BATCH_SIZE", "25"))
+    notification_sent_retention_days = int(os.getenv("NOTIFICATION_SENT_RETENTION_DAYS", "14"))
+    notification_failed_retention_days = int(os.getenv("NOTIFICATION_FAILED_RETENTION_DAYS", "30"))
+    notification_maintenance_poll_seconds = int(
+        os.getenv("NOTIFICATION_MAINTENANCE_POLL_SECONDS", "21600")
+    )
 
     if not supabase_url:
         raise RuntimeError("SUPABASE_URL is not configured")
@@ -63,5 +77,11 @@ def get_settings() -> Settings:
         notification_push_webhook_url=notification_push_webhook_url,
         notification_max_attempts=notification_max_attempts,
         resend_api_key=resend_api_key,
+        expo_access_token=expo_access_token,
         notification_from_email=notification_from_email,
+        notification_worker_poll_seconds=notification_worker_poll_seconds,
+        notification_worker_batch_size=notification_worker_batch_size,
+        notification_sent_retention_days=notification_sent_retention_days,
+        notification_failed_retention_days=notification_failed_retention_days,
+        notification_maintenance_poll_seconds=notification_maintenance_poll_seconds,
     )

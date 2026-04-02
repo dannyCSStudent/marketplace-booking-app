@@ -137,6 +137,22 @@ class SupabaseClient:
             use_service_role=use_service_role,
         )
 
+    def delete(
+        self,
+        table: str,
+        *,
+        query: dict[str, str],
+        access_token: str | None = None,
+        use_service_role: bool = False,
+    ) -> Any:
+        return self._request(
+            method="DELETE",
+            url=self._rest_url(table, query),
+            headers={"Prefer": "return=representation"},
+            access_token=access_token,
+            use_service_role=use_service_role,
+        )
+
     def _rest_url(self, table: str, query: dict[str, str] | None = None) -> str:
         if not query:
             return f"{self.rest_base_url}/{table}"

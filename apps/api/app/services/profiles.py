@@ -9,7 +9,8 @@ def get_my_profile(current_user: CurrentUser) -> ProfileRead:
     supabase = get_supabase_client()
     profile_select = (
         "id,full_name,username,phone,city,state,country,"
-        "email_notifications_enabled,push_notifications_enabled,marketing_notifications_enabled"
+        "email_notifications_enabled,push_notifications_enabled,marketing_notifications_enabled,"
+        "expo_push_token"
     )
     try:
         row = supabase.select(
@@ -44,6 +45,7 @@ def create_profile(current_user: CurrentUser, payload: ProfileCreate) -> Profile
                 "email_notifications_enabled": payload.email_notifications_enabled,
                 "push_notifications_enabled": payload.push_notifications_enabled,
                 "marketing_notifications_enabled": payload.marketing_notifications_enabled,
+                "expo_push_token": payload.expo_push_token,
             },
             access_token=current_user.access_token,
         )
@@ -67,7 +69,7 @@ def update_my_profile(current_user: CurrentUser, payload: ProfileUpdate) -> Prof
                 "select": (
                     "id,full_name,username,phone,city,state,country,"
                     "email_notifications_enabled,push_notifications_enabled,"
-                    "marketing_notifications_enabled"
+                    "marketing_notifications_enabled,expo_push_token"
                 ),
             },
             access_token=current_user.access_token,

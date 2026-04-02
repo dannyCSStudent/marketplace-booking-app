@@ -9,6 +9,7 @@ import {
   type BookingCreateInput,
   type Listing,
   type ListingResponse,
+  type NotificationDelivery,
   type NotificationItem,
   type Order,
   type OrderCreateInput,
@@ -19,10 +20,11 @@ import {
 } from '@repo/api-client';
 export { formatCurrency, formatLocation } from '@repo/api-client';
 import { Platform } from 'react-native';
-import { authenticateWithSupabase } from '@repo/auth';
+import { authenticateWithSupabase, refreshSupabaseSession } from '@repo/auth';
 
 export type BuyerSession = {
   access_token: string;
+  refresh_token: string;
 };
 
 function resolveApiBaseUrl() {
@@ -66,6 +68,7 @@ export type {
   BuyerDashboardData,
   Listing,
   ListingResponse,
+  NotificationDelivery,
   NotificationItem,
   Order,
   OrderCreateInput,
@@ -115,6 +118,13 @@ export async function signUpBuyer(email: string, password: string): Promise<Buye
   });
 }
 
+export async function refreshBuyerSession(refreshToken: string): Promise<BuyerSession> {
+  return refreshSupabaseSession(refreshToken, {
+    supabaseUrl,
+    anonKey: supabaseAnonKey,
+  });
+}
+
 export function authHeaders(accessToken: string) {
   return {
     Authorization: `Bearer ${accessToken}`,
@@ -130,6 +140,10 @@ export function updateBuyerProfile(accessToken: string, profile: ProfileUpdateIn
   return api.updateProfile(profile, { accessToken });
 }
 
+export function registerBuyerExpoPushToken(accessToken: string, expoPushToken: string) {
+  return api.updateProfile({ expo_push_token: expoPushToken }, { accessToken });
+}
+
 export function createBuyerOrder(accessToken: string, input: OrderCreateInput) {
   return api.createOrder(input, { accessToken });
 }
@@ -140,6 +154,14 @@ export function createBuyerBooking(accessToken: string, input: BookingCreateInpu
 
 export function loadBuyerDashboard(accessToken: string) {
   return api.loadBuyerDashboard(accessToken);
+}
+
+export function loadBuyerNotificationDeliveries(accessToken: string) {
+  return api.loadMyNotificationDeliveries(accessToken);
+}
+
+export function retryBuyerNotificationDelivery(accessToken: string, deliveryId: string) {
+  return api.retryNotificationDelivery(deliveryId, accessToken);
 }
 
 export function loadPublicListings() {

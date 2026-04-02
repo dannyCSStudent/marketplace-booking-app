@@ -34,6 +34,14 @@ export default function RootLayout() {
               headerShadowVisible: false,
             }}
           />
+          <Stack.Screen
+            name="notifications/[id]"
+            options={{
+              title: 'Delivery Detail',
+              headerBackTitle: 'Back',
+              headerShadowVisible: false,
+            }}
+          />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />

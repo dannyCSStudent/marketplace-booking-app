@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 const BUYER_TOKEN_KEY = 'buyer_access_token';
+const BUYER_REFRESH_TOKEN_KEY = 'buyer_refresh_token';
 const BUYER_NOTIFICATIONS_SEEN_AT_KEY = 'buyer_notifications_seen_at';
 
 export async function getBuyerAccessToken() {
@@ -21,6 +22,23 @@ export async function setBuyerAccessToken(token: string) {
   await AsyncStorage.setItem(BUYER_TOKEN_KEY, token);
 }
 
+export async function getBuyerRefreshToken() {
+  if (Platform.OS === 'web') {
+    return window.localStorage.getItem(BUYER_REFRESH_TOKEN_KEY);
+  }
+
+  return AsyncStorage.getItem(BUYER_REFRESH_TOKEN_KEY);
+}
+
+export async function setBuyerRefreshToken(token: string) {
+  if (Platform.OS === 'web') {
+    window.localStorage.setItem(BUYER_REFRESH_TOKEN_KEY, token);
+    return;
+  }
+
+  await AsyncStorage.setItem(BUYER_REFRESH_TOKEN_KEY, token);
+}
+
 export async function clearBuyerAccessToken() {
   if (Platform.OS === 'web') {
     window.localStorage.removeItem(BUYER_TOKEN_KEY);
@@ -28,6 +46,15 @@ export async function clearBuyerAccessToken() {
   }
 
   await AsyncStorage.removeItem(BUYER_TOKEN_KEY);
+}
+
+export async function clearBuyerRefreshToken() {
+  if (Platform.OS === 'web') {
+    window.localStorage.removeItem(BUYER_REFRESH_TOKEN_KEY);
+    return;
+  }
+
+  await AsyncStorage.removeItem(BUYER_REFRESH_TOKEN_KEY);
 }
 
 export async function getBuyerNotificationsSeenAt() {

@@ -1283,6 +1283,64 @@
           }
         }
       }
+    },
+    "/notifications/{delivery_id}/retry": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Retry Notification Delivery",
+        "operationId": "retry_notification_delivery_notifications__delivery_id__retry_post",
+        "parameters": [
+          {
+            "name": "delivery_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Delivery Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliveryRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2563,6 +2621,17 @@
             "type": "boolean",
             "title": "Marketing Notifications Enabled",
             "default": false
+          },
+          "expo_push_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expo Push Token"
           }
         },
         "type": "object",
@@ -2654,6 +2723,17 @@
             "type": "boolean",
             "title": "Marketing Notifications Enabled",
             "default": false
+          },
+          "expo_push_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expo Push Token"
           }
         },
         "type": "object",
@@ -2762,6 +2842,17 @@
               }
             ],
             "title": "Marketing Notifications Enabled"
+          },
+          "expo_push_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expo Push Token"
           }
         },
         "type": "object",

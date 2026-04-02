@@ -114,6 +114,47 @@ class NotificationDeliveryWorkerTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://api.resend.com/emails")
         self.assertIn(b"buyer@example.com", request.data)
 
+    def test_expo_push_delivery_uses_profile_push_token_lookup(self):
+        fake_supabase = _FakeSupabase(
+            select_results=[{"expo_push_token": "ExponentPushToken[test-token]"}]
+        )
+        fake_response = MagicMock()
+        fake_response.__enter__.return_value.read.return_value = (
+            b'{"data":{"status":"ok","id":"push-1"}}'
+        )
+        fake_response.__exit__.return_value = False
+
+        delivery = {
+            "recipient_user_id": "user-1",
+            "transaction_kind": "booking",
+            "transaction_id": "booking-1",
+            "event_id": "event-1",
+            "payload": {
+                "subject": "Your booking is confirmed",
+                "body": "The seller confirmed your booking.",
+                "status": "confirmed",
+            },
+        }
+        settings = type(
+            "Settings",
+            (),
+            {
+                "expo_access_token": None,
+            },
+        )()
+
+        with (
+            patch("app.services.notification_delivery_worker.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.notification_delivery_worker.urlopen", return_value=fake_response) as mock_urlopen,
+        ):
+            from app.services.notification_delivery_worker import _send_expo_push
+
+            _send_expo_push(delivery=delivery, settings=settings)
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://exp.host/--/api/v2/push/send")
+        self.assertIn(b"ExponentPushToken[test-token]", request.data)
+
 
 class _FakeSupabase:
     def __init__(self, *, select_results):
@@ -144,6 +185,7 @@ def _settings(**overrides):
         "notification_push_webhook_url": None,
         "notification_max_attempts": 3,
         "resend_api_key": None,
+        "expo_access_token": None,
         "notification_from_email": "onboarding@resend.dev",
     }
     defaults.update(overrides)

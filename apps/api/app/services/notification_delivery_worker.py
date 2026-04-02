@@ -12,6 +12,11 @@ from app.dependencies.supabase import get_supabase_client
 def process_notification_deliveries(*, batch_size: int = 25) -> dict[str, int]:
     settings = get_settings()
     deliveries = _load_due_deliveries(batch_size=batch_size)
+    _log_worker_event(
+        "notification_worker_batch_started",
+        batch_size=batch_size,
+        due_count=len(deliveries),
+    )
     processed = 0
     sent = 0
     failed = 0
@@ -21,10 +26,24 @@ def process_notification_deliveries(*, batch_size: int = 25) -> dict[str, int]:
         delivery_id = delivery["id"]
         attempts = int(delivery.get("attempts") or 0) + 1
         _mark_processing(delivery_id=delivery_id, attempts=attempts)
+        _log_worker_event(
+            "notification_delivery_processing",
+            delivery_id=delivery_id,
+            channel=delivery["channel"],
+            transaction_kind=delivery["transaction_kind"],
+            attempts=attempts,
+        )
 
         try:
             _dispatch_delivery(delivery=delivery, settings=settings)
             _mark_sent(delivery_id=delivery_id, attempts=attempts)
+            _log_worker_event(
+                "notification_delivery_sent",
+                delivery_id=delivery_id,
+                channel=delivery["channel"],
+                transaction_kind=delivery["transaction_kind"],
+                attempts=attempts,
+            )
             sent += 1
         except Exception as exc:
             should_fail_permanently = attempts >= settings.notification_max_attempts
@@ -34,13 +53,24 @@ def process_notification_deliveries(*, batch_size: int = 25) -> dict[str, int]:
                 error_message=str(exc),
                 final=should_fail_permanently,
             )
+            _log_worker_event(
+                "notification_delivery_failed",
+                delivery_id=delivery_id,
+                channel=delivery["channel"],
+                transaction_kind=delivery["transaction_kind"],
+                attempts=attempts,
+                final=should_fail_permanently,
+                error=str(exc),
+            )
             failed += 1
 
-    return {
+    result = {
         "processed": processed,
         "sent": sent,
         "failed": failed,
     }
+    _log_worker_event("notification_worker_batch_finished", **result)
+    return result
 
 
 def _load_due_deliveries(*, batch_size: int) -> list[dict[str, Any]]:
@@ -150,6 +180,12 @@ def _dispatch_delivery(*, delivery: dict[str, Any], settings) -> None:
         _send_resend_email(delivery=delivery, settings=settings)
         return
 
+    if provider == "expo":
+        if channel != "push":
+            raise RuntimeError("Expo only supports push deliveries")
+        _send_expo_push(delivery=delivery, settings=settings)
+        return
+
     raise RuntimeError(f"Unsupported notification provider: {provider}")
 
 
@@ -214,6 +250,80 @@ def _get_recipient_email(recipient_user_id: str) -> str:
     return email
 
 
+def _get_recipient_expo_push_token(recipient_user_id: str) -> str:
+    supabase = get_supabase_client()
+    try:
+        profile = supabase.select(
+            "profiles",
+            query={
+                "select": "expo_push_token",
+                "id": f"eq.{recipient_user_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        raise RuntimeError(f"Unable to resolve recipient Expo push token: {exc.detail}") from exc
+
+    expo_push_token = profile.get("expo_push_token")
+    if not expo_push_token:
+        raise RuntimeError("Notification recipient Expo push token is not available")
+
+    return expo_push_token
+
+
+def _send_expo_push(*, delivery: dict[str, Any], settings) -> None:
+    payload = delivery.get("payload") or {}
+    expo_push_token = payload.get("to") or _get_recipient_expo_push_token(delivery["recipient_user_id"])
+    title = payload.get("subject") or "Marketplace update"
+    body = payload.get("body") or payload.get("note") or "You have a new update."
+
+    if not expo_push_token:
+        raise RuntimeError("Notification payload missing Expo push token")
+
+    message = {
+        "to": expo_push_token,
+        "title": title,
+        "body": body,
+        "data": {
+            "transaction_kind": delivery["transaction_kind"],
+            "transaction_id": delivery["transaction_id"],
+            "event_id": delivery["event_id"],
+            "status": payload.get("status"),
+        },
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "marketplace-booking-app/0.1",
+    }
+    if settings.expo_access_token:
+        headers["Authorization"] = f"Bearer {settings.expo_access_token}"
+
+    request = Request(
+        url="https://exp.host/--/api/v2/push/send",
+        data=json.dumps(message).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request) as response:
+            raw_body = response.read().decode("utf-8")
+            parsed = json.loads(raw_body) if raw_body else {}
+    except HTTPError as exc:
+        raw_body = exc.read().decode("utf-8")
+        detail = raw_body or f"status {exc.code}"
+        raise RuntimeError(f"Expo push delivery failed with status {exc.code}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Expo push delivery failed: {exc.reason}") from exc
+
+    result = parsed.get("data")
+    if isinstance(result, dict) and result.get("status") == "error":
+        message = result.get("message") or "Expo push delivery failed"
+        raise RuntimeError(message)
+
+
 def _post_webhook(*, webhook_url: str, delivery: dict[str, Any]) -> None:
     request = Request(
         url=webhook_url,
@@ -230,3 +340,7 @@ def _post_webhook(*, webhook_url: str, delivery: dict[str, Any]) -> None:
         raise RuntimeError(f"Webhook delivery failed with status {exc.code}: {detail}") from exc
     except URLError as exc:
         raise RuntimeError(f"Webhook delivery failed: {exc.reason}") from exc
+
+
+def _log_worker_event(event_type: str, **payload: Any) -> None:
+    print(json.dumps({"type": event_type, **payload}))

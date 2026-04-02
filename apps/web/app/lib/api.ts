@@ -32,8 +32,12 @@ function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL;
 }
 
+function getServerApiBaseUrl() {
+  return process.env.INTERNAL_API_BASE_URL ?? getApiBaseUrl();
+}
+
 export async function getMarketplaceData(): Promise<MarketplaceData> {
-  const api = createApiClient(getApiBaseUrl());
+  const api = createApiClient(getServerApiBaseUrl());
   const sellerPromise: Promise<SellerProfile | null> = api.getSellerBySlug(
     "south-dallas-tamales",
     { cache: "no-store" },

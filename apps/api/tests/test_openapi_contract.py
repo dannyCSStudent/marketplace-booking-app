@@ -42,6 +42,16 @@ class OpenAPIContractTests(unittest.TestCase):
         ]:
             self.assertIn(schema_name, components)
 
+    def test_profile_schema_exposes_notification_device_fields(self):
+        schema = app.openapi()
+        components = schema["components"]["schemas"]
+
+        profile_read = components["ProfileRead"]["properties"]
+        profile_update = components["ProfileUpdate"]["properties"]
+
+        self.assertIn("expo_push_token", profile_read)
+        self.assertIn("expo_push_token", profile_update)
+
     def test_marketplace_routes_have_expected_methods(self):
         schema = app.openapi()
         paths = schema["paths"]
