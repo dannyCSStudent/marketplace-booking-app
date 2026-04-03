@@ -39,7 +39,21 @@ export default function NotificationDeliveryDetailScreen() {
         <DetailRow label="Transaction" value={`${delivery.transaction_kind} • ${delivery.transaction_id}`} />
         <DetailRow label="Event" value={delivery.event_id} />
         <DetailRow label="Recipient user" value={delivery.recipient_user_id} />
+        <DetailRow label="Recipient target" value={getRecipientTarget(delivery.payload)} />
         <DetailRow label="Sent at" value={delivery.sent_at ? new Date(delivery.sent_at).toLocaleString() : 'Not sent yet'} />
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>Delivery Summary</Text>
+        <DetailRow label="Title" value={getStringField(delivery.payload.subject) ?? 'No subject recorded'} />
+        <DetailRow label="Message" value={getStringField(delivery.payload.body) ?? getStringField(delivery.payload.note) ?? 'No message recorded'} />
+        <DetailRow label="Status" value={getStringField(delivery.payload.status) ?? 'Unknown'} />
+        {delivery.channel === 'push' ? (
+          <Text style={styles.copy}>
+            Push tests only succeed on a real device after `Sync Push` stores an Expo token on the
+            buyer profile.
+          </Text>
+        ) : null}
       </View>
 
       <View style={styles.panel}>
@@ -64,6 +78,25 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <Text style={styles.detailValue}>{value}</Text>
     </View>
   );
+}
+
+function getStringField(value: unknown) {
+  return typeof value === 'string' ? value : null;
+}
+
+function getRecipientTarget(payload: Record<string, unknown>) {
+  const target = payload.to;
+
+  if (typeof target !== 'string') {
+    return 'Resolved from buyer profile';
+  }
+
+  if (target.startsWith('ExponentPushToken[')) {
+    const suffix = target.slice(-10);
+    return `Expo token • …${suffix}`;
+  }
+
+  return target;
 }
 
 const styles = StyleSheet.create({

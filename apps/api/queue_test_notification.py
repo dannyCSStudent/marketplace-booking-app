@@ -20,6 +20,13 @@ def main() -> None:
     if not user:
         raise SystemExit(f"No auth user found for {args.email}")
 
+    payload = _build_test_payload(
+        supabase=supabase,
+        recipient_user_id=user["id"],
+        email=args.email,
+        channel=args.channel,
+    )
+
     rows = supabase.insert(
         "notification_deliveries",
         {
@@ -29,16 +36,7 @@ def main() -> None:
             "event_id": "00000000-0000-0000-0000-000000000001",
             "channel": args.channel,
             "delivery_status": "queued",
-            "payload": {
-                "to": args.email,
-                "subject": "Marketplace notification test",
-                "html": "<p>Your outbound notification worker is connected.</p>",
-                "status": "test",
-                "transaction_kind": "order",
-                "transaction_id": "test",
-                "actor_role": "system",
-                "note": "This is a test notification.",
-            },
+            "payload": payload,
         },
         use_service_role=True,
     )
@@ -56,6 +54,49 @@ def _find_auth_user_by_email(supabase, email: str) -> dict | None:
             return user
 
     return None
+
+
+def _build_test_payload(*, supabase, recipient_user_id: str, email: str, channel: str) -> dict:
+    payload = {
+        "subject": "Marketplace notification test",
+        "body": "Your outbound notification worker is connected.",
+        "html": "<p>Your outbound notification worker is connected.</p>",
+        "status": "test",
+        "transaction_kind": "order",
+        "transaction_id": "test",
+        "actor_role": "system",
+        "note": "This is a test notification.",
+    }
+
+    if channel == "email":
+        payload["to"] = email
+        return payload
+
+    profile = _find_profile_by_id(supabase, recipient_user_id)
+    expo_push_token = profile.get("expo_push_token")
+    if not expo_push_token:
+        raise SystemExit(
+            f"Profile {recipient_user_id} does not have expo_push_token set. "
+            "Open the mobile app on a real device and press 'Sync Push' first."
+        )
+
+    payload["to"] = expo_push_token
+    return payload
+
+
+def _find_profile_by_id(supabase, profile_id: str) -> dict:
+    try:
+        return supabase.select(
+            "profiles",
+            query={
+                "select": "id,expo_push_token",
+                "id": f"eq.{profile_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        raise SystemExit(f"Unable to load profile {profile_id}: {exc.detail}") from exc
 
 
 if __name__ == "__main__":

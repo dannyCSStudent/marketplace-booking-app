@@ -206,7 +206,7 @@ export default function BuyerScreen() {
                     setSyncingPush(true);
                     const synced = await syncPushToken();
                     if (!synced && !profile.expo_push_token) {
-                      setLocalError('Push token sync requires a real device, notification permission, and EXPO_PUBLIC_EAS_PROJECT_ID.');
+                      setLocalError('Push token sync requires a development build on a real device, notification permission, and EXPO_PUBLIC_EAS_PROJECT_ID. Expo Go and emulators will not register a remote push token.');
                     }
                   } catch (err) {
                     setLocalError(err instanceof Error ? err.message : 'Unable to sync push token');

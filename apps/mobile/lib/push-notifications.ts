@@ -1,16 +1,16 @@
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: false,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+let notificationHandlerConfigured = false;
+
+function canUseExpoPushNotifications() {
+  if (Platform.OS === 'web') {
+    return false;
+  }
+
+  return Constants.executionEnvironment !== 'storeClient';
+}
 
 function resolveProjectId() {
   return (
@@ -21,12 +21,39 @@ function resolveProjectId() {
   );
 }
 
+async function getNotificationsModule() {
+  if (!canUseExpoPushNotifications()) {
+    return null;
+  }
+
+  const Notifications = await import('expo-notifications');
+
+  if (!notificationHandlerConfigured) {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldPlaySound: false,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    notificationHandlerConfigured = true;
+  }
+
+  return Notifications;
+}
+
 export async function getExpoPushToken() {
-  if (Platform.OS === 'web') {
+  if (!canUseExpoPushNotifications()) {
     return null;
   }
 
   if (!Device.isDevice) {
+    return null;
+  }
+
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
     return null;
   }
 

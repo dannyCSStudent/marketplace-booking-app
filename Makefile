@@ -4,6 +4,7 @@ TARGET_EMAIL ?= newtondanny49@gmail.com
 .PHONY: up deps frontend backend down restart logs frontend-logs api-logs worker-logs web-logs mobile-logs \
 	ps build api-shell web-shell mobile-shell api-health \
 	notifications-process notifications-worker notifications-queue-test notifications-test-email \
+	notifications-test-push \
 	notifications-requeue notifications-prune maintenance-logs notifications-maintenance
 
 up:
@@ -75,6 +76,10 @@ notifications-queue-test:
 
 notifications-test-email:
 	$(COMPOSE) exec api python queue_test_notification.py --email $(TARGET_EMAIL) --channel email
+	$(COMPOSE) exec api python process_notification_deliveries.py
+
+notifications-test-push:
+	$(COMPOSE) exec api python queue_test_notification.py --email $(TARGET_EMAIL) --channel push
 	$(COMPOSE) exec api python process_notification_deliveries.py
 
 notifications-requeue:

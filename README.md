@@ -36,6 +36,33 @@ Use the scripts like this:
 - `pnpm dev:web`: only the Next.js app on the host.
 - `pnpm dev:mobile`: only the Expo app on the host.
 
+## Mobile Push Testing
+
+Expo Go is fine for general UI work, but it cannot register remote push tokens. Push testing requires a development build on a real device.
+
+Typical flow:
+
+```sh
+make backend
+pnpm --filter mobile android:dev-client
+pnpm --filter mobile dev-client
+```
+
+Or on iOS:
+
+```sh
+make backend
+pnpm --filter mobile ios:dev-client
+pnpm --filter mobile dev-client
+```
+
+Notes:
+
+- `pnpm --filter mobile dev` starts Expo Go style development.
+- `pnpm --filter mobile dev-client` starts Metro for a development build.
+- `pnpm --filter mobile android:dev-client` and `ios:dev-client` create/install the native dev build locally.
+- Remote push registration requires a real physical device, notification permission, and `EXPO_PUBLIC_EAS_PROJECT_ID`.
+
 ## Notification Delivery
 
 The backend now has two runtime processes:
@@ -83,6 +110,7 @@ make web-logs
 make mobile-logs
 make frontend-logs
 make notifications-test-email TARGET_EMAIL=you@example.com
+make notifications-test-push TARGET_EMAIL=you@example.com
 make worker-logs
 ```
 
