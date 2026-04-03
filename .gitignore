@@ -90,3 +90,16 @@ __pycache__/
 
 # Backend env
 apps/backend-fastapi/.env
+
+node_modules/
+.next/
+.expo/
+dist/
+build/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+coverage/
+.DS_Store
