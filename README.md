@@ -40,6 +40,8 @@ Use the scripts like this:
 
 Expo Go is fine for general UI work, but it cannot register remote push tokens. Push testing requires a development build on a real device.
 
+Android push also requires Firebase Cloud Messaging credentials even if you are not using the Firebase JS SDK directly. Expo push notifications on Android sit on top of FCM, so the native Android app still needs `google-services.json`.
+
 Typical flow:
 
 ```sh
@@ -62,6 +64,8 @@ Notes:
 - `pnpm --filter mobile dev-client` starts Metro for a development build.
 - `pnpm --filter mobile android:dev-client` and `ios:dev-client` create/install the native dev build locally.
 - Remote push registration requires a real physical device, notification permission, and `EXPO_PUBLIC_EAS_PROJECT_ID`.
+- For Android push, create a Firebase Android app with package name `com.alacartes_dee.mobile`, download `google-services.json`, and place it at [apps/mobile/google-services.json](/home/dee/Documents/Demos/marketplace-booking-app/apps/mobile/google-services.json). Then rebuild the dev client.
+- For iOS push later, place `GoogleService-Info.plist` at [apps/mobile/GoogleService-Info.plist](/home/dee/Documents/Demos/marketplace-booking-app/apps/mobile/GoogleService-Info.plist).
 
 ## Notification Delivery
 

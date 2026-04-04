@@ -6,9 +6,9 @@
     "dev": "expo start -c",
     "dev-client": "expo start --dev-client -c",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
+    "android": "expo run:android",
     "android:dev-client": "expo run:android",
-    "ios": "expo start --ios",
+    "ios": "expo run:ios",
     "ios:dev-client": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint"
