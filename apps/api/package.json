@@ -8,6 +8,7 @@
     "check-types": "./.venv/bin/python -m compileall app tests",
     "seed": "./.venv/bin/python seed.py",
     "notifications:queue-test": "./.venv/bin/python queue_test_notification.py",
+    "notifications:queue-transaction-test": "./.venv/bin/python queue_transaction_notification_test.py",
     "notifications:process": "./.venv/bin/python process_notification_deliveries.py",
     "notifications:prune": "./.venv/bin/python prune_notification_deliveries.py",
     "notifications:requeue": "./.venv/bin/python requeue_notification_deliveries.py",

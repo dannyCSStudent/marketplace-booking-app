@@ -63,6 +63,7 @@ Notes:
 - `pnpm --filter mobile dev` starts Expo Go style development.
 - `pnpm --filter mobile dev-client` starts Metro for a development build.
 - `pnpm --filter mobile android:dev-client` and `ios:dev-client` create/install the native dev build locally.
+- `pnpm --filter mobile android:dev-client:clean` forces a fresh Android prebuild and reinstall. Use this after adding `google-services.json` or changing native push config.
 - Remote push registration requires a real physical device, notification permission, and `EXPO_PUBLIC_EAS_PROJECT_ID`.
 - For Android push, create a Firebase Android app with package name `com.alacartes_dee.mobile`, download `google-services.json`, and place it at [apps/mobile/google-services.json](/home/dee/Documents/Demos/marketplace-booking-app/apps/mobile/google-services.json). Then rebuild the dev client.
 - For iOS push later, place `GoogleService-Info.plist` at [apps/mobile/GoogleService-Info.plist](/home/dee/Documents/Demos/marketplace-booking-app/apps/mobile/GoogleService-Info.plist).
@@ -115,6 +116,7 @@ make mobile-logs
 make frontend-logs
 make notifications-test-email TARGET_EMAIL=you@example.com
 make notifications-test-push TARGET_EMAIL=you@example.com
+make notifications-test-transaction TARGET_EMAIL=you@example.com TARGET_KIND=order
 make worker-logs
 ```
 

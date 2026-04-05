@@ -13,6 +13,7 @@ COPY apps/api/check_openapi.py ./check_openapi.py
 COPY apps/api/generate_openapi_types.py ./generate_openapi_types.py
 COPY apps/api/process_notification_deliveries.py ./process_notification_deliveries.py
 COPY apps/api/queue_test_notification.py ./queue_test_notification.py
+COPY apps/api/queue_transaction_notification_test.py ./queue_transaction_notification_test.py
 COPY apps/api/prune_notification_deliveries.py ./prune_notification_deliveries.py
 COPY apps/api/requeue_notification_deliveries.py ./requeue_notification_deliveries.py
 COPY apps/api/run_notification_maintenance.py ./run_notification_maintenance.py

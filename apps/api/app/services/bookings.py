@@ -6,6 +6,9 @@ from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
 from app.schemas.bookings import (
+    BookingBulkStatusUpdateRequest,
+    BookingBulkStatusUpdateResult,
+    BookingBulkActionFailure,
     BookingCreate,
     BookingRead,
     BookingStatusEventRead,
@@ -73,6 +76,24 @@ def _get_booking_by_id(*, booking_id: str, access_token: str) -> BookingRead:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return _serialize_booking(row)
+
+
+def _get_booking_row_by_id(*, booking_id: str, access_token: str) -> dict:
+    supabase = get_supabase_client()
+    try:
+        return supabase.select(
+            "bookings",
+            query={
+                "select": BOOKING_SELECT,
+                "id": f"eq.{booking_id}",
+            },
+            access_token=access_token,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _insert_booking_status_event(
@@ -265,21 +286,10 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
 
 def update_booking_status(current_user: CurrentUser, booking_id: str, payload: BookingStatusUpdate) -> BookingRead:
     supabase = get_supabase_client()
-
-    try:
-        current_booking = supabase.select(
-            "bookings",
-            query={
-                "select": BOOKING_SELECT,
-                "id": f"eq.{booking_id}",
-            },
-            access_token=current_user.access_token,
-            expect_single=True,
-        )
-    except SupabaseError as exc:
-        if exc.status_code == 406:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found") from exc
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    current_booking = _get_booking_row_by_id(
+        booking_id=booking_id,
+        access_token=current_user.access_token,
+    )
 
     actor = _resolve_booking_actor(
         current_user=current_user,
@@ -335,6 +345,74 @@ def update_booking_status(current_user: CurrentUser, booking_id: str, payload: B
     )
 
     return _get_booking_by_id(booking_id=booking_id, access_token=current_user.access_token)
+
+
+def _validate_booking_status_update(
+    current_user: CurrentUser,
+    booking_id: str,
+    payload: BookingStatusUpdate,
+) -> None:
+    current_booking = _get_booking_row_by_id(
+        booking_id=booking_id,
+        access_token=current_user.access_token,
+    )
+    actor = _resolve_booking_actor(
+        current_user=current_user,
+        access_token=current_user.access_token,
+        seller_id=current_booking["seller_id"],
+    )
+    validate_transition(
+        current_status=current_booking["status"],
+        next_status=payload.status,
+        actor=actor,
+        workflow_name="booking",
+        transitions_by_actor=BOOKING_TRANSITIONS_BY_ACTOR,
+    )
+
+
+def bulk_update_booking_statuses(
+    current_user: CurrentUser,
+    payload: BookingBulkStatusUpdateRequest,
+) -> BookingBulkStatusUpdateResult:
+    succeeded_ids: list[str] = []
+    failed: list[BookingBulkActionFailure] = []
+    atomic_mode = payload.execution_mode == "atomic"
+
+    if atomic_mode:
+        preflight_failures: list[BookingBulkActionFailure] = []
+        for item in payload.updates:
+            try:
+                _validate_booking_status_update(
+                    current_user,
+                    item.booking_id,
+                    BookingStatusUpdate(
+                        status=item.status,
+                        seller_response_note=item.seller_response_note,
+                    ),
+                )
+            except HTTPException as exc:
+                preflight_failures.append(
+                    BookingBulkActionFailure(id=item.booking_id, detail=str(exc.detail)),
+                )
+
+        if preflight_failures:
+            return BookingBulkStatusUpdateResult(succeeded_ids=[], failed=preflight_failures)
+
+    for item in payload.updates:
+        try:
+            update_booking_status(
+                current_user,
+                item.booking_id,
+                BookingStatusUpdate(
+                    status=item.status,
+                    seller_response_note=item.seller_response_note,
+                ),
+            )
+            succeeded_ids.append(item.booking_id)
+        except HTTPException as exc:
+            failed.append(BookingBulkActionFailure(id=item.booking_id, detail=str(exc.detail)))
+
+    return BookingBulkStatusUpdateResult(succeeded_ids=succeeded_ids, failed=failed)
 
 
 def _resolve_booking_actor(*, current_user: CurrentUser, access_token: str | None, seller_id: str) -> str:

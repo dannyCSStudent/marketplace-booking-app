@@ -17,3 +17,18 @@ class NotificationDeliveryRead(BaseModel):
     attempts: int = 0
     sent_at: datetime | None = None
     created_at: datetime
+
+
+class NotificationDeliveryBulkRetryRequest(BaseModel):
+    delivery_ids: list[str]
+    execution_mode: str = "best_effort"
+
+
+class NotificationDeliveryBulkActionFailure(BaseModel):
+    id: str
+    detail: str
+
+
+class NotificationDeliveryBulkRetryResult(BaseModel):
+    succeeded_ids: list[str]
+    failed: list[NotificationDeliveryBulkActionFailure]

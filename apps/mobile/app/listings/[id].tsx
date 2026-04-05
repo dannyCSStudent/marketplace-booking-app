@@ -51,6 +51,7 @@ export default function ListingDetailScreen() {
   );
   const canOrder = Boolean(listing && listing.type !== 'service');
   const canBook = Boolean(listing && (listing.requires_booking || listing.type !== 'product'));
+  const primaryAction = canBook && !canOrder ? 'booking' : 'order';
   const bookingWindow = useMemo(() => {
     if (!listing) {
       return null;
@@ -131,6 +132,50 @@ export default function ListingDetailScreen() {
         <Text style={styles.location}>{formatLocation(listing) || 'Location pending'}</Text>
         <Text style={styles.description}>{listing.description}</Text>
         <Text style={styles.price}>{formatCurrency(listing.price_cents, listing.currency)}</Text>
+        <View style={styles.heroBadgeRow}>
+          <View style={[styles.heroBadge, styles.heroBadgeBooking]}>
+            <Text style={[styles.heroBadgeText, styles.heroBadgeBookingText]}>
+              {canBook ? 'Booking Ready' : 'Order Flow'}
+            </Text>
+          </View>
+          {listing.is_local_only ? (
+            <View style={[styles.heroBadge, styles.heroBadgeLocal]}>
+              <Text style={[styles.heroBadgeText, styles.heroBadgeLocalText]}>Local Only</Text>
+            </View>
+          ) : null}
+          <View style={[styles.heroBadge, styles.heroBadgeStatus]}>
+            <Text style={[styles.heroBadgeText, styles.heroBadgeStatusText]}>
+              {listing.status.replaceAll('_', ' ')}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.quickGrid}>
+        <View style={styles.quickCard}>
+          <Text style={styles.quickLabel}>Fulfillment</Text>
+          <Text style={styles.quickValue}>
+            {fulfillmentOptions.length > 0
+              ? fulfillmentOptions.map((option) => option.label).join(', ')
+              : 'Pending'}
+          </Text>
+        </View>
+        <View style={styles.quickCard}>
+          <Text style={styles.quickLabel}>Booking</Text>
+          <Text style={styles.quickValue}>{canBook ? 'Accepts requests' : 'Order only'}</Text>
+        </View>
+        <View style={styles.quickCard}>
+          <Text style={styles.quickLabel}>Service Time</Text>
+          <Text style={styles.quickValue}>
+            {listing.duration_minutes ? `${listing.duration_minutes} min` : 'Not set'}
+          </Text>
+        </View>
+        <View style={styles.quickCard}>
+          <Text style={styles.quickLabel}>Lead Time</Text>
+          <Text style={styles.quickValue}>
+            {listing.lead_time_hours ? `${listing.lead_time_hours} hr` : 'Immediate'}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.infoCard}>
@@ -183,6 +228,13 @@ export default function ListingDetailScreen() {
             ? 'Order works best for products and hybrid offers.'
             : 'This listing is configured as a service, so booking is the primary action.'}
         </Text>
+        <View style={styles.actionModeBanner}>
+          <Text style={styles.actionModeText}>
+            {primaryAction === 'booking'
+              ? 'Primary action: Request Booking'
+              : 'Primary action: Place Order'}
+          </Text>
+        </View>
 
         {canOrder ? (
           <View style={styles.selectorWrap}>
@@ -250,18 +302,23 @@ export default function ListingDetailScreen() {
         <View style={styles.actionRow}>
           <Pressable
             style={[
-              styles.button,
+              primaryAction === 'order' ? styles.button : styles.buttonSecondary,
               (!session || !canOrder || !selectedFulfillment) && styles.buttonDisabled,
             ]}
             disabled={!session || !canOrder || !selectedFulfillment}
             onPress={handleOrder}>
-            <Text style={styles.buttonText}>{canOrder ? 'Place Order' : 'Order Unavailable'}</Text>
+            <Text style={primaryAction === 'order' ? styles.buttonText : styles.buttonSecondaryText}>
+              {canOrder ? 'Place Order' : 'Order Unavailable'}
+            </Text>
           </Pressable>
           <Pressable
-            style={[styles.buttonSecondary, (!session || !canBook) && styles.buttonDisabled]}
+            style={[
+              primaryAction === 'booking' ? styles.button : styles.buttonSecondary,
+              (!session || !canBook) && styles.buttonDisabled,
+            ]}
             disabled={!session || !canBook}
             onPress={handleBooking}>
-            <Text style={styles.buttonSecondaryText}>
+            <Text style={primaryAction === 'booking' ? styles.buttonText : styles.buttonSecondaryText}>
               {canBook ? 'Request Booking' : 'Booking Unavailable'}
             </Text>
           </Pressable>
@@ -348,6 +405,65 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
   },
+  heroBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  heroBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  heroBadgeBooking: {
+    backgroundColor: '#e4f1ed',
+  },
+  heroBadgeLocal: {
+    backgroundColor: '#f3e1bd',
+  },
+  heroBadgeStatus: {
+    backgroundColor: '#ece7dc',
+  },
+  heroBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  heroBadgeBookingText: {
+    color: '#0f5f62',
+  },
+  heroBadgeLocalText: {
+    color: '#7c3a10',
+  },
+  heroBadgeStatusText: {
+    color: '#4d4338',
+  },
+  quickGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  quickCard: {
+    flexBasis: '47%',
+    backgroundColor: '#f8eedc',
+    borderRadius: 20,
+    padding: 16,
+    gap: 6,
+  },
+  quickLabel: {
+    color: '#7a6d5a',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  quickValue: {
+    color: '#1f2319',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 21,
+  },
   panel: {
     backgroundColor: '#1f351f',
     borderRadius: 26,
@@ -368,6 +484,20 @@ const styles = StyleSheet.create({
     color: '#f0dfbf',
     fontSize: 13,
     lineHeight: 20,
+  },
+  actionModeBanner: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#2a472a',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  actionModeText: {
+    color: '#fff0d2',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   selectorWrap: {
     gap: 10,

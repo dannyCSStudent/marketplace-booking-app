@@ -1,6 +1,27 @@
 // This file is auto-generated from docs/openapi.json.
 // Do not edit it by hand. Run `pnpm --filter api openapi:types`.
 
+export type BookingBulkActionFailure = {
+    id: string;
+    detail: string;
+  };
+
+export type BookingBulkStatusUpdateItem = {
+    booking_id: string;
+    status: string;
+    seller_response_note?: string | null;
+  };
+
+export type BookingBulkStatusUpdateRequest = {
+    updates: BookingBulkStatusUpdateItem[];
+    execution_mode?: string;
+  };
+
+export type BookingBulkStatusUpdateResult = {
+    succeeded_ids: string[];
+    failed: BookingBulkActionFailure[];
+  };
+
 export type BookingCreate = {
     seller_id: string;
     listing_id: string;
@@ -128,6 +149,21 @@ export type ListingUpdate = {
     lead_time_hours?: number | null;
   };
 
+export type NotificationDeliveryBulkActionFailure = {
+    id: string;
+    detail: string;
+  };
+
+export type NotificationDeliveryBulkRetryRequest = {
+    delivery_ids: string[];
+    execution_mode?: string;
+  };
+
+export type NotificationDeliveryBulkRetryResult = {
+    succeeded_ids: string[];
+    failed: NotificationDeliveryBulkActionFailure[];
+  };
+
 export type NotificationDeliveryRead = {
     id: string;
     recipient_user_id: string;
@@ -143,6 +179,27 @@ export type NotificationDeliveryRead = {
     attempts?: number;
     sent_at?: string | null;
     created_at: string;
+  };
+
+export type OrderBulkActionFailure = {
+    id: string;
+    detail: string;
+  };
+
+export type OrderBulkStatusUpdateItem = {
+    order_id: string;
+    status: string;
+    seller_response_note?: string | null;
+  };
+
+export type OrderBulkStatusUpdateRequest = {
+    updates: OrderBulkStatusUpdateItem[];
+    execution_mode?: string;
+  };
+
+export type OrderBulkStatusUpdateResult = {
+    succeeded_ids: string[];
+    failed: OrderBulkActionFailure[];
   };
 
 export type OrderCreate = {
@@ -275,6 +332,10 @@ export type ValidationError = {
   };
 
 export type ApiSchemaMap = {
+  BookingBulkActionFailure: BookingBulkActionFailure;
+  BookingBulkStatusUpdateItem: BookingBulkStatusUpdateItem;
+  BookingBulkStatusUpdateRequest: BookingBulkStatusUpdateRequest;
+  BookingBulkStatusUpdateResult: BookingBulkStatusUpdateResult;
   BookingCreate: BookingCreate;
   BookingRead: BookingRead;
   BookingStatusEventRead: BookingStatusEventRead;
@@ -285,7 +346,14 @@ export type ApiSchemaMap = {
   ListingListResponse: ListingListResponse;
   ListingRead: ListingRead;
   ListingUpdate: ListingUpdate;
+  NotificationDeliveryBulkActionFailure: NotificationDeliveryBulkActionFailure;
+  NotificationDeliveryBulkRetryRequest: NotificationDeliveryBulkRetryRequest;
+  NotificationDeliveryBulkRetryResult: NotificationDeliveryBulkRetryResult;
   NotificationDeliveryRead: NotificationDeliveryRead;
+  OrderBulkActionFailure: OrderBulkActionFailure;
+  OrderBulkStatusUpdateItem: OrderBulkStatusUpdateItem;
+  OrderBulkStatusUpdateRequest: OrderBulkStatusUpdateRequest;
+  OrderBulkStatusUpdateResult: OrderBulkStatusUpdateResult;
   OrderCreate: OrderCreate;
   OrderItemCreate: OrderItemCreate;
   OrderItemRead: OrderItemRead;
@@ -306,6 +374,12 @@ export type ApiOperations = {
     post: {
       requestBody: BookingCreate;
       response: BookingRead;
+    };
+  };
+  "/bookings/bulk-status": {
+    post: {
+      requestBody: BookingBulkStatusUpdateRequest;
+      response: BookingBulkStatusUpdateResult;
     };
   };
   "/bookings/me": {
@@ -360,6 +434,12 @@ export type ApiOperations = {
       response: unknown;
     };
   };
+  "/notifications/bulk-retry": {
+    post: {
+      requestBody: NotificationDeliveryBulkRetryRequest;
+      response: NotificationDeliveryBulkRetryResult;
+    };
+  };
   "/notifications/me": {
     get: {
       response: NotificationDeliveryRead[];
@@ -374,6 +454,12 @@ export type ApiOperations = {
     post: {
       requestBody: OrderCreate;
       response: OrderRead;
+    };
+  };
+  "/orders/bulk-status": {
+    post: {
+      requestBody: OrderBulkStatusUpdateRequest;
+      response: OrderBulkStatusUpdateResult;
     };
   };
   "/orders/me": {

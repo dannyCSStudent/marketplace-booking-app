@@ -9,6 +9,7 @@ import {
   type BookingCreateInput,
   type Listing,
   type ListingResponse,
+  type NotificationDeliveryBulkRetryResult,
   type NotificationDelivery,
   type NotificationItem,
   type Order,
@@ -68,6 +69,7 @@ export type {
   BuyerDashboardData,
   Listing,
   ListingResponse,
+  NotificationDeliveryBulkRetryResult,
   NotificationDelivery,
   NotificationItem,
   Order,
@@ -152,6 +154,14 @@ export function createBuyerBooking(accessToken: string, input: BookingCreateInpu
   return api.createBooking(input, { accessToken });
 }
 
+export function loadBuyerOrder(accessToken: string, orderId: string) {
+  return api.getOrderById(orderId, { accessToken });
+}
+
+export function loadBuyerBooking(accessToken: string, bookingId: string) {
+  return api.getBookingById(bookingId, { accessToken });
+}
+
 export function loadBuyerDashboard(accessToken: string) {
   return api.loadBuyerDashboard(accessToken);
 }
@@ -160,8 +170,25 @@ export function loadBuyerNotificationDeliveries(accessToken: string) {
   return api.loadMyNotificationDeliveries(accessToken);
 }
 
-export function retryBuyerNotificationDelivery(accessToken: string, deliveryId: string) {
-  return api.retryNotificationDelivery(deliveryId, accessToken);
+export function retryBuyerNotificationDelivery(
+  accessToken: string,
+  deliveryId: string,
+): Promise<NotificationDelivery>;
+export function retryBuyerNotificationDelivery(
+  accessToken: string,
+  deliveryIds: string[],
+  executionMode?: 'best_effort' | 'atomic',
+): Promise<NotificationDeliveryBulkRetryResult>;
+export function retryBuyerNotificationDelivery(
+  accessToken: string,
+  deliveryIdOrIds: string | string[],
+  executionMode: 'best_effort' | 'atomic' = 'best_effort',
+) {
+  if (Array.isArray(deliveryIdOrIds)) {
+    return api.bulkRetryNotificationDeliveries(deliveryIdOrIds, accessToken, executionMode);
+  }
+
+  return api.retryNotificationDelivery(deliveryIdOrIds, accessToken);
 }
 
 export function loadPublicListings() {

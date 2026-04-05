@@ -1,8 +1,20 @@
 from fastapi import APIRouter, Depends, status
 
 from app.dependencies.auth import get_current_user
-from app.schemas.orders import OrderCreate, OrderRead, OrderStatusUpdate
-from app.services.orders import create_order, get_my_orders, get_seller_orders, update_order_status
+from app.schemas.orders import (
+    OrderBulkStatusUpdateRequest,
+    OrderBulkStatusUpdateResult,
+    OrderCreate,
+    OrderRead,
+    OrderStatusUpdate,
+)
+from app.services.orders import (
+    bulk_update_order_statuses,
+    create_order,
+    get_my_orders,
+    get_seller_orders,
+    update_order_status,
+)
 
 router = APIRouter()
 
@@ -28,3 +40,11 @@ def patch_order_status(
     current_user=Depends(get_current_user),
 ) -> OrderRead:
     return update_order_status(current_user, order_id, payload)
+
+
+@router.post("/bulk-status", response_model=OrderBulkStatusUpdateResult)
+def bulk_patch_order_status(
+    payload: OrderBulkStatusUpdateRequest,
+    current_user=Depends(get_current_user),
+) -> OrderBulkStatusUpdateResult:
+    return bulk_update_order_statuses(current_user, payload)

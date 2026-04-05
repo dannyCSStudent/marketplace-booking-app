@@ -28,6 +28,7 @@ import {
   type BuyerSession,
   type Listing,
   type NotificationDelivery,
+  type NotificationDeliveryBulkRetryResult,
   type NotificationItem,
   type Order,
   type Profile,
@@ -72,7 +73,10 @@ type BuyerSessionValue = {
     marketing_notifications_enabled?: boolean;
   }) => Promise<void>;
   syncPushToken: () => Promise<boolean>;
-  retryNotificationDelivery: (deliveryId: string) => Promise<void>;
+  retryNotificationDelivery: (
+    deliveryIdOrIds: string | string[],
+    executionMode?: 'best_effort' | 'atomic',
+  ) => Promise<void | NotificationDeliveryBulkRetryResult>;
   createOrder: (input: {
     sellerId: string;
     listingId: string;
@@ -275,17 +279,26 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     });
   }, [session]);
 
-  const retryNotificationDelivery = useCallback(async (deliveryId: string) => {
+  const retryNotificationDelivery = useCallback(async (
+    deliveryIdOrIds: string | string[],
+    executionMode: 'best_effort' | 'atomic' = 'best_effort',
+  ) => {
     if (!session) {
       throw new Error('Sign in before retrying notification deliveries.');
     }
 
-    await retryBuyerNotificationDelivery(session.access_token, deliveryId);
+    const result = await retryBuyerNotificationDelivery(
+      session.access_token,
+      deliveryIdOrIds,
+      executionMode,
+    );
     const deliveries = await loadBuyerNotificationDeliveries(session.access_token);
 
     startTransition(() => {
       setNotificationDeliveries(deliveries);
     });
+
+    return result;
   }, [session]);
 
   const syncPushToken = useCallback(async () => {

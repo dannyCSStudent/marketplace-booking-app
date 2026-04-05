@@ -16,6 +16,7 @@ FastAPI backend for the marketplace and booking app.
 - `pnpm --filter api seed`: seed demo users and marketplace data into Supabase
 - `pnpm --filter api notifications:process`: process one batch of queued notification deliveries
 - `pnpm --filter api notifications:queue-test --email you@example.com --channel email|push`: queue a direct smoke-test delivery
+- `pnpm --filter api notifications:queue-transaction-test --email you@example.com --kind order|booking`: advance the buyer's latest real transaction and queue a real seller-originated notification
 - `pnpm --filter api notifications:prune`: delete old sent/failed delivery rows based on retention settings
 - `pnpm --filter api notifications:requeue`: requeue failed notification deliveries for another attempt
 - `pnpm --filter api notifications:maintenance`: run the notification maintenance loop continuously
@@ -56,3 +57,14 @@ Recommended production shape:
 pnpm --filter api notifications:queue-test --email you@example.com --channel push
 pnpm --filter api notifications:process
 ```
+
+## Real Receipt Push Test
+
+Queue a seller-style status update tied to the buyer's latest real order or booking:
+
+```sh
+pnpm --filter api notifications:queue-transaction-test --email you@example.com --kind order
+pnpm --filter api notifications:process
+```
+
+This helper updates the latest transaction row, inserts a real status event, and queues the buyer notification with a real `transaction_id` so push taps can deep-link to the receipt screen.

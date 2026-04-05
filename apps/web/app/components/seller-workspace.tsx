@@ -1,6 +1,7 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   authenticateWithSupabase,
   getSupabaseRealtimeClient,
@@ -43,6 +44,21 @@ type ListingDraft = {
   shipping_enabled: boolean;
 };
 
+type ActionFeedback = {
+  tone: "success" | "error";
+  message: string;
+  details?: string[];
+};
+
+type PendingBulkAction = {
+  kind: "order" | "booking";
+  currentStatus: "pending" | "ready" | "requested" | "in_progress";
+  nextStatus: "confirmed" | "completed";
+  actionKey: string;
+  count: number;
+  label: string;
+};
+
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -64,7 +80,51 @@ function isExpiredAuthError(error: unknown) {
   return false;
 }
 
+function formatBulkExecutionMode(mode: "best_effort" | "atomic") {
+  return mode === "atomic" ? "validate first" : "best effort";
+}
+
+function toggleBulkExecutionMode(mode: "best_effort" | "atomic") {
+  return mode === "atomic" ? "best_effort" : "atomic";
+}
+
+function getListingOperatingRole(listing: Listing) {
+  const hasOrderFlow = listing.type !== "service";
+  const hasBookingFlow = Boolean(listing.requires_booking || listing.type !== "product");
+
+  if (hasOrderFlow && hasBookingFlow) {
+    return "hybrid";
+  }
+
+  if (hasBookingFlow) {
+    return "booking-led";
+  }
+
+  return "order-led";
+}
+
+function getListingOperatingGuidance(listing: Listing) {
+  const role = getListingOperatingRole(listing);
+
+  if (role === "booking-led") {
+    return "Driven by booking requirements and service timing. Adjust booking, duration, and lead time first.";
+  }
+
+  if (role === "hybrid") {
+    return "Supports both order and booking flows. Tune booking requirements and fulfillment together.";
+  }
+
+  return "Driven by order flow and fulfillment methods. Tune pickup, meetup, delivery, or shipping first.";
+}
+
 export function SellerWorkspace() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const activityRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const listingControlRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const listingControlHighlightTimeoutRef = useRef<number | null>(null);
+  const focusedPanelHighlightTimeoutRef = useRef<number | null>(null);
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -77,6 +137,7 @@ export function SellerWorkspace() {
   const [country, setCountry] = useState("USA");
   const [loading, setLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState<string | null>(null);
+  const [bulkQueueActionLoading, setBulkQueueActionLoading] = useState<string | null>(null);
   const [listingActionLoading, setListingActionLoading] = useState<string | null>(null);
   const [listingSaveLoading, setListingSaveLoading] = useState<string | null>(null);
   const [listingDrafts, setListingDrafts] = useState<Record<string, ListingDraft>>({});
@@ -84,7 +145,38 @@ export function SellerWorkspace() {
   const [notificationsSeenAt, setNotificationsSeenAt] = useState<string | null>(null);
   const [notificationDeliveries, setNotificationDeliveries] = useState<NotificationDelivery[]>([]);
   const [deliveryRetryLoading, setDeliveryRetryLoading] = useState<string | null>(null);
+  const [retryingFailedDeliveries, setRetryingFailedDeliveries] = useState(false);
+  const [focusedActivityKey, setFocusedActivityKey] = useState<string | null>(
+    () => searchParams.get("focus"),
+  );
+  const [activityTypeFilter, setActivityTypeFilter] = useState<"all" | "order" | "booking">(
+    () => (searchParams.get("activityType") as "all" | "order" | "booking") ?? "all",
+  );
+  const [activityStatusFilter, setActivityStatusFilter] = useState<string>(
+    () => searchParams.get("activityStatus") ?? "all",
+  );
+  const [activityContextFilter, setActivityContextFilter] = useState<"all" | "unread" | "focused">(
+    () => (searchParams.get("activityContext") as "all" | "unread" | "focused") ?? "all",
+  );
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<"all" | "queued" | "sent" | "failed">(
+    () => (searchParams.get("deliveryStatus") as "all" | "queued" | "sent" | "failed") ?? "all",
+  );
+  const [deliveryRecencyFilter, setDeliveryRecencyFilter] = useState<"today" | "7d" | "all">(
+    () => (searchParams.get("deliveryWindow") as "today" | "7d" | "all") ?? "7d",
+  );
+  const [workspacePreset, setWorkspacePreset] = useState<"default" | "needs-action" | "recent-failures" | "focused-work">(
+    () =>
+      (searchParams.get("preset") as "default" | "needs-action" | "recent-failures" | "focused-work") ??
+      "default",
+  );
+  const [highlightedListingControlKey, setHighlightedListingControlKey] = useState<string | null>(null);
+  const [highlightedFocusedPanelKey, setHighlightedFocusedPanelKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
+  const [pendingBulkAction, setPendingBulkAction] = useState<PendingBulkAction | null>(null);
+  const [bulkExecutionMode, setBulkExecutionMode] = useState<"best_effort" | "atomic">(
+    () => (searchParams.get("bulkMode") as "best_effort" | "atomic") ?? "best_effort",
+  );
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [accountProfile, setAccountProfile] = useState<Profile | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -109,6 +201,8 @@ export function SellerWorkspace() {
     setListingDrafts({});
     setResponseNotes({});
     setError(message ?? null);
+    setActionFeedback(null);
+    setPendingBulkAction(null);
     setCreateError(null);
     setCreateMessage(null);
   }, []);
@@ -241,6 +335,105 @@ export function SellerWorkspace() {
     };
   }, [loadWorkspace, workspace]);
 
+  useEffect(() => {
+    if (!focusedActivityKey) {
+      return;
+    }
+
+    const target = activityRefs.current[focusedActivityKey];
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+
+    setHighlightedFocusedPanelKey(focusedActivityKey);
+    if (focusedPanelHighlightTimeoutRef.current) {
+      window.clearTimeout(focusedPanelHighlightTimeoutRef.current);
+    }
+    focusedPanelHighlightTimeoutRef.current = window.setTimeout(() => {
+      setHighlightedFocusedPanelKey((current) =>
+        current === focusedActivityKey ? null : current,
+      );
+      focusedPanelHighlightTimeoutRef.current = null;
+    }, 1800);
+  }, [focusedActivityKey]);
+
+  useEffect(() => {
+    const requestedFocus = searchParams.get("focus");
+    if (!requestedFocus) {
+      return;
+    }
+
+    setFocusedActivityKey(requestedFocus);
+  }, [searchParams]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+
+    if (activityTypeFilter === "all") {
+      params.delete("activityType");
+    } else {
+      params.set("activityType", activityTypeFilter);
+    }
+
+    if (activityStatusFilter === "all") {
+      params.delete("activityStatus");
+    } else {
+      params.set("activityStatus", activityStatusFilter);
+    }
+
+    if (activityContextFilter === "all") {
+      params.delete("activityContext");
+    } else {
+      params.set("activityContext", activityContextFilter);
+    }
+
+    if (deliveryRecencyFilter === "7d") {
+      params.delete("deliveryWindow");
+    } else {
+      params.set("deliveryWindow", deliveryRecencyFilter);
+    }
+
+    if (deliveryStatusFilter === "all") {
+      params.delete("deliveryStatus");
+    } else {
+      params.set("deliveryStatus", deliveryStatusFilter);
+    }
+
+    if (workspacePreset === "default") {
+      params.delete("preset");
+    } else {
+      params.set("preset", workspacePreset);
+    }
+
+    if (bulkExecutionMode === "best_effort") {
+      params.delete("bulkMode");
+    } else {
+      params.set("bulkMode", bulkExecutionMode);
+    }
+
+    const nextQuery = params.toString();
+    const currentQuery = searchParams.toString();
+    if (nextQuery !== currentQuery) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+    }
+  }, [
+    activityContextFilter,
+    activityStatusFilter,
+    activityTypeFilter,
+    bulkExecutionMode,
+    deliveryStatusFilter,
+    deliveryRecencyFilter,
+    pathname,
+    router,
+    searchParams,
+    workspacePreset,
+  ]);
+
   function handleSignOut() {
     clearSellerSession();
   }
@@ -248,6 +441,7 @@ export function SellerWorkspace() {
   function handleAuth() {
     setLoading(true);
     setError(null);
+    setActionFeedback(null);
     setCreateMessage(null);
 
     startTransition(async () => {
@@ -302,6 +496,7 @@ export function SellerWorkspace() {
 
     setLoading(true);
     setError(null);
+    setActionFeedback(null);
 
     startTransition(async () => {
       try {
@@ -383,6 +578,8 @@ export function SellerWorkspace() {
 
     setQueueLoading(orderId);
     setError(null);
+    setActionFeedback(null);
+    setPendingBulkAction(null);
 
     startTransition(async () => {
       try {
@@ -397,8 +594,13 @@ export function SellerWorkspace() {
           },
         );
         await loadWorkspace(accessToken);
+        setActionFeedback({
+          tone: "success",
+          message: `Order moved to ${status.replaceAll("_", " ")}.`,
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to update order");
+        setActionFeedback(null);
       } finally {
         setQueueLoading(null);
       }
@@ -414,6 +616,8 @@ export function SellerWorkspace() {
 
     setQueueLoading(bookingId);
     setError(null);
+    setActionFeedback(null);
+    setPendingBulkAction(null);
 
     startTransition(async () => {
       try {
@@ -428,8 +632,13 @@ export function SellerWorkspace() {
           },
         );
         await loadWorkspace(accessToken);
+        setActionFeedback({
+          tone: "success",
+          message: `Booking moved to ${status.replaceAll("_", " ")}.`,
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to update booking");
+        setActionFeedback(null);
       } finally {
         setQueueLoading(null);
       }
@@ -514,23 +723,273 @@ export function SellerWorkspace() {
     });
   }
 
-  const notifications: NotificationItem[] = workspace
-    ? buildNotifications({
-        audience: "seller",
-        orders: workspace.orders,
-        bookings: workspace.bookings,
-      })
-    : [];
+  const notifications: NotificationItem[] = useMemo(
+    () =>
+      workspace
+        ? buildNotifications({
+            audience: "seller",
+            orders: workspace.orders,
+            bookings: workspace.bookings,
+          })
+        : [],
+    [workspace],
+  );
   const unreadNotificationCount = notificationsSeenAt
     ? notifications.filter(
         (item) => new Date(item.createdAt).getTime() > new Date(notificationsSeenAt).getTime(),
       ).length
     : notifications.length;
+  const unreadActivityKeys = useMemo(
+    () =>
+      new Set(
+        notifications
+          .filter((item) =>
+            notificationsSeenAt
+              ? new Date(item.createdAt).getTime() > new Date(notificationsSeenAt).getTime()
+              : true,
+          )
+          .map((item) => `${item.transactionKind}:${item.transactionId}`),
+      ),
+    [notifications, notificationsSeenAt],
+  );
+  const activityStatusOptions = useMemo(() => {
+    if (!workspace) {
+      return ["all"];
+    }
+
+    return [
+      "all",
+      ...new Set([
+        ...workspace.orders.map((order) => order.status),
+        ...workspace.bookings.map((booking) => booking.status),
+      ]),
+    ];
+  }, [workspace]);
+  const focusedOrder = focusedActivityKey?.startsWith("order:")
+    ? workspace?.orders.find((order) => `order:${order.id}` === focusedActivityKey) ?? null
+    : null;
+  const focusedBooking = focusedActivityKey?.startsWith("booking:")
+    ? workspace?.bookings.find((booking) => `booking:${booking.id}` === focusedActivityKey) ?? null
+    : null;
+  const filteredOrders = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return workspace.orders.filter((order) => {
+      const activityKey = `order:${order.id}`;
+      if (activityTypeFilter === "booking") {
+        return false;
+      }
+      if (activityStatusFilter !== "all" && order.status !== activityStatusFilter) {
+        return false;
+      }
+      if (activityContextFilter === "unread" && !unreadActivityKeys.has(activityKey)) {
+        return false;
+      }
+      if (activityContextFilter === "focused" && focusedActivityKey !== activityKey) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    activityContextFilter,
+    activityStatusFilter,
+    activityTypeFilter,
+    focusedActivityKey,
+    unreadActivityKeys,
+    workspace,
+  ]);
+  const filteredBookings = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return workspace.bookings.filter((booking) => {
+      const activityKey = `booking:${booking.id}`;
+      if (activityTypeFilter === "order") {
+        return false;
+      }
+      if (activityStatusFilter !== "all" && booking.status !== activityStatusFilter) {
+        return false;
+      }
+      if (activityContextFilter === "unread" && !unreadActivityKeys.has(activityKey)) {
+        return false;
+      }
+      if (activityContextFilter === "focused" && focusedActivityKey !== activityKey) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    activityContextFilter,
+    activityStatusFilter,
+    activityTypeFilter,
+    focusedActivityKey,
+    unreadActivityKeys,
+    workspace,
+  ]);
+  const filteredNotificationDeliveries = useMemo(
+    () =>
+      notificationDeliveries.filter((delivery) => {
+        if (!matchesDeliveryRecency(delivery.created_at, deliveryRecencyFilter)) {
+          return false;
+        }
+
+        if (deliveryStatusFilter === "all") {
+          return true;
+        }
+
+        return delivery.delivery_status === deliveryStatusFilter;
+      }),
+    [deliveryRecencyFilter, deliveryStatusFilter, notificationDeliveries],
+  );
+  const queuedDeliveryCount = useMemo(
+    () => notificationDeliveries.filter((delivery) => delivery.delivery_status === "queued").length,
+    [notificationDeliveries],
+  );
+  const failedDeliveryCount = useMemo(
+    () => notificationDeliveries.filter((delivery) => delivery.delivery_status === "failed").length,
+    [notificationDeliveries],
+  );
+  const pendingVisibleOrdersCount = useMemo(
+    () => filteredOrders.filter((order) => order.status === "pending").length,
+    [filteredOrders],
+  );
+  const readyVisibleOrdersCount = useMemo(
+    () => filteredOrders.filter((order) => order.status === "ready").length,
+    [filteredOrders],
+  );
+  const requestedVisibleBookingsCount = useMemo(
+    () => filteredBookings.filter((booking) => booking.status === "requested").length,
+    [filteredBookings],
+  );
+  const inProgressVisibleBookingsCount = useMemo(
+    () => filteredBookings.filter((booking) => booking.status === "in_progress").length,
+    [filteredBookings],
+  );
+  const focusedItemCount = focusedActivityKey ? 1 : 0;
+
+  function isUnreadNotification(notification: NotificationItem) {
+    if (!notificationsSeenAt) {
+      return true;
+    }
+
+    return new Date(notification.createdAt).getTime() > new Date(notificationsSeenAt).getTime();
+  }
+
+  function getDeliveryTransactionLabel(delivery: NotificationDelivery) {
+    if (!workspace) {
+      return `${delivery.transaction_kind} · ${delivery.transaction_id}`;
+    }
+
+    if (delivery.transaction_kind === "order") {
+      const order = workspace.orders.find((item) => item.id === delivery.transaction_id);
+      if (!order) {
+        return `order · ${delivery.transaction_id}`;
+      }
+
+      const firstItem = order.items?.[0]?.listing_title ?? order.items?.[0]?.listing_id;
+      return firstItem ? `order · ${firstItem}` : `order · ${order.id}`;
+    }
+
+    const booking = workspace.bookings.find((item) => item.id === delivery.transaction_id);
+    if (!booking) {
+      return `booking · ${delivery.transaction_id}`;
+    }
+
+    return `booking · ${booking.listing_title ?? booking.listing_id}`;
+  }
+
+  function focusDeliveryTransaction(delivery: NotificationDelivery) {
+    setActivityFocus(`${delivery.transaction_kind}:${delivery.transaction_id}`);
+  }
+
+  function getListingTuneRoleTarget(listing: Listing) {
+    const role = getListingOperatingRole(listing);
+    return role === "order-led" ? "fulfillment" : "booking";
+  }
+
+  function focusListingRoleControls(listing: Listing) {
+    const targetKey = `${listing.id}:${getListingTuneRoleTarget(listing)}`;
+    setHighlightedListingControlKey(targetKey);
+    if (listingControlHighlightTimeoutRef.current) {
+      window.clearTimeout(listingControlHighlightTimeoutRef.current);
+    }
+    listingControlRefs.current[targetKey]?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+    listingControlHighlightTimeoutRef.current = window.setTimeout(() => {
+      setHighlightedListingControlKey((current) => (current === targetKey ? null : current));
+      listingControlHighlightTimeoutRef.current = null;
+    }, 1800);
+  }
 
   function markNotificationsSeen() {
     const latestTimestamp = notifications[0]?.createdAt ?? new Date().toISOString();
     window.localStorage.setItem(SELLER_NOTIFICATIONS_SEEN_AT_KEY, latestTimestamp);
     setNotificationsSeenAt(latestTimestamp);
+  }
+
+  function setActivityFocus(nextFocus: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("focus", nextFocus);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    setFocusedActivityKey(nextFocus);
+  }
+
+  function focusActivity(notification: NotificationItem) {
+    const nextFocus = `${notification.transactionKind}:${notification.transactionId}`;
+    setActivityFocus(nextFocus);
+    markNotificationsSeen();
+  }
+
+  function clearFocusedActivity() {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("focus");
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+    setFocusedActivityKey(null);
+  }
+
+  function applySellerPreset(
+    preset: "default" | "needs-action" | "recent-failures" | "focused-work",
+  ) {
+    setWorkspacePreset(preset);
+
+    if (preset === "default") {
+      setActivityTypeFilter("all");
+      setActivityStatusFilter("all");
+      setActivityContextFilter("all");
+      setDeliveryStatusFilter("all");
+      setDeliveryRecencyFilter("7d");
+      return;
+    }
+
+    if (preset === "needs-action") {
+      setActivityTypeFilter("all");
+      setActivityStatusFilter("all");
+      setActivityContextFilter("unread");
+      setDeliveryStatusFilter("queued");
+      setDeliveryRecencyFilter("today");
+      return;
+    }
+
+    if (preset === "recent-failures") {
+      setActivityTypeFilter("all");
+      setActivityStatusFilter("all");
+      setActivityContextFilter("all");
+      setDeliveryStatusFilter("failed");
+      setDeliveryRecencyFilter("7d");
+      return;
+    }
+
+    setActivityTypeFilter("all");
+    setActivityStatusFilter("all");
+    setActivityContextFilter("focused");
+    setDeliveryStatusFilter("all");
+    setDeliveryRecencyFilter("7d");
   }
 
   function updateNotificationPreferences(
@@ -548,12 +1007,19 @@ export function SellerWorkspace() {
     }
 
     setError(null);
+    setActionFeedback(null);
+    setPendingBulkAction(null);
     startTransition(async () => {
       try {
         const updatedProfile = await api.updateProfile(changes, { accessToken });
         setAccountProfile(updatedProfile);
+        setActionFeedback({
+          tone: "success",
+          message: "Notification preferences updated.",
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to update notification settings");
+        setActionFeedback(null);
       }
     });
   }
@@ -567,16 +1033,266 @@ export function SellerWorkspace() {
 
     setDeliveryRetryLoading(deliveryId);
     setError(null);
+    setActionFeedback(null);
+    setPendingBulkAction(null);
     startTransition(async () => {
       try {
         await api.retryNotificationDelivery(deliveryId, accessToken);
         await loadWorkspace(accessToken);
+        setActionFeedback({
+          tone: "success",
+          message: "Notification delivery requeued.",
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to retry notification delivery");
+        setActionFeedback(null);
       } finally {
         setDeliveryRetryLoading(null);
       }
     });
+  }
+
+  function retryFailedDeliveriesInView() {
+    const failedDeliveries = filteredNotificationDeliveries.filter(
+      (delivery) => delivery.delivery_status === "failed",
+    );
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken || failedDeliveries.length === 0) {
+      return;
+    }
+
+    setRetryingFailedDeliveries(true);
+    setError(null);
+    setActionFeedback(null);
+    setPendingBulkAction(null);
+    startTransition(async () => {
+      try {
+        const result = await api.bulkRetryNotificationDeliveries(
+          failedDeliveries.map((delivery) => delivery.id),
+          accessToken,
+          bulkExecutionMode,
+        );
+        await loadWorkspace(accessToken);
+        setActionFeedback(
+          result.failed.length === 0
+            ? {
+                tone: "success",
+                message: `Retried ${result.succeeded_ids.length} failed ${
+                  result.succeeded_ids.length === 1 ? "delivery" : "deliveries"
+                } in view using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
+              }
+            : {
+                tone: result.succeeded_ids.length > 0 ? "success" : "error",
+                message:
+                  result.succeeded_ids.length > 0
+                    ? `Retried ${result.succeeded_ids.length} of ${failedDeliveries.length} failed deliveries in view using ${formatBulkExecutionMode(bulkExecutionMode)} mode. ${result.failed.length} failed again.`
+                    : `Unable to retry ${failedDeliveries.length} failed deliveries in view using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
+                details: result.failed.map(
+                  (failure: { id: string; detail: string }) =>
+                    `${failure.id.slice(0, 8)} · ${failure.detail}`,
+                ),
+              },
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to retry failed deliveries");
+        setActionFeedback(null);
+      } finally {
+        setRetryingFailedDeliveries(false);
+      }
+    });
+  }
+
+  function bulkUpdateVisibleOrders(
+    currentStatus: "pending" | "ready",
+    nextStatus: "confirmed" | "completed",
+    actionKey: string,
+  ) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    const targetOrders = filteredOrders.filter((order) => order.status === currentStatus);
+    if (!accessToken || targetOrders.length === 0) {
+      return;
+    }
+
+    setBulkQueueActionLoading(actionKey);
+    setError(null);
+    setActionFeedback(null);
+    startTransition(async () => {
+      try {
+        const result = await api.bulkUpdateOrderStatuses(
+          {
+            execution_mode: bulkExecutionMode,
+            updates: targetOrders.map((order) => ({
+              order_id: order.id,
+              status: nextStatus,
+              seller_response_note: responseNotes[order.id] || null,
+            })),
+          },
+          { accessToken },
+        );
+        await loadWorkspace(accessToken);
+        setPendingBulkAction(null);
+        setActionFeedback(
+          result.failed.length === 0
+            ? {
+                tone: "success",
+                message: `${nextStatus === "completed" ? "Completed" : "Updated"} ${
+                  result.succeeded_ids.length
+                } visible ${
+                  result.succeeded_ids.length === 1 ? "order" : "orders"
+                } to ${nextStatus.replaceAll("_", " ")} using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
+              }
+            : {
+                tone: result.succeeded_ids.length > 0 ? "success" : "error",
+                message:
+                  result.succeeded_ids.length > 0
+                    ? `Updated ${result.succeeded_ids.length} of ${targetOrders.length} visible orders using ${formatBulkExecutionMode(bulkExecutionMode)} mode. ${result.failed.length} failed.`
+                    : `Unable to update ${targetOrders.length} visible orders using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
+                details: result.failed.map(
+                  (failure: { id: string; detail: string }) =>
+                    `${failure.id.slice(0, 8)} · ${failure.detail}`,
+                ),
+              },
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to update visible orders");
+        setActionFeedback(null);
+      } finally {
+        setBulkQueueActionLoading(null);
+      }
+    });
+  }
+
+  function stageBulkOrderAction(
+    currentStatus: "pending" | "ready",
+    nextStatus: "confirmed" | "completed",
+    actionKey: string,
+  ) {
+    const targetOrders = filteredOrders.filter((order) => order.status === currentStatus);
+    if (targetOrders.length === 0) {
+      return;
+    }
+
+    setActionFeedback(null);
+    setPendingBulkAction({
+      kind: "order",
+      currentStatus,
+      nextStatus,
+      actionKey,
+      count: targetOrders.length,
+      label:
+        nextStatus === "completed"
+          ? `Complete ${targetOrders.length} visible ${targetOrders.length === 1 ? "order" : "orders"}`
+          : `Confirm ${targetOrders.length} visible ${targetOrders.length === 1 ? "order" : "orders"}`,
+    });
+  }
+
+  function bulkUpdateVisibleBookings(
+    currentStatus: "requested" | "in_progress",
+    nextStatus: "confirmed" | "completed",
+    actionKey: string,
+  ) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    const targetBookings = filteredBookings.filter((booking) => booking.status === currentStatus);
+    if (!accessToken || targetBookings.length === 0) {
+      return;
+    }
+
+    setBulkQueueActionLoading(actionKey);
+    setError(null);
+    setActionFeedback(null);
+    startTransition(async () => {
+      try {
+        const result = await api.bulkUpdateBookingStatuses(
+          {
+            execution_mode: bulkExecutionMode,
+            updates: targetBookings.map((booking) => ({
+              booking_id: booking.id,
+              status: nextStatus,
+              seller_response_note: responseNotes[booking.id] || null,
+            })),
+          },
+          { accessToken },
+        );
+        await loadWorkspace(accessToken);
+        setPendingBulkAction(null);
+        setActionFeedback(
+          result.failed.length === 0
+            ? {
+                tone: "success",
+                message: `${nextStatus === "completed" ? "Completed" : "Updated"} ${
+                  result.succeeded_ids.length
+                } visible ${
+                  result.succeeded_ids.length === 1 ? "booking" : "bookings"
+                } to ${nextStatus.replaceAll("_", " ")} using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
+              }
+            : {
+                tone: result.succeeded_ids.length > 0 ? "success" : "error",
+                message:
+                  result.succeeded_ids.length > 0
+                    ? `Updated ${result.succeeded_ids.length} of ${targetBookings.length} visible bookings using ${formatBulkExecutionMode(bulkExecutionMode)} mode. ${result.failed.length} failed.`
+                    : `Unable to update ${targetBookings.length} visible bookings using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
+                details: result.failed.map(
+                  (failure: { id: string; detail: string }) =>
+                    `${failure.id.slice(0, 8)} · ${failure.detail}`,
+                ),
+              },
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to update visible bookings");
+        setActionFeedback(null);
+      } finally {
+        setBulkQueueActionLoading(null);
+      }
+    });
+  }
+
+  function stageBulkBookingAction(
+    currentStatus: "requested" | "in_progress",
+    nextStatus: "confirmed" | "completed",
+    actionKey: string,
+  ) {
+    const targetBookings = filteredBookings.filter((booking) => booking.status === currentStatus);
+    if (targetBookings.length === 0) {
+      return;
+    }
+
+    setActionFeedback(null);
+    setPendingBulkAction({
+      kind: "booking",
+      currentStatus,
+      nextStatus,
+      actionKey,
+      count: targetBookings.length,
+      label:
+        nextStatus === "completed"
+          ? `Complete ${targetBookings.length} visible ${
+              targetBookings.length === 1 ? "booking" : "bookings"
+            }`
+          : `Confirm ${targetBookings.length} visible ${
+              targetBookings.length === 1 ? "booking" : "bookings"
+            }`,
+    });
+  }
+
+  function confirmPendingBulkAction() {
+    if (!pendingBulkAction) {
+      return;
+    }
+
+    if (pendingBulkAction.kind === "order") {
+      bulkUpdateVisibleOrders(
+        pendingBulkAction.currentStatus as "pending" | "ready",
+        pendingBulkAction.nextStatus,
+        pendingBulkAction.actionKey,
+      );
+      return;
+    }
+
+    bulkUpdateVisibleBookings(
+      pendingBulkAction.currentStatus as "requested" | "in_progress",
+      pendingBulkAction.nextStatus,
+      pendingBulkAction.actionKey,
+    );
   }
 
   return (
@@ -716,7 +1432,113 @@ export function SellerWorkspace() {
               <MiniStat label="Bookings" value={String(workspace.bookings.length)} />
             </div>
 
+            {actionFeedback ? (
+              <div
+                className={`rounded-2xl border px-4 py-3 text-sm ${
+                  actionFeedback.tone === "success"
+                    ? "border-olive/20 bg-olive/8 text-olive"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}
+              >
+                <p>{actionFeedback.message}</p>
+                {actionFeedback.details?.length ? (
+                  <div className="mt-3 space-y-1">
+                    {actionFeedback.details.slice(0, 4).map((detail) => (
+                      <p
+                        key={detail}
+                        className={`text-xs ${
+                          actionFeedback.tone === "success"
+                            ? "text-olive/80"
+                            : "text-red-700/90"
+                        }`}
+                      >
+                        {detail}
+                      </p>
+                    ))}
+                    {actionFeedback.details.length > 4 ? (
+                      <p
+                        className={`text-xs ${
+                          actionFeedback.tone === "success"
+                            ? "text-olive/80"
+                            : "text-red-700/90"
+                        }`}
+                      >
+                        {actionFeedback.details.length - 4} more not shown.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                Workspace Views
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {[
+                  ["default", "Default"],
+                  ["needs-action", `Needs Action · ${unreadNotificationCount}`],
+                  ["recent-failures", `Recent Failures · ${failedDeliveryCount}`],
+                  ["focused-work", `Focused Work · ${focusedItemCount}`],
+                ].map(([preset, label]) => (
+                  <button
+                    key={preset}
+                    className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                      workspacePreset === preset
+                        ? "border-accent bg-accent text-white"
+                        : preset === "needs-action" && unreadNotificationCount > 0
+                          ? "border-amber-300 bg-amber-50 text-amber-900 hover:border-accent hover:text-accent"
+                          : preset === "recent-failures" && failedDeliveryCount > 0
+                            ? "border-red-300 bg-red-50 text-red-700 hover:border-accent hover:text-accent"
+                            : preset === "focused-work" && focusedItemCount > 0
+                              ? "border-sky-300 bg-sky-50 text-sky-800 hover:border-accent hover:text-accent"
+                        : "border-border text-foreground hover:border-accent hover:text-accent"
+                    }`}
+                    onClick={() =>
+                      applySellerPreset(
+                        preset as
+                          | "default"
+                          | "needs-action"
+                          | "recent-failures"
+                          | "focused-work",
+                      )
+                    }
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {unreadNotificationCount > 0 ? (
+                  <button
+                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={markNotificationsSeen}
+                    type="button"
+                  >
+                    Mark All Seen
+                  </button>
+                ) : null}
+                {focusedActivityKey ? (
+                  <button
+                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={clearFocusedActivity}
+                    type="button"
+                  >
+                    Clear Focus
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div
+              className={`rounded-3xl border bg-white px-4 py-4 ${
+                unreadNotificationCount > 0
+                  ? "border-amber-300 bg-amber-50/40"
+                  : "border-border"
+              }`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
@@ -738,9 +1560,18 @@ export function SellerWorkspace() {
               <div className="mt-4 space-y-3">
                 {notifications.length > 0 ? (
                   notifications.slice(0, 5).map((notification) => (
-                    <div
+                    <button
                       key={notification.id}
-                      className="rounded-[1.1rem] border border-border bg-background/35 px-4 py-3"
+                      className={`w-full rounded-[1.1rem] border px-4 py-3 text-left transition ${
+                        focusedActivityKey ===
+                        `${notification.transactionKind}:${notification.transactionId}`
+                          ? "border-accent bg-accent/8"
+                          : isUnreadNotification(notification)
+                            ? "border-amber-300 bg-amber-50/70 hover:border-accent/50"
+                          : "border-border bg-background/35 hover:border-accent/50"
+                      }`}
+                      onClick={() => focusActivity(notification)}
+                      type="button"
                     >
                       <p className="text-sm font-semibold text-foreground">
                         {notification.title}
@@ -749,7 +1580,7 @@ export function SellerWorkspace() {
                       <p className="mt-2 text-xs text-foreground/52">
                         {new Date(notification.createdAt).toLocaleString()}
                       </p>
-                    </div>
+                    </button>
                   ))
                 ) : (
                   <p className="text-sm text-foreground/68">
@@ -811,32 +1642,118 @@ export function SellerWorkspace() {
               </div>
             ) : null}
 
-            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+            <div
+              className={`rounded-3xl border bg-white px-4 py-4 ${
+                queuedDeliveryCount > 0 || failedDeliveryCount > 0
+                  ? "border-amber-200 bg-amber-50/30"
+                  : "border-border"
+              }`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
                     Delivery Jobs
                   </p>
                   <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
-                    Resend and push outbox status
+                    Resend and push outbox status · {queuedDeliveryCount} queued
                   </p>
                 </div>
                 <span className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground/60">
-                  {notificationDeliveries.length} recent
+                  {filteredNotificationDeliveries.length} shown
                 </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {filteredNotificationDeliveries.some((delivery) => delivery.delivery_status === "failed") ? (
+                  <button
+                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                    disabled={retryingFailedDeliveries}
+                    onClick={retryFailedDeliveriesInView}
+                    type="button"
+                  >
+                    {retryingFailedDeliveries ? "Retrying..." : "Retry Failed In View"}
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {[
+                  ["all", "All Statuses"],
+                  ["queued", "Queued"],
+                  ["sent", "Sent"],
+                  ["failed", "Failed"],
+                ].map(([status, label]) => (
+                  <button
+                    key={status}
+                    className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                      deliveryStatusFilter === status
+                        ? "border-accent bg-accent text-white"
+                        : "border-border text-foreground hover:border-accent hover:text-accent"
+                    }`}
+                    onClick={() =>
+                      setDeliveryStatusFilter(
+                        status as "all" | "queued" | "sent" | "failed",
+                      )
+                    }
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                    deliveryRecencyFilter === "today"
+                      ? "border-accent bg-accent text-white"
+                      : "border-border text-foreground hover:border-accent hover:text-accent"
+                  }`}
+                  onClick={() => setDeliveryRecencyFilter("today")}
+                  type="button"
+                >
+                  Today
+                </button>
+                <button
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                    deliveryRecencyFilter === "7d"
+                      ? "border-accent bg-accent text-white"
+                      : "border-border text-foreground hover:border-accent hover:text-accent"
+                  }`}
+                  onClick={() => setDeliveryRecencyFilter("7d")}
+                  type="button"
+                >
+                  7 Days
+                </button>
+                <button
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                    deliveryRecencyFilter === "all"
+                      ? "border-accent bg-accent text-white"
+                      : "border-border text-foreground hover:border-accent hover:text-accent"
+                  }`}
+                  onClick={() => setDeliveryRecencyFilter("all")}
+                  type="button"
+                >
+                  All Time
+                </button>
               </div>
 
               <div className="mt-4 space-y-3">
-                {notificationDeliveries.length > 0 ? (
-                  notificationDeliveries.slice(0, 8).map((delivery) => (
+                {filteredNotificationDeliveries.length > 0 ? (
+                  filteredNotificationDeliveries.slice(0, 8).map((delivery) => (
                     <div
                       key={delivery.id}
-                      className="rounded-[1.1rem] border border-border bg-background/35 px-4 py-3"
+                      className={`rounded-[1.1rem] border px-4 py-3 ${
+                        delivery.delivery_status === "failed"
+                          ? "border-red-300 bg-red-50/70"
+                          : delivery.delivery_status === "queued"
+                            ? "border-amber-300 bg-amber-50/70"
+                            : "border-border bg-background/35"
+                      }`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-semibold text-foreground">
                             {delivery.channel} · {delivery.transaction_kind}
+                          </p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-foreground/52">
+                            {getDeliveryTransactionLabel(delivery)}
                           </p>
                           <p className="mt-1 text-sm text-foreground/70">
                             {String(delivery.payload.subject ?? delivery.payload.status ?? "No payload summary")}
@@ -867,6 +1784,13 @@ export function SellerWorkspace() {
                           <p className="mt-1 text-xs text-foreground/52">
                             {new Date(delivery.created_at).toLocaleString()}
                           </p>
+                          <button
+                            className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => focusDeliveryTransaction(delivery)}
+                            type="button"
+                          >
+                            Open Queue Item
+                          </button>
                           {delivery.delivery_status === "failed" ? (
                             <button
                               className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
@@ -883,7 +1807,7 @@ export function SellerWorkspace() {
                   ))
                 ) : (
                   <p className="text-sm text-foreground/68">
-                    Notification deliveries will appear here after the worker queues them.
+                    No delivery jobs match the current time filter.
                   </p>
                 )}
               </div>
@@ -1006,10 +1930,31 @@ export function SellerWorkspace() {
                             <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
                               {listing.type}
                             </span>
+                            <span
+                              className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                                getListingOperatingRole(listing) === "booking-led"
+                                  ? "bg-[#e4f1ed] text-[#0f5f62]"
+                                  : getListingOperatingRole(listing) === "hybrid"
+                                    ? "bg-[#f3e1bd] text-[#7c3a10]"
+                                    : "bg-[#ece7dc] text-[#4d4338]"
+                              }`}
+                            >
+                              {getListingOperatingRole(listing)}
+                            </span>
                           </div>
                           <p className="text-sm text-foreground/68">
                             {listing.description ?? "No seller description yet."}
                           </p>
+                          <p className="text-xs leading-5 text-foreground/56">
+                            {getListingOperatingGuidance(listing)}
+                          </p>
+                          <button
+                            className="w-fit rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => focusListingRoleControls(listing)}
+                            type="button"
+                          >
+                            Tune Role
+                          </button>
                           <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-foreground/58">
                             <span>{formatCurrency(listing.price_cents, listing.currency)}</span>
                             <span>Slug: {listing.slug}</span>
@@ -1075,7 +2020,16 @@ export function SellerWorkspace() {
                             }
                           />
                         </label>
-                        <div className="rounded-2xl border border-border bg-background/40 px-4 py-3">
+                        <div
+                          className={`rounded-2xl border px-4 py-3 transition ${
+                            highlightedListingControlKey === `${listing.id}:booking`
+                              ? "border-accent bg-accent/8 ring-2 ring-accent/30"
+                              : "border-border bg-background/40"
+                          }`}
+                          ref={(node) => {
+                            listingControlRefs.current[`${listing.id}:booking`] = node;
+                          }}
+                        >
                           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
                             Booking
                           </p>
@@ -1108,7 +2062,16 @@ export function SellerWorkspace() {
                         </div>
                       </div>
 
-                      <div className="mt-4 rounded-2xl border border-border bg-background/40 px-4 py-4">
+                      <div
+                        className={`mt-4 rounded-2xl border px-4 py-4 transition ${
+                          highlightedListingControlKey === `${listing.id}:fulfillment`
+                            ? "border-accent bg-accent/8 ring-2 ring-accent/30"
+                            : "border-border bg-background/40"
+                        }`}
+                        ref={(node) => {
+                          listingControlRefs.current[`${listing.id}:fulfillment`] = node;
+                        }}
+                      >
                         <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
                           Fulfillment Methods
                         </p>
@@ -1182,22 +2145,424 @@ export function SellerWorkspace() {
               </div>
 
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold tracking-[-0.03em]">Live Activity</h3>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h3 className="text-lg font-semibold tracking-[-0.03em]">Live Activity</h3>
+                    <button
+                      className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
+                        bulkExecutionMode === "atomic"
+                          ? "border-amber-300 bg-amber-100 text-amber-900 shadow-[0_0_0_1px_rgba(245,158,11,0.14)]"
+                          : "border-stone-300 bg-stone-200 text-stone-700"
+                      }`}
+                      onClick={() =>
+                        setBulkExecutionMode(toggleBulkExecutionMode(bulkExecutionMode))
+                      }
+                      type="button"
+                    >
+                      Batch Mode · {bulkExecutionMode === "atomic" ? "Validate First" : "Best Effort"} · Click to switch
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                        bulkExecutionMode === "best_effort"
+                          ? "border-accent bg-accent text-white"
+                          : "border-border text-foreground hover:border-accent hover:text-accent"
+                      }`}
+                      onClick={() => setBulkExecutionMode("best_effort")}
+                      type="button"
+                    >
+                      Best Effort
+                    </button>
+                    <button
+                      className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                        bulkExecutionMode === "atomic"
+                          ? "border-accent bg-accent text-white"
+                          : "border-border text-foreground hover:border-accent hover:text-accent"
+                      }`}
+                      onClick={() => setBulkExecutionMode("atomic")}
+                      type="button"
+                    >
+                      Validate First
+                    </button>
+                    {pendingVisibleOrdersCount > 0 ? (
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                        disabled={bulkQueueActionLoading !== null}
+                        onClick={() =>
+                          stageBulkOrderAction("pending", "confirmed", "confirm-orders")
+                        }
+                        type="button"
+                      >
+                        {bulkQueueActionLoading === "confirm-orders"
+                          ? "Confirming..."
+                          : `Confirm Orders · ${pendingVisibleOrdersCount}`}
+                      </button>
+                    ) : null}
+                    {requestedVisibleBookingsCount > 0 ? (
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                        disabled={bulkQueueActionLoading !== null}
+                        onClick={() =>
+                          stageBulkBookingAction("requested", "confirmed", "confirm-bookings")
+                        }
+                        type="button"
+                      >
+                        {bulkQueueActionLoading === "confirm-bookings"
+                          ? "Confirming..."
+                          : `Confirm Bookings · ${requestedVisibleBookingsCount}`}
+                      </button>
+                    ) : null}
+                    {readyVisibleOrdersCount > 0 ? (
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                        disabled={bulkQueueActionLoading !== null}
+                        onClick={() =>
+                          stageBulkOrderAction("ready", "completed", "complete-orders")
+                        }
+                        type="button"
+                      >
+                        {bulkQueueActionLoading === "complete-orders"
+                          ? "Completing..."
+                          : `Complete Orders · ${readyVisibleOrdersCount}`}
+                      </button>
+                    ) : null}
+                    {inProgressVisibleBookingsCount > 0 ? (
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                        disabled={bulkQueueActionLoading !== null}
+                        onClick={() =>
+                          stageBulkBookingAction(
+                            "in_progress",
+                            "completed",
+                            "complete-bookings",
+                          )
+                        }
+                        type="button"
+                      >
+                        {bulkQueueActionLoading === "complete-bookings"
+                          ? "Completing..."
+                          : `Complete Bookings · ${inProgressVisibleBookingsCount}`}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                {pendingBulkAction ? (
+                  <div
+                    className={`rounded-[1.2rem] border px-4 py-4 ${
+                      pendingBulkAction.nextStatus === "completed"
+                        ? "border-red-200 bg-red-50/70"
+                        : "border-amber-200 bg-amber-50/70"
+                    }`}
+                  >
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                      Confirm Bulk Action
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {pendingBulkAction.label}
+                    </p>
+                    <p className="mt-2 text-sm text-foreground/70">
+                      This will move {pendingBulkAction.count} visible{" "}
+                      {pendingBulkAction.kind === "order" ? "order" : "booking"}
+                      {pendingBulkAction.count === 1 ? "" : "s"} from{" "}
+                      {pendingBulkAction.currentStatus.replaceAll("_", " ")} to{" "}
+                      {pendingBulkAction.nextStatus.replaceAll("_", " ")} using the current
+                      filter view. Mode: {bulkExecutionMode === "atomic" ? "validate first" : "best effort"}.
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <label className="flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground">
+                        <input
+                          checked={bulkExecutionMode === "atomic"}
+                          onChange={(event) =>
+                            setBulkExecutionMode(
+                              event.target.checked ? "atomic" : "best_effort",
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        Validate First
+                      </label>
+                      <button
+                        className={`rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white transition disabled:opacity-45 ${
+                          pendingBulkAction.nextStatus === "completed"
+                            ? "bg-red-700 hover:bg-red-800"
+                            : "bg-accent hover:bg-accent-deep"
+                        }`}
+                        disabled={bulkQueueActionLoading !== null}
+                        onClick={confirmPendingBulkAction}
+                        type="button"
+                      >
+                        {bulkQueueActionLoading === pendingBulkAction.actionKey
+                          ? "Applying..."
+                          : pendingBulkAction.nextStatus === "completed"
+                            ? "Confirm Completion"
+                            : "Confirm Bulk Update"}
+                      </button>
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                        disabled={bulkQueueActionLoading !== null}
+                        onClick={() => setPendingBulkAction(null)}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4">
+                  <div className="flex flex-wrap gap-4">
+                    <label className="min-w-40 flex-1">
+                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Type
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                        value={activityTypeFilter}
+                        onChange={(event) =>
+                          setActivityTypeFilter(event.target.value as "all" | "order" | "booking")
+                        }
+                      >
+                        <option value="all">All activity</option>
+                        <option value="order">Orders only</option>
+                        <option value="booking">Bookings only</option>
+                      </select>
+                    </label>
+                    <label className="min-w-40 flex-1">
+                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Status
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                        value={activityStatusFilter}
+                        onChange={(event) => setActivityStatusFilter(event.target.value)}
+                      >
+                        {activityStatusOptions.map((status) => (
+                          <option key={status} value={status}>
+                            {status === "all" ? "All statuses" : status.replaceAll("_", " ")}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="min-w-40 flex-1">
+                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Context
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                        value={activityContextFilter}
+                        onChange={(event) =>
+                          setActivityContextFilter(
+                            event.target.value as "all" | "unread" | "focused",
+                          )
+                        }
+                      >
+                        <option value="all">All queue items</option>
+                        <option value="unread">Unread updates</option>
+                        <option value="focused">Focused item</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
                 <div className="space-y-3">
-                  {workspace.orders.length === 0 && workspace.bookings.length === 0 ? (
-                    <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4 text-sm text-foreground/68">
-                      No incoming transaction activity yet. Use the demo buyer to place an
-                      order or booking.
+                  {focusedOrder ? (
+                    <div
+                      className={`rounded-[1.5rem] border px-5 py-5 transition ${
+                        highlightedFocusedPanelKey === `order:${focusedOrder.id}`
+                          ? "border-accent bg-accent/12 ring-2 ring-accent/35"
+                          : "border-accent bg-accent/8"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
+                            Focused Order
+                          </p>
+                          <h4 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-foreground">
+                            {focusedOrder.status.replaceAll("_", " ")}
+                          </h4>
+                          <p className="mt-2 text-sm text-foreground/72">
+                            {focusedOrder.notes ?? "No buyer notes"}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-foreground">
+                            {formatCurrency(focusedOrder.total_cents, focusedOrder.currency)}
+                          </p>
+                          <button
+                            className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={clearFocusedActivity}
+                            type="button"
+                          >
+                            Clear Focus
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-4 text-sm text-foreground/72 sm:grid-cols-2">
+                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                            Order Snapshot
+                          </p>
+                          <div className="mt-3 space-y-2">
+                            <p>Order ID: {focusedOrder.id}</p>
+                            <p>Fulfillment: {focusedOrder.fulfillment}</p>
+                            <p>Items: {(focusedOrder.items ?? []).length}</p>
+                            <p>Seller note: {focusedOrder.seller_response_note ?? "No seller note yet"}</p>
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                            Requested Items
+                          </p>
+                          <div className="mt-3 space-y-2">
+                            {(focusedOrder.items ?? []).length > 0 ? (
+                              (focusedOrder.items ?? []).map((item) => (
+                                <p key={item.id}>
+                                  {item.quantity}x {item.listing_title ?? item.listing_id}
+                                  {" · "}
+                                  {formatCurrency(item.total_price_cents, focusedOrder.currency)}
+                                </p>
+                              ))
+                            ) : (
+                              <p>No item detail is available for this order yet.</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-border bg-white/70 px-4 py-4">
+                        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                          Full Timeline
+                        </p>
+                        <div className="mt-3 space-y-3 text-sm text-foreground/72">
+                          {(focusedOrder.status_history ?? []).length > 0 ? (
+                            (focusedOrder.status_history ?? []).map((event) => (
+                              <div key={event.id} className="border-t border-border pt-3 first:border-t-0 first:pt-0">
+                                <p className="font-medium text-foreground">
+                                  {event.status.replaceAll("_", " ")}
+                                  {" · "}
+                                  {event.actor_role}
+                                </p>
+                                <p className="text-xs text-foreground/52">
+                                  {new Date(event.created_at).toLocaleString()}
+                                </p>
+                                {event.note ? <p className="mt-1">{event.note}</p> : null}
+                              </div>
+                            ))
+                          ) : (
+                            <p>No timeline events yet.</p>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   ) : null}
 
-                  {workspace.orders.map((order) => (
+                  {focusedBooking ? (
+                    <div
+                      className={`rounded-[1.5rem] border px-5 py-5 transition ${
+                        highlightedFocusedPanelKey === `booking:${focusedBooking.id}`
+                          ? "border-accent bg-accent/12 ring-2 ring-accent/35"
+                          : "border-accent bg-accent/8"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
+                            Focused Booking
+                          </p>
+                          <h4 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-foreground">
+                            {focusedBooking.status.replaceAll("_", " ")}
+                          </h4>
+                          <p className="mt-2 text-sm text-foreground/72">
+                            {focusedBooking.listing_title ?? focusedBooking.listing_id}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-foreground">
+                            {formatCurrency(focusedBooking.total_cents, focusedBooking.currency)}
+                          </p>
+                          <button
+                            className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={clearFocusedActivity}
+                            type="button"
+                          >
+                            Clear Focus
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-4 text-sm text-foreground/72 sm:grid-cols-2">
+                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                            Booking Snapshot
+                          </p>
+                          <div className="mt-3 space-y-2">
+                            <p>Booking ID: {focusedBooking.id}</p>
+                            <p>Type: {focusedBooking.listing_type ?? "Not specified"}</p>
+                            <p>Starts: {new Date(focusedBooking.scheduled_start).toLocaleString()}</p>
+                            <p>Ends: {new Date(focusedBooking.scheduled_end).toLocaleString()}</p>
+                            <p>Seller note: {focusedBooking.seller_response_note ?? "No seller note yet"}</p>
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                            Buyer Context
+                          </p>
+                          <div className="mt-3 space-y-2">
+                            <p>{focusedBooking.notes ?? "No buyer notes"}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-border bg-white/70 px-4 py-4">
+                        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                          Full Timeline
+                        </p>
+                        <div className="mt-3 space-y-3 text-sm text-foreground/72">
+                          {(focusedBooking.status_history ?? []).length > 0 ? (
+                            (focusedBooking.status_history ?? []).map((event) => (
+                              <div key={event.id} className="border-t border-border pt-3 first:border-t-0 first:pt-0">
+                                <p className="font-medium text-foreground">
+                                  {event.status.replaceAll("_", " ")}
+                                  {" · "}
+                                  {event.actor_role}
+                                </p>
+                                <p className="text-xs text-foreground/52">
+                                  {new Date(event.created_at).toLocaleString()}
+                                </p>
+                                {event.note ? <p className="mt-1">{event.note}</p> : null}
+                              </div>
+                            ))
+                          ) : (
+                            <p>No timeline events yet.</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {filteredOrders.length === 0 && filteredBookings.length === 0 ? (
+                    <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4 text-sm text-foreground/68">
+                      No activity matches the current filters. Change the queue controls or use the
+                      demo buyer to place an order or booking.
+                    </div>
+                  ) : null}
+
+                  {filteredOrders.map((order) => (
                     (() => {
                       const orderItems = order.items ?? [];
                       return (
                     <div
                       key={order.id}
-                      className="rounded-[1.3rem] border border-border bg-white px-4 py-4"
+                      ref={(node) => {
+                        activityRefs.current[`order:${order.id}`] = node;
+                      }}
+                      className={`rounded-[1.3rem] border bg-white px-4 py-4 transition ${
+                        focusedActivityKey === `order:${order.id}`
+                          ? "border-accent ring-2 ring-accent/20"
+                          : "border-border"
+                      }`}
+                      onClick={() => setActivityFocus(`order:${order.id}`)}
                     >
                       <div className="flex items-start justify-between gap-4">
                         <div>
@@ -1294,10 +2659,18 @@ export function SellerWorkspace() {
                     })()
                   ))}
 
-                  {workspace.bookings.map((booking) => (
+                  {filteredBookings.map((booking) => (
                     <div
                       key={booking.id}
-                      className="rounded-[1.3rem] border border-border bg-white px-4 py-4"
+                      ref={(node) => {
+                        activityRefs.current[`booking:${booking.id}`] = node;
+                      }}
+                      className={`rounded-[1.3rem] border bg-white px-4 py-4 transition ${
+                        focusedActivityKey === `booking:${booking.id}`
+                          ? "border-accent ring-2 ring-accent/20"
+                          : "border-border"
+                      }`}
+                      onClick={() => setActivityFocus(`booking:${booking.id}`)}
                     >
                       <div className="flex items-start justify-between gap-4">
                         <div>
@@ -1461,4 +2834,20 @@ function MiniStat({ label, value }: { label: string; value: string }) {
       <p className="mt-2 text-2xl font-semibold tracking-[-0.04em]">{value}</p>
     </div>
   );
+}
+
+function matchesDeliveryRecency(value: string, filter: "today" | "7d" | "all") {
+  if (filter === "all") {
+    return true;
+  }
+
+  const createdAt = new Date(value).getTime();
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  if (filter === "today") {
+    return now - createdAt <= dayMs;
+  }
+
+  return now - createdAt <= dayMs * 7;
 }

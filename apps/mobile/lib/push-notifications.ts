@@ -43,6 +43,18 @@ async function getNotificationsModule() {
   return Notifications;
 }
 
+function extractNotificationData(response: {
+  notification?: {
+    request?: {
+      content?: {
+        data?: Record<string, unknown>;
+      };
+    };
+  };
+}) {
+  return response.notification?.request?.content?.data ?? {};
+}
+
 export async function getExpoPushToken() {
   if (!canUseExpoPushNotifications()) {
     return null;
@@ -76,4 +88,31 @@ export async function getExpoPushToken() {
 
   const token = await Notifications.getExpoPushTokenAsync({ projectId });
   return token.data;
+}
+
+export async function getLastPushNotificationData() {
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
+    return null;
+  }
+
+  const response = await Notifications.getLastNotificationResponseAsync();
+  if (!response) {
+    return null;
+  }
+
+  return extractNotificationData(response);
+}
+
+export async function addPushNotificationResponseListener(
+  callback: (data: Record<string, unknown>) => void,
+) {
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
+    return null;
+  }
+
+  return Notifications.addNotificationResponseReceivedListener((response) => {
+    callback(extractNotificationData(response));
+  });
 }

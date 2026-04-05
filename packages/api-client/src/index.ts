@@ -38,6 +38,14 @@ export type OrderCreateInput = ApiSchemaMap["OrderCreate"];
 export type OrderStatusUpdateInput = ApiSchemaMap["OrderStatusUpdate"];
 export type SellerCreateInput = ApiSchemaMap["SellerCreate"];
 export type SellerUpdateInput = ApiSchemaMap["SellerUpdate"];
+export type OrderBulkStatusUpdateRequest = ApiSchemaMap["OrderBulkStatusUpdateRequest"];
+export type OrderBulkStatusUpdateResult = ApiSchemaMap["OrderBulkStatusUpdateResult"];
+export type BookingBulkStatusUpdateRequest = ApiSchemaMap["BookingBulkStatusUpdateRequest"];
+export type BookingBulkStatusUpdateResult = ApiSchemaMap["BookingBulkStatusUpdateResult"];
+export type NotificationDeliveryBulkRetryRequest =
+  ApiSchemaMap["NotificationDeliveryBulkRetryRequest"];
+export type NotificationDeliveryBulkRetryResult =
+  ApiSchemaMap["NotificationDeliveryBulkRetryResult"];
 export type ApiSchemas = ApiSchemaMap;
 export type BuyerDashboardData = {
   listings: Listing[];
@@ -168,6 +176,14 @@ export function createApiClient(baseUrl: string) {
     return get<Listing>(apiRoutes.listingById(listingId), options);
   }
 
+  function getOrderById(orderId: string, options?: RequestConfig) {
+    return get<Order>(apiRoutes.orderById(orderId), options);
+  }
+
+  function getBookingById(bookingId: string, options?: RequestConfig) {
+    return get<Booking>(apiRoutes.bookingById(bookingId), options);
+  }
+
   function updateOrderStatus(
     orderId: string,
     body: OrderStatusUpdateInput,
@@ -275,12 +291,41 @@ export function createApiClient(baseUrl: string) {
     });
   }
 
+  function bulkRetryNotificationDeliveries(
+    deliveryIds: string[],
+    accessToken: string,
+    executionMode: "best_effort" | "atomic" = "best_effort",
+  ) {
+    return post<NotificationDeliveryBulkRetryResult>("/notifications/bulk-retry", {
+      delivery_ids: deliveryIds,
+      execution_mode: executionMode,
+    } satisfies NotificationDeliveryBulkRetryRequest, {
+      accessToken,
+    });
+  }
+
+  function bulkUpdateOrderStatuses(
+    body: OrderBulkStatusUpdateRequest,
+    options: RequestConfig,
+  ) {
+    return post<OrderBulkStatusUpdateResult>("/orders/bulk-status", body, options);
+  }
+
+  function bulkUpdateBookingStatuses(
+    body: BookingBulkStatusUpdateRequest,
+    options: RequestConfig,
+  ) {
+    return post<BookingBulkStatusUpdateResult>("/bookings/bulk-status", body, options);
+  }
+
   return {
     get,
     post,
     patch,
     getSellerBySlug,
     getListingById,
+    getOrderById,
+    getBookingById,
     updateOrderStatus,
     updateBookingStatus,
     createProfile,
@@ -295,6 +340,9 @@ export function createApiClient(baseUrl: string) {
     loadSellerWorkspace,
     loadMyNotificationDeliveries,
     retryNotificationDelivery,
+    bulkRetryNotificationDeliveries,
+    bulkUpdateOrderStatuses,
+    bulkUpdateBookingStatuses,
   };
 }
 

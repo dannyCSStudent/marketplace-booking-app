@@ -4,7 +4,10 @@ from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
 from app.schemas.orders import (
+    OrderBulkActionFailure,
     OrderCreate,
+    OrderBulkStatusUpdateRequest,
+    OrderBulkStatusUpdateResult,
     OrderItemRead,
     OrderRead,
     OrderStatusEventRead,
@@ -86,6 +89,24 @@ def _get_order_by_id(*, order_id: str, access_token: str) -> OrderRead:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return _serialize_order(row)
+
+
+def _get_order_row_by_id(*, order_id: str, access_token: str) -> dict:
+    supabase = get_supabase_client()
+    try:
+        return supabase.select(
+            "orders",
+            query={
+                "select": ORDER_SELECT,
+                "id": f"eq.{order_id}",
+            },
+            access_token=access_token,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _insert_order_status_event(
@@ -299,21 +320,10 @@ def create_order(current_user: CurrentUser, payload: OrderCreate) -> OrderRead:
 
 def update_order_status(current_user: CurrentUser, order_id: str, payload: OrderStatusUpdate) -> OrderRead:
     supabase = get_supabase_client()
-
-    try:
-        current_order = supabase.select(
-            "orders",
-            query={
-                "select": ORDER_SELECT,
-                "id": f"eq.{order_id}",
-            },
-            access_token=current_user.access_token,
-            expect_single=True,
-        )
-    except SupabaseError as exc:
-        if exc.status_code == 406:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found") from exc
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    current_order = _get_order_row_by_id(
+        order_id=order_id,
+        access_token=current_user.access_token,
+    )
 
     actor = _resolve_order_actor(
         current_user=current_user,
@@ -369,6 +379,74 @@ def update_order_status(current_user: CurrentUser, order_id: str, payload: Order
     )
 
     return _get_order_by_id(order_id=order_id, access_token=current_user.access_token)
+
+
+def _validate_order_status_update(
+    current_user: CurrentUser,
+    order_id: str,
+    payload: OrderStatusUpdate,
+) -> None:
+    current_order = _get_order_row_by_id(
+        order_id=order_id,
+        access_token=current_user.access_token,
+    )
+    actor = _resolve_order_actor(
+        current_user=current_user,
+        access_token=current_user.access_token,
+        seller_id=current_order["seller_id"],
+    )
+    validate_transition(
+        current_status=current_order["status"],
+        next_status=payload.status,
+        actor=actor,
+        workflow_name="order",
+        transitions_by_actor=ORDER_TRANSITIONS_BY_ACTOR,
+    )
+
+
+def bulk_update_order_statuses(
+    current_user: CurrentUser,
+    payload: OrderBulkStatusUpdateRequest,
+) -> OrderBulkStatusUpdateResult:
+    succeeded_ids: list[str] = []
+    failed: list[OrderBulkActionFailure] = []
+    atomic_mode = payload.execution_mode == "atomic"
+
+    if atomic_mode:
+        preflight_failures: list[OrderBulkActionFailure] = []
+        for item in payload.updates:
+            try:
+                _validate_order_status_update(
+                    current_user,
+                    item.order_id,
+                    OrderStatusUpdate(
+                        status=item.status,
+                        seller_response_note=item.seller_response_note,
+                    ),
+                )
+            except HTTPException as exc:
+                preflight_failures.append(
+                    OrderBulkActionFailure(id=item.order_id, detail=str(exc.detail)),
+                )
+
+        if preflight_failures:
+            return OrderBulkStatusUpdateResult(succeeded_ids=[], failed=preflight_failures)
+
+    for item in payload.updates:
+        try:
+            update_order_status(
+                current_user,
+                item.order_id,
+                OrderStatusUpdate(
+                    status=item.status,
+                    seller_response_note=item.seller_response_note,
+                ),
+            )
+            succeeded_ids.append(item.order_id)
+        except HTTPException as exc:
+            failed.append(OrderBulkActionFailure(id=item.order_id, detail=str(exc.detail)))
+
+    return OrderBulkStatusUpdateResult(succeeded_ids=succeeded_ids, failed=failed)
 
 
 def _resolve_order_actor(*, current_user: CurrentUser, access_token: str | None, seller_id: str) -> str:

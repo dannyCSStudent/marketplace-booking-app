@@ -1,10 +1,11 @@
 COMPOSE ?= docker compose
 TARGET_EMAIL ?= newtondanny49@gmail.com
+TARGET_KIND ?= order
 
 .PHONY: up deps frontend backend down restart logs frontend-logs api-logs worker-logs web-logs mobile-logs \
 	ps build api-shell web-shell mobile-shell api-health \
 	notifications-process notifications-worker notifications-queue-test notifications-test-email \
-	notifications-test-push \
+	notifications-test-push notifications-test-transaction \
 	notifications-requeue notifications-prune maintenance-logs notifications-maintenance
 
 up:
@@ -80,6 +81,10 @@ notifications-test-email:
 
 notifications-test-push:
 	$(COMPOSE) exec api python queue_test_notification.py --email $(TARGET_EMAIL) --channel push
+	$(COMPOSE) exec api python process_notification_deliveries.py
+
+notifications-test-transaction:
+	$(COMPOSE) exec api python queue_transaction_notification_test.py --email $(TARGET_EMAIL) --kind $(TARGET_KIND)
 	$(COMPOSE) exec api python process_notification_deliveries.py
 
 notifications-requeue:

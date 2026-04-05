@@ -998,6 +998,65 @@
         }
       }
     },
+    "/orders/bulk-status": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "Bulk Patch Order Status",
+        "operationId": "bulk_patch_order_status_orders_bulk_status_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderBulkStatusUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderBulkStatusUpdateResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bookings/me": {
       "get": {
         "tags": [
@@ -1231,6 +1290,65 @@
         }
       }
     },
+    "/bookings/bulk-status": {
+      "post": {
+        "tags": [
+          "bookings"
+        ],
+        "summary": "Bulk Patch Booking Status",
+        "operationId": "bulk_patch_booking_status_bookings_bulk_status_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookingBulkStatusUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingBulkStatusUpdateResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications/me": {
       "get": {
         "tags": [
@@ -1341,10 +1459,161 @@
           }
         }
       }
+    },
+    "/notifications/bulk-retry": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Bulk Retry Notification Deliveries",
+        "operationId": "bulk_retry_notification_deliveries_notifications_bulk_retry_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationDeliveryBulkRetryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliveryBulkRetryResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "BookingBulkActionFailure": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "detail"
+        ],
+        "title": "BookingBulkActionFailure"
+      },
+      "BookingBulkStatusUpdateItem": {
+        "properties": {
+          "booking_id": {
+            "type": "string",
+            "title": "Booking Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "seller_response_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Response Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "booking_id",
+          "status"
+        ],
+        "title": "BookingBulkStatusUpdateItem"
+      },
+      "BookingBulkStatusUpdateRequest": {
+        "properties": {
+          "updates": {
+            "items": {
+              "$ref": "#/components/schemas/BookingBulkStatusUpdateItem"
+            },
+            "type": "array",
+            "title": "Updates"
+          },
+          "execution_mode": {
+            "type": "string",
+            "title": "Execution Mode",
+            "default": "best_effort"
+          }
+        },
+        "type": "object",
+        "required": [
+          "updates"
+        ],
+        "title": "BookingBulkStatusUpdateRequest"
+      },
+      "BookingBulkStatusUpdateResult": {
+        "properties": {
+          "succeeded_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Succeeded Ids"
+          },
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/BookingBulkActionFailure"
+            },
+            "type": "array",
+            "title": "Failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "succeeded_ids",
+          "failed"
+        ],
+        "title": "BookingBulkStatusUpdateResult"
+      },
       "BookingCreate": {
         "properties": {
           "seller_id": {
@@ -2207,6 +2476,69 @@
         "type": "object",
         "title": "ListingUpdate"
       },
+      "NotificationDeliveryBulkActionFailure": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "detail"
+        ],
+        "title": "NotificationDeliveryBulkActionFailure"
+      },
+      "NotificationDeliveryBulkRetryRequest": {
+        "properties": {
+          "delivery_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Delivery Ids"
+          },
+          "execution_mode": {
+            "type": "string",
+            "title": "Execution Mode",
+            "default": "best_effort"
+          }
+        },
+        "type": "object",
+        "required": [
+          "delivery_ids"
+        ],
+        "title": "NotificationDeliveryBulkRetryRequest"
+      },
+      "NotificationDeliveryBulkRetryResult": {
+        "properties": {
+          "succeeded_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Succeeded Ids"
+          },
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationDeliveryBulkActionFailure"
+            },
+            "type": "array",
+            "title": "Failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "succeeded_ids",
+          "failed"
+        ],
+        "title": "NotificationDeliveryBulkRetryResult"
+      },
       "NotificationDeliveryRead": {
         "properties": {
           "id": {
@@ -2289,6 +2621,98 @@
           "created_at"
         ],
         "title": "NotificationDeliveryRead"
+      },
+      "OrderBulkActionFailure": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "detail"
+        ],
+        "title": "OrderBulkActionFailure"
+      },
+      "OrderBulkStatusUpdateItem": {
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "title": "Order Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "seller_response_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Response Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order_id",
+          "status"
+        ],
+        "title": "OrderBulkStatusUpdateItem"
+      },
+      "OrderBulkStatusUpdateRequest": {
+        "properties": {
+          "updates": {
+            "items": {
+              "$ref": "#/components/schemas/OrderBulkStatusUpdateItem"
+            },
+            "type": "array",
+            "title": "Updates"
+          },
+          "execution_mode": {
+            "type": "string",
+            "title": "Execution Mode",
+            "default": "best_effort"
+          }
+        },
+        "type": "object",
+        "required": [
+          "updates"
+        ],
+        "title": "OrderBulkStatusUpdateRequest"
+      },
+      "OrderBulkStatusUpdateResult": {
+        "properties": {
+          "succeeded_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Succeeded Ids"
+          },
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/OrderBulkActionFailure"
+            },
+            "type": "array",
+            "title": "Failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "succeeded_ids",
+          "failed"
+        ],
+        "title": "OrderBulkStatusUpdateResult"
       },
       "OrderCreate": {
         "properties": {

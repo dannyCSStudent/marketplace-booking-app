@@ -1,12 +1,41 @@
-import { useLocalSearchParams } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { getBuyerDeliveryRetryMode, setBuyerDeliveryRetryMode } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
+
+function formatRetryMode(mode: 'best_effort' | 'atomic') {
+  return mode === 'atomic' ? 'Validate First' : 'Best Effort';
+}
+
+function toggleRetryMode(mode: 'best_effort' | 'atomic') {
+  return mode === 'atomic' ? 'best_effort' : 'atomic';
+}
 
 export default function NotificationDeliveryDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { notificationDeliveries } = useBuyerSession();
+  const router = useRouter();
+  const { notificationDeliveries, notifications, retryNotificationDelivery } = useBuyerSession();
+  const [retryingCurrent, setRetryingCurrent] = useState(false);
+  const [retryingRelated, setRetryingRelated] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionDetails, setActionDetails] = useState<string[]>([]);
+  const [deliveryRetryMode, setDeliveryRetryModeState] = useState<'best_effort' | 'atomic'>('best_effort');
   const delivery = notificationDeliveries.find((item) => item.id === id);
+
+  useEffect(() => {
+    void (async () => {
+      const storedRetryMode = await getBuyerDeliveryRetryMode();
+      setDeliveryRetryModeState(storedRetryMode === 'atomic' ? 'atomic' : 'best_effort');
+    })();
+  }, []);
+
+  function setDeliveryRetryMode(mode: 'best_effort' | 'atomic') {
+    setDeliveryRetryModeState(mode);
+    void setBuyerDeliveryRetryMode(mode);
+  }
 
   if (!delivery) {
     return (
@@ -22,6 +51,84 @@ export default function NotificationDeliveryDetailScreen() {
     );
   }
 
+  const relatedNotifications = notifications.filter(
+    (item) =>
+      item.transactionKind === delivery.transaction_kind &&
+      item.transactionId === delivery.transaction_id,
+  );
+  const relatedDeliveries = notificationDeliveries.filter(
+    (item) =>
+      item.id !== delivery.id &&
+      item.transaction_kind === delivery.transaction_kind &&
+      item.transaction_id === delivery.transaction_id,
+  );
+  const failedRelatedDeliveries = relatedDeliveries.filter(
+    (item) => item.delivery_status === 'failed',
+  );
+
+  function retryCurrentDelivery() {
+    if (delivery.delivery_status !== 'failed') {
+      return;
+    }
+
+    void (async () => {
+      try {
+        setActionError(null);
+        setActionMessage(null);
+        setActionDetails([]);
+        setRetryingCurrent(true);
+        await retryNotificationDelivery(delivery.id);
+        setActionMessage('Retried this delivery.');
+      } catch (error: unknown) {
+        setActionError(error instanceof Error ? error.message : 'Unable to retry this delivery.');
+      } finally {
+        setRetryingCurrent(false);
+      }
+    })();
+  }
+
+  function retryRelatedDeliveries() {
+    if (failedRelatedDeliveries.length === 0) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        setActionError(null);
+        setActionMessage(null);
+        setActionDetails([]);
+        setRetryingRelated(true);
+        const result = await retryNotificationDelivery(
+          failedRelatedDeliveries.map((item) => item.id),
+          deliveryRetryMode,
+        );
+
+        setActionMessage(
+          result.failed.length === 0
+            ? `Retried ${result.succeeded_ids.length} related ${
+                result.succeeded_ids.length === 1 ? 'delivery' : 'deliveries'
+              } using ${formatRetryMode(deliveryRetryMode)} mode.`
+            : result.succeeded_ids.length > 0
+              ? `Retried ${result.succeeded_ids.length} of ${failedRelatedDeliveries.length} related deliveries using ${formatRetryMode(deliveryRetryMode)} mode. ${result.failed.length} failed again.`
+              : `Unable to retry ${failedRelatedDeliveries.length} related deliveries using ${formatRetryMode(deliveryRetryMode)} mode.`,
+        );
+        setActionDetails(
+          result.failed.map(
+            (failure: { id: string; detail: string }) =>
+              `${failure.id.slice(0, 8)} · ${failure.detail}`,
+          ),
+        );
+      } catch (error: unknown) {
+        setActionError(
+          error instanceof Error ? error.message : 'Unable to retry related delivery attempts.',
+        );
+        setActionDetails([]);
+      } finally {
+        setRetryingRelated(false);
+      }
+    })();
+  }
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.hero}>
@@ -32,6 +139,46 @@ export default function NotificationDeliveryDetailScreen() {
           {delivery.attempts}
         </Text>
       </View>
+
+      {actionError ? <Text style={styles.feedbackError}>{actionError}</Text> : null}
+      {actionMessage ? <Text style={styles.feedbackSuccess}>{actionMessage}</Text> : null}
+      {actionDetails.length > 0 ? (
+        <View style={styles.feedbackList}>
+          {actionDetails.slice(0, 4).map((detail) => (
+            <Text key={detail} style={styles.feedbackDetailText}>
+              {detail}
+            </Text>
+          ))}
+          {actionDetails.length > 4 ? (
+            <Text style={styles.feedbackDetailText}>
+              {actionDetails.length - 4} more not shown.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {failedRelatedDeliveries.length > 0 ? (
+        <View style={styles.feedbackList}>
+          <Text style={styles.feedbackDetailText}>
+            Retry mode: {formatRetryMode(deliveryRetryMode)}
+          </Text>
+          <View style={styles.modeSwitchRow}>
+            <Pressable
+              style={[styles.inlineAction, deliveryRetryMode === 'best_effort' && styles.inlineActionActive]}
+              onPress={() => setDeliveryRetryMode('best_effort')}>
+              <Text style={[styles.inlineActionText, deliveryRetryMode === 'best_effort' && styles.inlineActionTextActive]}>
+                Best Effort
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.inlineAction, deliveryRetryMode === 'atomic' && styles.inlineActionActive]}
+              onPress={() => setDeliveryRetryMode('atomic')}>
+              <Text style={[styles.inlineActionText, deliveryRetryMode === 'atomic' && styles.inlineActionTextActive]}>
+                Validate First
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.panel}>
         <Text style={styles.sectionTitle}>Routing</Text>
@@ -61,6 +208,89 @@ export default function NotificationDeliveryDetailScreen() {
         <Text style={styles.copy}>
           {delivery.failure_reason ?? 'No failure recorded for this delivery.'}
         </Text>
+        {delivery.delivery_status === 'failed' ? (
+          <Pressable style={styles.inlineAction} onPress={retryCurrentDelivery}>
+            <Text style={styles.inlineActionText}>
+              {retryingCurrent ? 'Retrying...' : 'Retry This Delivery'}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>Transaction</Text>
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: '/transactions/[kind]/[id]',
+              params: {
+                kind: delivery.transaction_kind,
+                id: delivery.transaction_id,
+              },
+            })
+          }
+          style={styles.linkCard}>
+          <Text style={styles.linkTitle}>Open related receipt</Text>
+          <Text style={styles.linkMeta}>
+            {delivery.transaction_kind} · {delivery.transaction_id}
+          </Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>Related Updates</Text>
+        {relatedNotifications.length > 0 ? (
+          relatedNotifications.slice(0, 4).map((notification) => (
+            <View key={notification.id} style={styles.detailRow}>
+              <Text style={styles.detailLabel}>{notification.title}</Text>
+              <Text style={styles.detailValue}>{notification.message}</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.copy}>No related transaction updates are cached right now.</Text>
+        )}
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Other Delivery Attempts</Text>
+          {failedRelatedDeliveries.length > 0 ? (
+            <Pressable style={styles.inlineAction} onPress={retryRelatedDeliveries}>
+              <Text style={styles.inlineActionText}>
+                {retryingRelated ? 'Retrying...' : `Retry Failed · ${failedRelatedDeliveries.length}`}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <Pressable
+          style={styles.modeBadge}
+          onPress={() => setDeliveryRetryMode(toggleRetryMode(deliveryRetryMode))}>
+          <Text style={styles.modeBadgeLabel}>Retry Mode</Text>
+          <Text style={styles.modeBadgeValue}>{formatRetryMode(deliveryRetryMode)}</Text>
+          <Text style={styles.modeBadgeHint}>Tap to switch</Text>
+        </Pressable>
+        {relatedDeliveries.length > 0 ? (
+          relatedDeliveries.slice(0, 4).map((item) => (
+            <Pressable
+              key={item.id}
+              onPress={() =>
+                router.push({
+                  pathname: '/notifications/[id]',
+                  params: { id: item.id },
+                })
+              }
+              style={styles.linkCard}>
+              <Text style={styles.linkTitle}>
+                {item.channel} · {item.delivery_status}
+              </Text>
+              <Text style={styles.linkMeta}>
+                {new Date(item.created_at).toLocaleString()} · attempts {item.attempts}
+              </Text>
+            </Pressable>
+          ))
+        ) : (
+          <Text style={styles.copy}>No other delivery attempts are recorded for this transaction.</Text>
+        )}
       </View>
 
       <View style={styles.panel}>
@@ -145,6 +375,36 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
   },
+  sectionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  modeBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f4eadb',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 2,
+  },
+  modeBadgeLabel: {
+    color: '#6f6556',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  modeBadgeValue: {
+    color: '#1f2319',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modeBadgeHint: {
+    color: '#6f6556',
+    fontSize: 11,
+  },
   detailRow: {
     gap: 4,
   },
@@ -163,6 +423,73 @@ const styles = StyleSheet.create({
   payload: {
     color: '#1f2319',
     fontFamily: 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  linkCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e4d6bf',
+    backgroundColor: '#f7efe2',
+    padding: 14,
+    gap: 6,
+  },
+  linkTitle: {
+    color: '#1f2319',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  linkMeta: {
+    color: '#6f6556',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  inlineAction: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  inlineActionText: {
+    color: '#4d4338',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  inlineActionActive: {
+    backgroundColor: '#1f351f',
+    borderColor: '#1f351f',
+  },
+  inlineActionTextActive: {
+    color: '#fff8ee',
+  },
+  feedbackError: {
+    color: '#a13428',
+    fontSize: 13,
+    lineHeight: 19,
+    paddingHorizontal: 4,
+  },
+  feedbackSuccess: {
+    color: '#1f351f',
+    fontSize: 13,
+    lineHeight: 19,
+    paddingHorizontal: 4,
+  },
+  feedbackList: {
+    gap: 4,
+    paddingHorizontal: 4,
+  },
+  modeSwitchRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+  },
+  feedbackDetailText: {
+    color: '#5f5548',
     fontSize: 12,
     lineHeight: 18,
   },

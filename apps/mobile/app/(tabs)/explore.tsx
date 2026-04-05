@@ -1,9 +1,23 @@
-import { Link, useRouter } from 'expo-router';
-import { startTransition, useState } from 'react';
+import { useRouter } from 'expo-router';
+import { startTransition, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { formatCurrency, getApiBaseUrl } from '@/lib/api';
+import {
+  getBuyerDeliveryRetryMode,
+  getBuyerWorkspaceFilters,
+  setBuyerDeliveryRetryMode,
+  setBuyerWorkspaceFilters,
+} from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
+
+function formatRetryMode(mode: 'best_effort' | 'atomic') {
+  return mode === 'atomic' ? 'Validate First' : 'Best Effort';
+}
+
+function toggleRetryMode(mode: 'best_effort' | 'atomic') {
+  return mode === 'atomic' ? 'best_effort' : 'atomic';
+}
 
 export default function BuyerScreen() {
   const {
@@ -31,11 +45,146 @@ export default function BuyerScreen() {
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionDetails, setActionDetails] = useState<string[]>([]);
   const [retryingDeliveryId, setRetryingDeliveryId] = useState<string | null>(null);
+  const [retryingFailedDeliveries, setRetryingFailedDeliveries] = useState(false);
   const [syncingPush, setSyncingPush] = useState(false);
+  const [notificationFilter, setNotificationFilter] = useState<'all' | 'order' | 'booking'>('all');
+  const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'queued' | 'sent' | 'failed'>('all');
+  const [deliveryRecencyFilter, setDeliveryRecencyFilter] = useState<'today' | '7d' | 'all'>('7d');
+  const [activityFilter, setActivityFilter] = useState<'all' | 'order' | 'booking'>('all');
+  const [workspacePreset, setWorkspacePreset] = useState<'default' | 'needs-action' | 'recent-failures'>('default');
+  const [deliveryRetryMode, setDeliveryRetryMode] = useState<'best_effort' | 'atomic'>('best_effort');
+  const [filtersRestored, setFiltersRestored] = useState(false);
+
+  const filteredNotifications = useMemo(
+    () =>
+      notifications.filter((notification) => {
+        if (notificationFilter === 'all') {
+          return true;
+        }
+
+        return notification.transactionKind === notificationFilter;
+      }),
+    [notificationFilter, notifications],
+  );
+
+  const filteredDeliveries = useMemo(
+    () =>
+      notificationDeliveries.filter((delivery) => {
+        if (!matchesRecency(delivery.created_at, deliveryRecencyFilter)) {
+          return false;
+        }
+
+        if (deliveryFilter === 'all') {
+          return true;
+        }
+
+        return delivery.delivery_status === deliveryFilter;
+      }),
+    [deliveryFilter, deliveryRecencyFilter, notificationDeliveries],
+  );
+
+  const showOrders = activityFilter === 'all' || activityFilter === 'order';
+  const showBookings = activityFilter === 'all' || activityFilter === 'booking';
+  const queuedDeliveryCount = useMemo(
+    () => notificationDeliveries.filter((delivery) => delivery.delivery_status === 'queued').length,
+    [notificationDeliveries],
+  );
+  const failedDeliveryCount = useMemo(
+    () => notificationDeliveries.filter((delivery) => delivery.delivery_status === 'failed').length,
+    [notificationDeliveries],
+  );
+
+  useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerWorkspaceFilters();
+      if (!storedValue) {
+        setFiltersRestored(true);
+        return;
+      }
+
+      try {
+        const storedFilters = JSON.parse(storedValue) as {
+          notificationFilter?: 'all' | 'order' | 'booking';
+          deliveryFilter?: 'all' | 'queued' | 'sent' | 'failed';
+          deliveryRecencyFilter?: 'today' | '7d' | 'all';
+          activityFilter?: 'all' | 'order' | 'booking';
+          workspacePreset?: 'default' | 'needs-action' | 'recent-failures';
+        };
+        const storedRetryMode = await getBuyerDeliveryRetryMode();
+
+        setNotificationFilter(storedFilters.notificationFilter ?? 'all');
+        setDeliveryFilter(storedFilters.deliveryFilter ?? 'all');
+        setDeliveryRecencyFilter(storedFilters.deliveryRecencyFilter ?? '7d');
+        setActivityFilter(storedFilters.activityFilter ?? 'all');
+        setWorkspacePreset(storedFilters.workspacePreset ?? 'default');
+        setDeliveryRetryMode(
+          storedRetryMode === 'atomic' ? 'atomic' : 'best_effort',
+        );
+      } catch {
+        // Ignore corrupted local filter state and fall back to defaults.
+      } finally {
+        setFiltersRestored(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!filtersRestored) {
+      return;
+    }
+
+    void setBuyerWorkspaceFilters(
+      JSON.stringify({
+        notificationFilter,
+        deliveryFilter,
+        deliveryRecencyFilter,
+        activityFilter,
+        workspacePreset,
+      }),
+    );
+    void setBuyerDeliveryRetryMode(deliveryRetryMode);
+  }, [
+    activityFilter,
+    deliveryRetryMode,
+    deliveryFilter,
+    deliveryRecencyFilter,
+    filtersRestored,
+    notificationFilter,
+    workspacePreset,
+  ]);
+
+  function applyBuyerPreset(preset: 'default' | 'needs-action' | 'recent-failures') {
+    setWorkspacePreset(preset);
+
+    if (preset === 'default') {
+      setNotificationFilter('all');
+      setDeliveryFilter('all');
+      setDeliveryRecencyFilter('7d');
+      setActivityFilter('all');
+      return;
+    }
+
+    if (preset === 'needs-action') {
+      setNotificationFilter('all');
+      setDeliveryFilter('queued');
+      setDeliveryRecencyFilter('today');
+      setActivityFilter('all');
+      return;
+    }
+
+    setNotificationFilter('all');
+    setDeliveryFilter('failed');
+    setDeliveryRecencyFilter('7d');
+    setActivityFilter('all');
+  }
 
   function handleAuth() {
     setLocalError(null);
+    setActionMessage(null);
+    setActionDetails([]);
 
     startTransition(async () => {
       try {
@@ -52,6 +201,49 @@ export default function BuyerScreen() {
         }
       } catch (err) {
         setLocalError(err instanceof Error ? err.message : 'Unable to continue');
+      }
+    });
+  }
+
+  function retryFailedDeliveriesInView() {
+    const failedDeliveries = filteredDeliveries.filter((delivery) => delivery.delivery_status === 'failed');
+    if (failedDeliveries.length === 0) {
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        setLocalError(null);
+        setActionMessage(null);
+        setActionDetails([]);
+        setRetryingFailedDeliveries(true);
+        const result = await retryNotificationDelivery(
+          failedDeliveries.map((delivery) => delivery.id),
+          deliveryRetryMode,
+        );
+
+        setActionMessage(
+          result.failed.length === 0
+            ? `Retried ${result.succeeded_ids.length} failed ${
+                result.succeeded_ids.length === 1 ? 'delivery' : 'deliveries'
+              } in view using ${formatRetryMode(deliveryRetryMode)} mode.`
+            : result.succeeded_ids.length > 0
+              ? `Retried ${result.succeeded_ids.length} of ${failedDeliveries.length} failed deliveries in view using ${formatRetryMode(deliveryRetryMode)} mode. ${result.failed.length} failed again.`
+              : `Unable to retry ${failedDeliveries.length} failed deliveries in view using ${formatRetryMode(deliveryRetryMode)} mode.`,
+        );
+        setActionDetails(
+          result.failed.map(
+            (failure: { id: string; detail: string }) =>
+              `${failure.id.slice(0, 8)} · ${failure.detail}`,
+          ),
+        );
+      } catch (err) {
+        setLocalError(
+          err instanceof Error ? err.message : 'Unable to retry filtered failed deliveries',
+        );
+        setActionDetails([]);
+      } finally {
+        setRetryingFailedDeliveries(false);
       }
     });
   }
@@ -134,7 +326,45 @@ export default function BuyerScreen() {
         {localError || error ? (
           <Text style={styles.errorText}>{localError ?? error}</Text>
         ) : null}
+        {actionMessage ? <Text style={styles.successText}>{actionMessage}</Text> : null}
+        {actionDetails.length > 0 ? (
+          <View style={styles.feedbackList}>
+            {actionDetails.slice(0, 4).map((detail) => (
+              <Text key={detail} style={styles.feedbackDetailText}>
+                {detail}
+              </Text>
+            ))}
+            {actionDetails.length > 4 ? (
+              <Text style={styles.feedbackDetailText}>
+                {actionDetails.length - 4} more not shown.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         <Text style={styles.helperText}>API base URL: {getApiBaseUrl()}</Text>
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>Workspace Views</Text>
+        <View style={styles.filterRow}>
+          <FilterChip
+            label="Default"
+            active={workspacePreset === 'default'}
+            onPress={() => applyBuyerPreset('default')}
+          />
+          <FilterChip
+            label={`Needs Action · ${queuedDeliveryCount}`}
+            tone={queuedDeliveryCount > 0 ? 'queued' : 'default'}
+            active={workspacePreset === 'needs-action'}
+            onPress={() => applyBuyerPreset('needs-action')}
+          />
+          <FilterChip
+            label={`Recent Failures · ${failedDeliveryCount}`}
+            tone={failedDeliveryCount > 0 ? 'failed' : 'default'}
+            active={workspacePreset === 'recent-failures'}
+            onPress={() => applyBuyerPreset('recent-failures')}
+          />
+        </View>
       </View>
 
       <View style={styles.panel}>
@@ -203,6 +433,8 @@ export default function BuyerScreen() {
                 startTransition(async () => {
                   try {
                     setLocalError(null);
+                    setActionMessage(null);
+                    setActionDetails([]);
                     setSyncingPush(true);
                     const synced = await syncPushToken();
                     if (!synced && !profile.expo_push_token) {
@@ -223,35 +455,52 @@ export default function BuyerScreen() {
         </View>
       ) : null}
 
-      <View style={styles.panel}>
+      <View style={[styles.panel, unreadNotificationCount > 0 && styles.panelUnread]}>
         <View style={styles.notificationsHeader}>
-          <Text style={styles.panelTitle}>Notifications</Text>
+          <Text style={styles.panelTitle}>Notifications · {filteredNotifications.length}</Text>
           {profile ? (
             <Pressable style={styles.markSeenButton} onPress={() => void markNotificationsSeen()}>
               <Text style={styles.markSeenButtonText}>Mark seen</Text>
             </Pressable>
           ) : null}
         </View>
-        {notifications.length > 0 ? (
-          notifications.slice(0, 6).map((notification) => (
-            <Link
+        <View style={styles.filterRow}>
+          <FilterChip
+            label="All"
+            active={notificationFilter === 'all'}
+            onPress={() => setNotificationFilter('all')}
+          />
+          <FilterChip
+            label="Orders"
+            active={notificationFilter === 'order'}
+            onPress={() => setNotificationFilter('order')}
+          />
+          <FilterChip
+            label="Bookings"
+            active={notificationFilter === 'booking'}
+            onPress={() => setNotificationFilter('booking')}
+          />
+        </View>
+        {filteredNotifications.length > 0 ? (
+          filteredNotifications.slice(0, 6).map((notification) => (
+            <Pressable
               key={notification.id}
-              href={{
-                pathname: '/transactions/[kind]/[id]',
-                params: {
-                  kind: notification.transactionKind,
-                  id: notification.transactionId,
-                },
-              }}
-              asChild>
-              <Pressable style={styles.notificationCard}>
-                <Text style={styles.activityLabel}>{notification.title}</Text>
-                <Text style={styles.activityMeta}>
-                  {new Date(notification.createdAt).toLocaleString()}
-                </Text>
-                <Text style={styles.activityNote}>{notification.message}</Text>
-              </Pressable>
-            </Link>
+              onPress={() =>
+                router.push({
+                  pathname: '/transactions/[kind]/[id]',
+                  params: {
+                    kind: notification.transactionKind,
+                    id: notification.transactionId,
+                  },
+                })
+              }
+              style={[styles.notificationCard, unreadNotificationCount > 0 && styles.notificationCardUnread]}>
+              <Text style={styles.activityLabel}>{notification.title}</Text>
+              <Text style={styles.activityMeta}>
+                {new Date(notification.createdAt).toLocaleString()}
+              </Text>
+              <Text style={styles.activityNote}>{notification.message}</Text>
+            </Pressable>
           ))
         ) : (
           <Text style={styles.emptyText}>Seller updates will show up here.</Text>
@@ -259,10 +508,90 @@ export default function BuyerScreen() {
       </View>
 
       <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Delivery History</Text>
-        {notificationDeliveries.length > 0 ? (
-          notificationDeliveries.slice(0, 8).map((delivery) => (
-            <View key={delivery.id} style={styles.deliveryCard}>
+        <View style={styles.notificationsHeader}>
+          <Text style={styles.panelTitle}>Delivery History · {filteredDeliveries.length}</Text>
+          {filteredDeliveries.some((delivery) => delivery.delivery_status === 'failed') ? (
+            <Pressable style={styles.markSeenButton} onPress={retryFailedDeliveriesInView}>
+              <Text style={styles.markSeenButtonText}>
+                {retryingFailedDeliveries ? 'Retrying...' : 'Retry Failed'}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <Pressable
+          style={styles.modeBadge}
+          onPress={() => setDeliveryRetryMode(toggleRetryMode(deliveryRetryMode))}>
+          <Text style={styles.modeBadgeLabel}>Retry Mode</Text>
+          <Text style={styles.modeBadgeValue}>{formatRetryMode(deliveryRetryMode)}</Text>
+          <Text style={styles.modeBadgeHint}>Tap to switch</Text>
+        </Pressable>
+        <View style={styles.modeRow}>
+          <Text style={styles.modeCaption}>Retry mode</Text>
+          <View style={styles.filterRow}>
+            <FilterChip
+              label={`Best Effort${deliveryRetryMode === 'best_effort' ? ' · Active' : ''}`}
+              active={deliveryRetryMode === 'best_effort'}
+              onPress={() => setDeliveryRetryMode('best_effort')}
+            />
+            <FilterChip
+              label={`Validate First${deliveryRetryMode === 'atomic' ? ' · Active' : ''}`}
+              active={deliveryRetryMode === 'atomic'}
+              onPress={() => setDeliveryRetryMode('atomic')}
+            />
+          </View>
+          <Text style={styles.helperText}>
+            Current mode: {formatRetryMode(deliveryRetryMode)}
+          </Text>
+        </View>
+        <View style={styles.filterRow}>
+          <FilterChip
+            label="All"
+            active={deliveryFilter === 'all'}
+            onPress={() => setDeliveryFilter('all')}
+          />
+          <FilterChip
+            label="Queued"
+            active={deliveryFilter === 'queued'}
+            onPress={() => setDeliveryFilter('queued')}
+          />
+          <FilterChip
+            label="Sent"
+            active={deliveryFilter === 'sent'}
+            onPress={() => setDeliveryFilter('sent')}
+          />
+          <FilterChip
+            label="Failed"
+            active={deliveryFilter === 'failed'}
+            onPress={() => setDeliveryFilter('failed')}
+          />
+          <FilterChip
+            label="Today"
+            active={deliveryRecencyFilter === 'today'}
+            onPress={() => setDeliveryRecencyFilter('today')}
+          />
+          <FilterChip
+            label="7 Days"
+            active={deliveryRecencyFilter === '7d'}
+            onPress={() => setDeliveryRecencyFilter('7d')}
+          />
+          <FilterChip
+            label="All Time"
+            active={deliveryRecencyFilter === 'all'}
+            onPress={() => setDeliveryRecencyFilter('all')}
+          />
+        </View>
+        {filteredDeliveries.length > 0 ? (
+          filteredDeliveries.slice(0, 8).map((delivery) => (
+            <View
+              key={delivery.id}
+              style={[
+                styles.deliveryCard,
+                delivery.delivery_status === 'queued'
+                  ? styles.deliveryCardQueued
+                  : delivery.delivery_status === 'failed'
+                    ? styles.deliveryCardFailed
+                    : null,
+              ]}>
               <Pressable
                 onPress={() =>
                   router.push({
@@ -307,8 +636,11 @@ export default function BuyerScreen() {
                     startTransition(async () => {
                       try {
                         setLocalError(null);
+                        setActionMessage(null);
+                        setActionDetails([]);
                         setRetryingDeliveryId(delivery.id);
                         await retryNotificationDelivery(delivery.id);
+                        setActionMessage('Retried this delivery.');
                       } catch (err) {
                         setLocalError(
                           err instanceof Error ? err.message : 'Unable to retry notification delivery',
@@ -334,55 +666,115 @@ export default function BuyerScreen() {
       </View>
 
       <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Recent Orders</Text>
-        {orders.length > 0 ? (
+        <View style={styles.notificationsHeader}>
+          <Text style={styles.panelTitle}>
+            Recent Activity · {(showOrders ? orders.length : 0) + (showBookings ? bookings.length : 0)}
+          </Text>
+          {activityFilter !== 'all' ? (
+            <Pressable style={styles.markSeenButton} onPress={() => setActivityFilter('all')}>
+              <Text style={styles.markSeenButtonText}>Clear Filter</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <View style={styles.filterRow}>
+          <FilterChip
+            label="All"
+            active={activityFilter === 'all'}
+            onPress={() => setActivityFilter('all')}
+          />
+          <FilterChip
+            label="Orders"
+            active={activityFilter === 'order'}
+            onPress={() => setActivityFilter('order')}
+          />
+          <FilterChip
+            label="Bookings"
+            active={activityFilter === 'booking'}
+            onPress={() => setActivityFilter('booking')}
+          />
+        </View>
+        {showOrders && orders.length > 0 ? (
           orders.map((order) => (
-            <Link
+            <Pressable
               key={order.id}
-              href={{ pathname: '/transactions/[kind]/[id]', params: { kind: 'order', id: order.id } }}
-              asChild>
-              <Pressable style={styles.activityCard}>
-                <Text style={styles.activityLabel}>Order</Text>
-                <Text style={styles.activityValue}>{order.status}</Text>
-                <Text style={styles.activityMeta}>
-                  {formatCurrency(order.total_cents, order.currency)} via {order.fulfillment}
-                </Text>
-                {order.seller_response_note ? (
-                  <Text style={styles.activityNote}>{order.seller_response_note}</Text>
-                ) : null}
-              </Pressable>
-            </Link>
+              onPress={() =>
+                router.push({
+                  pathname: '/transactions/[kind]/[id]',
+                  params: { kind: 'order', id: order.id },
+                })
+              }
+              style={styles.activityCard}>
+              <Text style={styles.activityLabel}>Order</Text>
+              <Text style={styles.activityValue}>{order.status}</Text>
+              <Text style={styles.activityMeta}>
+                {formatCurrency(order.total_cents, order.currency)} via {order.fulfillment}
+              </Text>
+              {order.seller_response_note ? (
+                <Text style={styles.activityNote}>{order.seller_response_note}</Text>
+              ) : null}
+            </Pressable>
           ))
-        ) : (
-          <Text style={styles.emptyText}>No orders yet. Open a listing and place one.</Text>
-        )}
-      </View>
-
-      <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Recent Bookings</Text>
-        {bookings.length > 0 ? (
+        ) : null}
+        {showBookings && bookings.length > 0 ? (
           bookings.map((booking) => (
-            <Link
+            <Pressable
               key={booking.id}
-              href={{ pathname: '/transactions/[kind]/[id]', params: { kind: 'booking', id: booking.id } }}
-              asChild>
-              <Pressable style={styles.activityCard}>
-                <Text style={styles.activityLabel}>Booking</Text>
-                <Text style={styles.activityValue}>{booking.status}</Text>
-                <Text style={styles.activityMeta}>
-                  {new Date(booking.scheduled_start).toLocaleString()}
-                </Text>
-                {booking.seller_response_note ? (
-                  <Text style={styles.activityNote}>{booking.seller_response_note}</Text>
-                ) : null}
-              </Pressable>
-            </Link>
+              onPress={() =>
+                router.push({
+                  pathname: '/transactions/[kind]/[id]',
+                  params: { kind: 'booking', id: booking.id },
+                })
+              }
+              style={styles.activityCard}>
+              <Text style={styles.activityLabel}>Booking</Text>
+              <Text style={styles.activityValue}>{booking.status}</Text>
+              <Text style={styles.activityMeta}>
+                {new Date(booking.scheduled_start).toLocaleString()}
+              </Text>
+              {booking.seller_response_note ? (
+                <Text style={styles.activityNote}>{booking.seller_response_note}</Text>
+              ) : null}
+            </Pressable>
           ))
-        ) : (
-          <Text style={styles.emptyText}>No bookings yet. Use a service or hybrid listing.</Text>
-        )}
+        ) : null}
+        {((showOrders && orders.length === 0) || (showBookings && bookings.length === 0)) &&
+        (!showOrders || orders.length === 0) &&
+        (!showBookings || bookings.length === 0) ? (
+          <Text style={styles.emptyText}>
+            {activityFilter === 'order'
+              ? 'No orders yet. Open a listing and place one.'
+              : activityFilter === 'booking'
+                ? 'No bookings yet. Use a service or hybrid listing.'
+                : 'No buyer activity yet.'}
+          </Text>
+        ) : null}
       </View>
     </ScrollView>
+  );
+}
+
+function FilterChip({
+  label,
+  active,
+  tone = 'default',
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  tone?: 'default' | 'queued' | 'failed';
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={[
+        styles.filterChip,
+        tone === 'queued' && styles.filterChipQueued,
+        tone === 'failed' && styles.filterChipFailed,
+        active && styles.filterChipActive,
+      ]}
+      onPress={onPress}>
+      <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -436,6 +828,22 @@ function getDeliveryRecipient(payload: Record<string, unknown>) {
   return 'Recipient resolved from your account profile';
 }
 
+function matchesRecency(value: string, filter: 'today' | '7d' | 'all') {
+  if (filter === 'all') {
+    return true;
+  }
+
+  const createdAt = new Date(value).getTime();
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  if (filter === 'today') {
+    return now - createdAt <= dayMs;
+  }
+
+  return now - createdAt <= dayMs * 7;
+}
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -481,6 +889,11 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 18,
     gap: 12,
+  },
+  panelUnread: {
+    borderWidth: 1,
+    borderColor: '#d88c43',
+    backgroundColor: '#fff3e4',
   },
   preferenceRow: {
     alignItems: 'center',
@@ -547,6 +960,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  filterChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  filterChipQueued: {
+    borderColor: '#ccb68c',
+    backgroundColor: '#fbf4e4',
+  },
+  filterChipFailed: {
+    borderColor: '#d26d5f',
+    backgroundColor: '#fff0ed',
+  },
+  filterChipActive: {
+    backgroundColor: '#1f351f',
+    borderColor: '#1f351f',
+  },
+  filterChipText: {
+    color: '#4d4338',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  filterChipTextActive: {
+    color: '#fff8ee',
+  },
   notificationCard: {
     borderRadius: 18,
     borderWidth: 1,
@@ -555,6 +1002,10 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 6,
   },
+  notificationCardUnread: {
+    borderColor: '#d88c43',
+    backgroundColor: '#fff1dd',
+  },
   deliveryCard: {
     borderRadius: 18,
     borderWidth: 1,
@@ -562,6 +1013,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f7efe2',
     padding: 14,
     gap: 8,
+  },
+  deliveryCardQueued: {
+    borderColor: '#ccb68c',
+    backgroundColor: '#fbf4e4',
+  },
+  deliveryCardFailed: {
+    borderColor: '#d26d5f',
+    backgroundColor: '#fff0ed',
   },
   deliveryBody: {
     gap: 8,
@@ -652,6 +1111,30 @@ const styles = StyleSheet.create({
   modeButtonTextActive: {
     color: '#fff8ee',
   },
+  modeBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f4eadb',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 2,
+  },
+  modeBadgeLabel: {
+    color: '#6f6556',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  modeBadgeValue: {
+    color: '#1f2319',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modeBadgeHint: {
+    color: '#6f6556',
+    fontSize: 11,
+  },
   panelTitle: {
     color: '#1f2319',
     fontSize: 20,
@@ -699,6 +1182,19 @@ const styles = StyleSheet.create({
     color: '#a13428',
     fontSize: 13,
     lineHeight: 19,
+  },
+  successText: {
+    color: '#1f351f',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  feedbackList: {
+    gap: 4,
+  },
+  feedbackDetailText: {
+    color: '#5f5548',
+    fontSize: 12,
+    lineHeight: 18,
   },
   snapshotGrid: {
     flexDirection: 'row',

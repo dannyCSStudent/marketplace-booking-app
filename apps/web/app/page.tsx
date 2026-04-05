@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { SellerWorkspace } from "@/app/components/seller-workspace";
 import { formatCurrency, getMarketplaceData } from "@/app/lib/api";
 
@@ -221,7 +222,9 @@ export default async function Home() {
           </div>
         </section>
 
-        <SellerWorkspace />
+        <Suspense fallback={null}>
+          <SellerWorkspace />
+        </Suspense>
       </div>
     </main>
   );

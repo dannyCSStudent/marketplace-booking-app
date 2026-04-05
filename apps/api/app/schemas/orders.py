@@ -25,6 +25,17 @@ class OrderStatusUpdate(BaseModel):
     status: str
     seller_response_note: str | None = None
 
+
+class OrderBulkStatusUpdateItem(BaseModel):
+    order_id: str
+    status: str
+    seller_response_note: str | None = None
+
+
+class OrderBulkStatusUpdateRequest(BaseModel):
+    updates: list[OrderBulkStatusUpdateItem]
+    execution_mode: str = "best_effort"
+
 class OrderStatusEventRead(BaseModel):
     id: str
     status: str
@@ -45,3 +56,13 @@ class OrderRead(BaseModel):
     seller_response_note: str | None = None
     items: list[OrderItemRead] = []
     status_history: list[OrderStatusEventRead] = []
+
+
+class OrderBulkActionFailure(BaseModel):
+    id: str
+    detail: str
+
+
+class OrderBulkStatusUpdateResult(BaseModel):
+    succeeded_ids: list[str]
+    failed: list[OrderBulkActionFailure]

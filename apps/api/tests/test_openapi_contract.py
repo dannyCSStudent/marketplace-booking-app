@@ -20,10 +20,15 @@ class OpenAPIContractTests(unittest.TestCase):
             "/orders/me",
             "/orders/seller",
             "/orders/{order_id}",
+            "/orders/bulk-status",
             "/bookings",
             "/bookings/me",
             "/bookings/seller",
             "/bookings/{booking_id}",
+            "/bookings/bulk-status",
+            "/notifications/me",
+            "/notifications/{delivery_id}/retry",
+            "/notifications/bulk-retry",
         }
 
         self.assertTrue(expected_paths.issubset(paths.keys()))
@@ -38,7 +43,11 @@ class OpenAPIContractTests(unittest.TestCase):
             "ListingRead",
             "ListingListResponse",
             "OrderRead",
+            "OrderBulkStatusUpdateResult",
             "BookingRead",
+            "BookingBulkStatusUpdateResult",
+            "NotificationDeliveryRead",
+            "NotificationDeliveryBulkRetryResult",
         ]:
             self.assertIn(schema_name, components)
 
@@ -59,7 +68,10 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("get", paths["/listings"])
         self.assertIn("post", paths["/listings"])
         self.assertIn("patch", paths["/orders/{order_id}"])
+        self.assertIn("post", paths["/orders/bulk-status"])
         self.assertIn("patch", paths["/bookings/{booking_id}"])
+        self.assertIn("post", paths["/bookings/bulk-status"])
+        self.assertIn("post", paths["/notifications/bulk-retry"])
 
     def test_listing_schema_exposes_real_contract_fields(self):
         schema = app.openapi()
