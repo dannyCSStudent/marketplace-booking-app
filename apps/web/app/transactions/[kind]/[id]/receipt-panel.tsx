@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -9,6 +10,7 @@ import {
   createApiClient,
   formatCurrency,
   type Booking,
+  type Listing,
   type Order,
   type ReviewRead,
 } from "@/app/lib/api";
@@ -29,6 +31,205 @@ function titleCaseLabel(value: string) {
     .join(" ");
 }
 
+function getRecommendedBrowsePreset(input: {
+  listings: {
+    id: string;
+    type: string;
+    is_local_only?: boolean | null;
+  }[];
+  orders: {
+    items?: { listing_id: string }[] | null;
+  }[];
+  bookings: {
+    listing_id: string;
+    listing_type?: string | null;
+  }[];
+}) {
+  const productScore = input.orders.reduce((count, order) => {
+    const matchingListings = (order.items ?? [])
+      .map((item) => input.listings.find((listing) => listing.id === item.listing_id))
+      .filter((listing): listing is (typeof input.listings)[number] => Boolean(listing));
+
+    return (
+      count +
+      matchingListings.filter(
+        (listing) => listing.type === "product" || listing.type === "hybrid",
+      ).length
+    );
+  }, 0);
+
+  const serviceScore = input.bookings.filter(
+    (booking) => booking.listing_type === "service" || booking.listing_type === "hybrid",
+  ).length;
+
+  const localScore =
+    input.orders.reduce((count, order) => {
+      const hasLocalMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (itemListing) => itemListing.id === item.listing_id && itemListing.is_local_only,
+        ),
+      );
+      return count + (hasLocalMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) =>
+      input.listings.some(
+        (itemListing) => itemListing.id === booking.listing_id && itemListing.is_local_only,
+      ),
+    ).length;
+
+  const hybridScore =
+    input.orders.reduce((count, order) => {
+      const hasHybridMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (itemListing) => itemListing.id === item.listing_id && itemListing.type === "hybrid",
+        ),
+      );
+      return count + (hasHybridMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) => booking.listing_type === "hybrid").length;
+
+  if (localScore >= Math.max(productScore, serviceScore, hybridScore) && localScore > 0) {
+    return { label: "Local-First" as const };
+  }
+
+  if (serviceScore >= Math.max(productScore, hybridScore) && serviceScore > 0) {
+    return { label: "Services" as const };
+  }
+
+  if (hybridScore >= Math.max(productScore, serviceScore) && hybridScore > 0) {
+    return { label: "Hybrid" as const };
+  }
+
+  if (productScore > 0) {
+    return { label: "Products" as const };
+  }
+
+  return null;
+}
+
+function getRecommendationScore(
+  listing: {
+    type: string;
+    is_local_only?: boolean | null;
+  },
+  preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
+) {
+  if (!preset) {
+    return 0;
+  }
+
+  if (preset.label === "Local-First" && listing.is_local_only) {
+    return 3;
+  }
+
+  if (
+    preset.label === "Services" &&
+    (listing.type === "service" || listing.type === "hybrid")
+  ) {
+    return listing.type === "service" ? 3 : 2;
+  }
+
+  if (
+    preset.label === "Products" &&
+    (listing.type === "product" || listing.type === "hybrid")
+  ) {
+    return listing.type === "product" ? 3 : 2;
+  }
+
+  if (preset.label === "Hybrid" && listing.type === "hybrid") {
+    return 3;
+  }
+
+  return 0;
+}
+
+function getRecommendationMatch(
+  listing: {
+    type: string;
+    is_local_only?: boolean | null;
+  },
+  preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
+) {
+  const score = getRecommendationScore(listing, preset);
+  if (score === 0 || !preset) {
+    return null;
+  }
+
+  if (preset.label === "Local-First") {
+    return { score, label: "Local match" };
+  }
+
+  if (preset.label === "Services") {
+    return { score, label: "Service fit" };
+  }
+
+  if (preset.label === "Products") {
+    return { score, label: "Product fit" };
+  }
+
+  return { score, label: "Hybrid fit" };
+}
+
+function getSuggestionSecondarySignal(listing: {
+  duration_minutes?: number | null;
+  price_cents?: number | null;
+  currency?: string | null;
+}) {
+  if (listing.duration_minutes) {
+    return `${listing.duration_minutes} min`;
+  }
+
+  if (listing.price_cents != null && listing.currency) {
+    return formatCurrency(listing.price_cents, listing.currency);
+  }
+
+  return "Open";
+}
+
+function getSuggestionActionMode(listing: {
+  requires_booking?: boolean | null;
+  type: string;
+}) {
+  return listing.requires_booking || listing.type === "service" ? "Booking ready" : "Order ready";
+}
+
+function getSuggestionSellerLabel(
+  suggestion: { seller_id: string },
+  currentSellerId: string | null,
+) {
+  if (!currentSellerId) {
+    return "Marketplace seller";
+  }
+
+  return suggestion.seller_id === currentSellerId ? "Same seller" : "Another seller";
+}
+
+function getSuggestionSellerPriority(
+  suggestion: { seller_id: string },
+  currentSellerId: string | null,
+) {
+  if (!currentSellerId) {
+    return 0;
+  }
+
+  return suggestion.seller_id === currentSellerId ? 1 : 0;
+}
+
+function buildListingHref(
+  listingId: string,
+  safeFromHref: string | null,
+  followOn: "same-seller" | "cross-seller",
+) {
+  const params = new URLSearchParams();
+  if (safeFromHref) {
+    params.set("from", safeFromHref);
+  }
+  params.set("followOn", followOn);
+  const query = params.toString();
+
+  return `/listings/${listingId}${query ? `?${query}` : ""}`;
+}
+
 export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
   const searchParams = useSearchParams();
   const [order, setOrder] = useState<Order | null>(null);
@@ -40,6 +241,9 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewFeedback, setReviewFeedback] = useState<string | null>(null);
+  const [moreLikeThisListings, setMoreLikeThisListings] = useState<
+    (Listing & { recommendationLabel: string })[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const safeFromHref = (() => {
@@ -107,9 +311,48 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
             { orderId: id },
             session.access_token,
           );
+          const dashboard = await api.loadBuyerDashboard(session.access_token);
+          const preset = getRecommendedBrowsePreset({
+            listings: dashboard.listings,
+            orders: dashboard.orders,
+            bookings: dashboard.bookings,
+          });
           if (!cancelled) {
             setOrder(nextOrder);
             setReview(reviewLookup.review ?? null);
+            setMoreLikeThisListings(
+              dashboard.listings
+                .filter((item) => item.id !== nextOrder.items?.[0]?.listing_id)
+                .map((item) => ({
+                  listing: item,
+                  match: getRecommendationMatch(item, preset),
+                }))
+                .filter((item): item is {
+                  listing: (typeof dashboard.listings)[number];
+                  match: { score: number; label: string };
+                } => Boolean(item.match))
+                .sort((left, right) => {
+                  const rightSellerPriority = getSuggestionSellerPriority(
+                    right.listing,
+                    nextOrder.seller_id,
+                  );
+                  const leftSellerPriority = getSuggestionSellerPriority(
+                    left.listing,
+                    nextOrder.seller_id,
+                  );
+                  if (rightSellerPriority !== leftSellerPriority) {
+                    return rightSellerPriority - leftSellerPriority;
+                  }
+
+                  if (right.match.score !== left.match.score) {
+                    return right.match.score - left.match.score;
+                  }
+
+                  return new Date(right.listing.created_at).getTime() - new Date(left.listing.created_at).getTime();
+                })
+                .slice(0, 3)
+                .map((item) => ({ ...item.listing, recommendationLabel: item.match.label })),
+            );
           }
         } else {
           const nextBooking = await api.getBookingById(id, { accessToken: session.access_token });
@@ -117,9 +360,48 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
             { bookingId: id },
             session.access_token,
           );
+          const dashboard = await api.loadBuyerDashboard(session.access_token);
+          const preset = getRecommendedBrowsePreset({
+            listings: dashboard.listings,
+            orders: dashboard.orders,
+            bookings: dashboard.bookings,
+          });
           if (!cancelled) {
             setBooking(nextBooking);
             setReview(reviewLookup.review ?? null);
+            setMoreLikeThisListings(
+              dashboard.listings
+                .filter((item) => item.id !== nextBooking.listing_id)
+                .map((item) => ({
+                  listing: item,
+                  match: getRecommendationMatch(item, preset),
+                }))
+                .filter((item): item is {
+                  listing: (typeof dashboard.listings)[number];
+                  match: { score: number; label: string };
+                } => Boolean(item.match))
+                .sort((left, right) => {
+                  const rightSellerPriority = getSuggestionSellerPriority(
+                    right.listing,
+                    nextBooking.seller_id,
+                  );
+                  const leftSellerPriority = getSuggestionSellerPriority(
+                    left.listing,
+                    nextBooking.seller_id,
+                  );
+                  if (rightSellerPriority !== leftSellerPriority) {
+                    return rightSellerPriority - leftSellerPriority;
+                  }
+
+                  if (right.match.score !== left.match.score) {
+                    return right.match.score - left.match.score;
+                  }
+
+                  return new Date(right.listing.created_at).getTime() - new Date(left.listing.created_at).getTime();
+                })
+                .slice(0, 3)
+                .map((item) => ({ ...item.listing, recommendationLabel: item.match.label })),
+            );
           }
         }
       } catch (receiptError) {
@@ -188,6 +470,13 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
               ])
             : [["Items", "No item detail is available for this order yet."]]}
         />
+        {moreLikeThisListings.length > 0 ? (
+          <ReceiptMoreLikeThis
+            currentSellerId={order.seller_id}
+            listings={moreLikeThisListings}
+            safeFromHref={safeFromHref}
+          />
+        ) : null}
         <ReviewSection
           accessToken={accessToken}
           comment={comment}
@@ -231,6 +520,13 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
             ["Notes", booking.notes ?? "No notes added"],
           ]}
         />
+        {moreLikeThisListings.length > 0 ? (
+          <ReceiptMoreLikeThis
+            currentSellerId={booking.seller_id}
+            listings={moreLikeThisListings}
+            safeFromHref={safeFromHref}
+          />
+        ) : null}
         <ReviewSection
           accessToken={accessToken}
           comment={comment}
@@ -255,6 +551,137 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
   return (
     <div className="rounded-[1.5rem] border border-border bg-white/70 p-6 text-sm text-foreground/66">
       Receipt data is not available yet.
+    </div>
+  );
+}
+
+function ReceiptMoreLikeThis({
+  currentSellerId,
+  listings,
+  safeFromHref,
+}: {
+  currentSellerId: string | null;
+  listings: (Listing & { recommendationLabel: string })[];
+  safeFromHref: string | null;
+}) {
+  const sameSellerListings = currentSellerId
+    ? listings.filter((listing) => listing.seller_id === currentSellerId)
+    : [];
+  const otherSellerListings = currentSellerId
+    ? listings.filter((listing) => listing.seller_id !== currentSellerId)
+    : listings;
+
+  return (
+    <div className="rounded-[1.5rem] border border-border bg-white/72 p-5">
+      <p className="font-mono text-xs uppercase tracking-[0.22em] text-foreground/48">
+        More Like This
+      </p>
+      {sameSellerListings.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {otherSellerListings.length > 0 ? (
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
+              More from this seller
+            </p>
+          ) : null}
+          {sameSellerListings.map((listing) => (
+            <Link
+              key={listing.id}
+              className="flex items-start gap-3 rounded-[1rem] border border-border bg-[#f9f1e2] px-4 py-3 transition hover:border-accent hover:text-accent"
+              href={buildListingHref(listing.id, safeFromHref, "same-seller")}
+            >
+              {listing.images?.[0]?.image_url ? (
+                <Image
+                  alt={listing.images[0].alt_text ?? listing.title}
+                  className="h-[76px] w-[76px] rounded-[0.9rem] object-cover"
+                  height={76}
+                  src={listing.images[0].image_url}
+                  unoptimized
+                  width={76}
+                />
+              ) : (
+                <div className="flex h-[76px] w-[76px] items-center justify-center rounded-[0.9rem] bg-[#d9c7a8] text-[10px] font-semibold uppercase tracking-[0.14em] text-[#4d4338]">
+                  {listing.type}
+                </div>
+              )}
+              <span className="flex-1">
+                <span className="flex items-start justify-between gap-3">
+                  <span className="block text-sm font-semibold text-foreground">{listing.title}</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+                    {getSuggestionSecondarySignal(listing)}
+                  </span>
+                </span>
+                <span className="mt-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
+                  {listing.type} · {listing.is_local_only ? "Local Only" : "Open Reach"}
+                </span>
+                <span className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#0f5f62]">
+                    {listing.recommendationLabel}
+                  </span>
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3a10]">
+                    {getSuggestionActionMode(listing)}
+                  </span>
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5d5a7a]">
+                    {getSuggestionSellerLabel(listing, currentSellerId)}
+                  </span>
+                </span>
+              </span>
+            </Link>
+          ))}
+        </div>
+      ) : null}
+      {otherSellerListings.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {sameSellerListings.length > 0 ? (
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
+              Explore similar listings
+            </p>
+          ) : null}
+          {otherSellerListings.map((listing) => (
+            <Link
+              key={listing.id}
+              className="flex items-start gap-3 rounded-[1rem] border border-border bg-[#f9f1e2] px-4 py-3 transition hover:border-accent hover:text-accent"
+              href={buildListingHref(listing.id, safeFromHref, "cross-seller")}
+            >
+              {listing.images?.[0]?.image_url ? (
+                <Image
+                  alt={listing.images[0].alt_text ?? listing.title}
+                  className="h-[76px] w-[76px] rounded-[0.9rem] object-cover"
+                  height={76}
+                  src={listing.images[0].image_url}
+                  unoptimized
+                  width={76}
+                />
+              ) : (
+                <div className="flex h-[76px] w-[76px] items-center justify-center rounded-[0.9rem] bg-[#d9c7a8] text-[10px] font-semibold uppercase tracking-[0.14em] text-[#4d4338]">
+                  {listing.type}
+                </div>
+              )}
+              <span className="flex-1">
+                <span className="flex items-start justify-between gap-3">
+                  <span className="block text-sm font-semibold text-foreground">{listing.title}</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+                    {getSuggestionSecondarySignal(listing)}
+                  </span>
+                </span>
+                <span className="mt-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
+                  {listing.type} · {listing.is_local_only ? "Local Only" : "Open Reach"}
+                </span>
+                <span className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#0f5f62]">
+                    {listing.recommendationLabel}
+                  </span>
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3a10]">
+                    {getSuggestionActionMode(listing)}
+                  </span>
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5d5a7a]">
+                    {getSuggestionSellerLabel(listing, currentSellerId)}
+                  </span>
+                </span>
+              </span>
+            </Link>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -292,7 +719,7 @@ function ReceiptContextBar({
               className="rounded-full border border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground transition hover:border-accent hover:text-accent"
               href={safeFromHref}
             >
-              Back to Previous Slice
+              Keep Browsing This Lane
             </Link>
           ) : null}
           <Link

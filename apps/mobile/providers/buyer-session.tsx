@@ -83,6 +83,7 @@ type BuyerSessionValue = {
     quantity: number;
     fulfillment: string;
     notes?: string;
+    buyerBrowseContext?: string;
   }) => Promise<Order>;
   createBooking: (input: {
     sellerId: string;
@@ -90,6 +91,7 @@ type BuyerSessionValue = {
     scheduledStart: string;
     scheduledEnd: string;
     notes?: string;
+    buyerBrowseContext?: string;
   }) => Promise<Booking>;
 };
 
@@ -459,6 +461,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     quantity: number;
     fulfillment: string;
     notes?: string;
+    buyerBrowseContext?: string;
   }) => {
     if (!session) {
       throw new Error('Sign in as the buyer before placing an order.');
@@ -468,6 +471,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
         seller_id: input.sellerId,
         fulfillment: input.fulfillment,
         notes: input.notes,
+        buyer_browse_context: input.buyerBrowseContext,
         items: [{ listing_id: input.listingId, quantity: input.quantity }],
     });
 
@@ -484,6 +488,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     scheduledStart: string;
     scheduledEnd: string;
     notes?: string;
+    buyerBrowseContext?: string;
   }) => {
     if (!session) {
       throw new Error('Sign in as the buyer before requesting a booking.');
@@ -495,6 +500,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
         scheduled_start: input.scheduledStart,
         scheduled_end: input.scheduledEnd,
         notes: input.notes,
+        buyer_browse_context: input.buyerBrowseContext,
     });
 
     startTransition(() => {

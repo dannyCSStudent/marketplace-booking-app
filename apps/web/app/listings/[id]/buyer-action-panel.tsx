@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
@@ -40,6 +41,80 @@ function computeBookingWindow(listing: Listing, dayOffset: number) {
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
 
   return { start, end };
+}
+
+function getSuggestionSecondarySignal(listing: Listing) {
+  if (listing.duration_minutes) {
+    return `${listing.duration_minutes} min`;
+  }
+
+  return formatCurrency(listing.price_cents, listing.currency);
+}
+
+function getSuggestionActionMode(listing: Listing) {
+  return listing.requires_booking || listing.type === "service" ? "Booking ready" : "Order ready";
+}
+
+function getSuggestionSellerLabel(
+  suggestion: Listing,
+  currentSellerId: string,
+  currentSellerName: string | null,
+) {
+  if (suggestion.seller_id === currentSellerId) {
+    return currentSellerName ? `${currentSellerName} · Same seller` : "Same seller";
+  }
+
+  return "Another seller";
+}
+
+function getSuggestionSellerPriority(
+  suggestion: Listing,
+  currentSellerId: string,
+) {
+  return suggestion.seller_id === currentSellerId ? 1 : 0;
+}
+
+function normalizeFollowOnContext(value: string | null) {
+  if (value === "same-seller" || value === "cross-seller") {
+    return value;
+  }
+
+  return null;
+}
+
+function formatFollowOnContext(value: "same-seller" | "cross-seller" | null) {
+  if (value === "same-seller") {
+    return "Same seller follow-on";
+  }
+
+  if (value === "cross-seller") {
+    return "Cross-seller follow-on";
+  }
+
+  return null;
+}
+
+function buildBuyerBrowseContext(
+  originSliceSummary: string | null,
+  followOn: "same-seller" | "cross-seller" | null,
+) {
+  const parts = [originSliceSummary, formatFollowOnContext(followOn)].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function buildListingHref(
+  listingId: string,
+  fromParam: string | null,
+  followOn: "same-seller" | "cross-seller",
+) {
+  const params = new URLSearchParams();
+  if (fromParam) {
+    params.set("from", fromParam);
+  }
+  params.set("followOn", followOn);
+  const query = params.toString();
+
+  return `/listings/${listingId}${query ? `?${query}` : ""}`;
 }
 
 function formatBuyerActionError(error: unknown) {
@@ -94,10 +169,173 @@ function titleCaseLabel(value: string) {
     .join(" ");
 }
 
+function getRecommendedBrowsePreset(input: {
+  listings: Listing[];
+  orders: {
+    items?: { listing_id: string }[] | null;
+  }[];
+  bookings: {
+    listing_id: string;
+    listing_type?: string | null;
+  }[];
+}) {
+  const productScore = input.orders.reduce((count, order) => {
+    const matchingListings = (order.items ?? [])
+      .map((item) => input.listings.find((listingItem) => listingItem.id === item.listing_id))
+      .filter((listingItem): listingItem is Listing => Boolean(listingItem));
+
+    return (
+      count +
+      matchingListings.filter(
+        (listingItem) => listingItem.type === "product" || listingItem.type === "hybrid",
+      ).length
+    );
+  }, 0);
+
+  const serviceScore = input.bookings.filter(
+    (booking) => booking.listing_type === "service" || booking.listing_type === "hybrid",
+  ).length;
+
+  const localScore =
+    input.orders.reduce((count, order) => {
+      const hasLocalMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (listingItem) => listingItem.id === item.listing_id && listingItem.is_local_only,
+        ),
+      );
+      return count + (hasLocalMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) =>
+      input.listings.some(
+        (listingItem) => listingItem.id === booking.listing_id && listingItem.is_local_only,
+      ),
+    ).length;
+
+  const hybridScore =
+    input.orders.reduce((count, order) => {
+      const hasHybridMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (listingItem) => listingItem.id === item.listing_id && listingItem.type === "hybrid",
+        ),
+      );
+      return count + (hasHybridMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) => booking.listing_type === "hybrid").length;
+
+  if (localScore >= Math.max(productScore, serviceScore, hybridScore) && localScore > 0) {
+    return { label: "Local-First" as const };
+  }
+
+  if (serviceScore >= Math.max(productScore, hybridScore) && serviceScore > 0) {
+    return { label: "Services" as const };
+  }
+
+  if (hybridScore >= Math.max(productScore, serviceScore) && hybridScore > 0) {
+    return { label: "Hybrid" as const };
+  }
+
+  if (productScore > 0) {
+    return { label: "Products" as const };
+  }
+
+  return null;
+}
+
+function getRecommendationReason(
+  listing: Listing,
+  preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
+) {
+  if (!preset) {
+    return null;
+  }
+
+  if (preset.label === "Local-First" && listing.is_local_only) {
+    return "You have been browsing more local-first offers, and this listing is configured for local demand.";
+  }
+
+  if (
+    preset.label === "Services" &&
+    (listing.type === "service" || listing.type === "hybrid")
+  ) {
+    return "Your recent buyer activity leans toward services, so this listing matches that pattern.";
+  }
+
+  if (
+    preset.label === "Products" &&
+    (listing.type === "product" || listing.type === "hybrid")
+  ) {
+    return "Your recent buyer activity leans toward product purchases, so this listing matches that pattern.";
+  }
+
+  if (preset.label === "Hybrid" && listing.type === "hybrid") {
+    return "You have been interacting with hybrid offers, and this listing fits that mixed product-plus-service pattern.";
+  }
+
+  return null;
+}
+
+function getRecommendationScore(
+  listing: Listing,
+  preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
+) {
+  if (!preset) {
+    return 0;
+  }
+
+  if (preset.label === "Local-First" && listing.is_local_only) {
+    return 3;
+  }
+
+  if (
+    preset.label === "Services" &&
+    (listing.type === "service" || listing.type === "hybrid")
+  ) {
+    return listing.type === "service" ? 3 : 2;
+  }
+
+  if (
+    preset.label === "Products" &&
+    (listing.type === "product" || listing.type === "hybrid")
+  ) {
+    return listing.type === "product" ? 3 : 2;
+  }
+
+  if (preset.label === "Hybrid" && listing.type === "hybrid") {
+    return 3;
+  }
+
+  return 0;
+}
+
+function getRecommendationMatch(
+  listing: Listing,
+  preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
+) {
+  const score = getRecommendationScore(listing, preset);
+  if (score === 0 || !preset) {
+    return null;
+  }
+
+  if (preset.label === "Local-First") {
+    return { score, label: "Local match" };
+  }
+
+  if (preset.label === "Services") {
+    return { score, label: "Service fit" };
+  }
+
+  if (preset.label === "Products") {
+    return { score, label: "Product fit" };
+  }
+
+  return { score, label: "Hybrid fit" };
+}
+
 export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPanelProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromParam = searchParams.get("from");
+  const followOnParam = normalizeFollowOnContext(searchParams.get("followOn"));
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -112,6 +350,18 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [recommendationReason, setRecommendationReason] = useState<string | null>(null);
+  const [moreLikeThisListings, setMoreLikeThisListings] = useState<
+    (Listing & { recommendationLabel: string })[]
+  >([]);
+  const sameSellerSuggestions = useMemo(
+    () => moreLikeThisListings.filter((item) => item.seller_id === listing.seller_id),
+    [listing.seller_id, moreLikeThisListings],
+  );
+  const otherSellerSuggestions = useMemo(
+    () => moreLikeThisListings.filter((item) => item.seller_id !== listing.seller_id),
+    [listing.seller_id, moreLikeThisListings],
+  );
 
   const fulfillmentOptions = useMemo(() => getFulfillmentOptions(listing), [listing]);
   const canOrder = listing.type !== "service";
@@ -149,6 +399,10 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
 
     return parts.length > 0 ? parts.join(" · ") : "Default marketplace slice";
   }, [searchParams]);
+  const buyerBrowseContext = useMemo(
+    () => buildBuyerBrowseContext(originSliceSummary, followOnParam),
+    [followOnParam, originSliceSummary],
+  );
   const bookingWindow = useMemo(() => {
     const parsedOffset = Number(bookingDayOffset);
     return computeBookingWindow(listing, Number.isFinite(parsedOffset) ? parsedOffset : 1);
@@ -177,15 +431,50 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
         setSession(refreshedSession);
         const nextProfile = await ensureBuyerProfile(refreshedSession.access_token);
         setProfile(nextProfile);
+        const dashboard = await api.loadBuyerDashboard(refreshedSession.access_token);
+        const preset = getRecommendedBrowsePreset({
+          listings: dashboard.listings,
+          orders: dashboard.orders,
+          bookings: dashboard.bookings,
+        });
+        setRecommendationReason(getRecommendationReason(listing, preset));
+        setMoreLikeThisListings(
+          dashboard.listings
+            .filter((item) => item.id !== listing.id)
+            .map((item) => ({
+              listing: item,
+              match: getRecommendationMatch(item, preset),
+            }))
+            .filter((item): item is { listing: Listing; match: { score: number; label: string } } =>
+              Boolean(item.match),
+            )
+            .sort((left, right) => {
+              const rightSellerPriority = getSuggestionSellerPriority(right.listing, listing.seller_id);
+              const leftSellerPriority = getSuggestionSellerPriority(left.listing, listing.seller_id);
+              if (rightSellerPriority !== leftSellerPriority) {
+                return rightSellerPriority - leftSellerPriority;
+              }
+
+              if (right.match.score !== left.match.score) {
+                return right.match.score - left.match.score;
+              }
+
+              return new Date(right.listing.created_at).getTime() - new Date(left.listing.created_at).getTime();
+            })
+            .slice(0, 3)
+            .map((item) => ({ ...item.listing, recommendationLabel: item.match.label })),
+        );
       } catch {
         clearBuyerSession();
         setSession(null);
         setProfile(null);
+        setRecommendationReason(null);
+        setMoreLikeThisListings([]);
       } finally {
         setRestoring(false);
       }
     })();
-  }, []);
+  }, [listing]);
 
   async function handleAuthenticate() {
     setLoading(true);
@@ -233,7 +522,7 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
           seller_id: listing.seller_id,
           fulfillment: selectedFulfillment,
           notes,
-          buyer_browse_context: originSliceSummary,
+          buyer_browse_context: buyerBrowseContext,
           items: [
             {
               listing_id: listing.id,
@@ -272,7 +561,7 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
           scheduled_start: bookingWindow.start.toISOString(),
           scheduled_end: bookingWindow.end.toISOString(),
           notes,
-          buyer_browse_context: originSliceSummary,
+          buyer_browse_context: buyerBrowseContext,
         },
         { accessToken: session.access_token },
       );
@@ -310,6 +599,144 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
           <div className="mt-2 inline-flex rounded-full border border-white/14 bg-white/12 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/82">
             {originSliceSummary}
           </div>
+          {fromParam ? (
+            <div className="mt-3">
+              <button
+                className="rounded-full border border-white/16 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/36"
+                onClick={() => router.push(fromParam)}
+                type="button"
+              >
+                Keep Browsing This Lane
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {recommendationReason ? (
+        <div className="mt-4 rounded-[1.2rem] border border-[#9ccfc3]/30 bg-[#edf8f2] px-4 py-3 text-[#24493f]">
+          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[#0f5f62]">
+            Why Recommended
+          </p>
+          <p className="mt-2 text-sm leading-6">{recommendationReason}</p>
+        </div>
+      ) : null}
+      {moreLikeThisListings.length > 0 ? (
+        <div className="mt-4 rounded-[1.2rem] border border-white/12 bg-white/8 px-4 py-3">
+          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-white/58">
+            More Like This
+          </p>
+          {sameSellerSuggestions.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {otherSellerSuggestions.length > 0 ? (
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/58">
+                  More from this seller
+                </p>
+              ) : null}
+              {sameSellerSuggestions.map((item) => (
+                <button
+                  key={item.id}
+                  className="flex w-full items-start gap-3 rounded-[1rem] border border-white/12 bg-white/8 px-4 py-3 text-left transition hover:border-white/28"
+                  onClick={() =>
+                    router.push(buildListingHref(item.id, fromParam, "same-seller"))
+                  }
+                  type="button"
+                >
+                  {item.images?.[0]?.image_url ? (
+                    <Image
+                      alt={item.images[0].alt_text ?? item.title}
+                      className="h-[76px] w-[76px] rounded-[0.9rem] object-cover"
+                      height={76}
+                      src={item.images[0].image_url}
+                      unoptimized
+                      width={76}
+                    />
+                  ) : (
+                    <div className="flex h-[76px] w-[76px] items-center justify-center rounded-[0.9rem] bg-[#d9c7a8] text-[10px] font-semibold uppercase tracking-[0.14em] text-[#4d4338]">
+                      {item.type}
+                    </div>
+                  )}
+                  <span className="flex-1">
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="block text-sm font-semibold text-white">{item.title}</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/72">
+                        {getSuggestionSecondarySignal(item)}
+                      </span>
+                    </span>
+                    <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-white/58">
+                      {item.type} · {item.is_local_only ? "Local Only" : "Open Reach"}
+                    </span>
+                    <span className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#bfe7db]">
+                        {item.recommendationLabel}
+                      </span>
+                      <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#f6d999]">
+                        {getSuggestionActionMode(item)}
+                      </span>
+                      <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#d6d0ff]">
+                        {getSuggestionSellerLabel(item, listing.seller_id, sellerDisplayName)}
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {otherSellerSuggestions.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {sameSellerSuggestions.length > 0 ? (
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/58">
+                  Explore similar listings
+                </p>
+              ) : null}
+              {otherSellerSuggestions.map((item) => (
+                <button
+                  key={item.id}
+                  className="flex w-full items-start gap-3 rounded-[1rem] border border-white/12 bg-white/8 px-4 py-3 text-left transition hover:border-white/28"
+                  onClick={() =>
+                    router.push(buildListingHref(item.id, fromParam, "cross-seller"))
+                  }
+                  type="button"
+                >
+                  {item.images?.[0]?.image_url ? (
+                    <Image
+                      alt={item.images[0].alt_text ?? item.title}
+                      className="h-[76px] w-[76px] rounded-[0.9rem] object-cover"
+                      height={76}
+                      src={item.images[0].image_url}
+                      unoptimized
+                      width={76}
+                    />
+                  ) : (
+                    <div className="flex h-[76px] w-[76px] items-center justify-center rounded-[0.9rem] bg-[#d9c7a8] text-[10px] font-semibold uppercase tracking-[0.14em] text-[#4d4338]">
+                      {item.type}
+                    </div>
+                  )}
+                  <span className="flex-1">
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="block text-sm font-semibold text-white">{item.title}</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/72">
+                        {getSuggestionSecondarySignal(item)}
+                      </span>
+                    </span>
+                    <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-white/58">
+                      {item.type} · {item.is_local_only ? "Local Only" : "Open Reach"}
+                    </span>
+                    <span className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#bfe7db]">
+                        {item.recommendationLabel}
+                      </span>
+                      <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#f6d999]">
+                        {getSuggestionActionMode(item)}
+                      </span>
+                      <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#d6d0ff]">
+                        {getSuggestionSellerLabel(item, listing.seller_id, sellerDisplayName)}
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

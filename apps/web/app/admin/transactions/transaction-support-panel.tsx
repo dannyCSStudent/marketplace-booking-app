@@ -9,6 +9,7 @@ import {
   formatCurrency,
   type AdminUser,
   type BookingAdmin,
+  type Listing,
   type NotificationDelivery,
   type OrderAdmin,
   type ReviewModerationItem,
@@ -23,6 +24,7 @@ type EscalationFilter = "all" | "escalated" | "normal";
 type AdminRoleFilter = "all" | "support" | "trust" | "owner";
 type DeliveryFilter = "all" | "failed" | "queued";
 type TrustContextFilter = "all" | "trust_driven";
+type ListingHealthFilter = "all" | "softening" | "recent_pricing" | "trust_flagged";
 type QueuePreset =
   | "default"
   | "needs_follow_up"
@@ -68,6 +70,22 @@ type PendingRouteAction = {
   item: SupportItem;
   nextEscalated: boolean;
   target: AdminUser | null;
+};
+type ListingAdjustmentType = "pricing" | "local-fit" | "booking" | "fulfillment" | "other";
+type ListingRetentionTrendKey = "improving" | "softening" | "stable" | "no-signal";
+type ListingOpsContext = {
+  listing: Listing;
+  adjustmentType: ListingAdjustmentType;
+  adjustmentSummary: string | null;
+  adjustmentAt: string | null;
+  retentionTrendLabel: string;
+  retentionTrendKey: ListingRetentionTrendKey;
+  sameSellerCount: number;
+  crossSellerCount: number;
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerPostAdjustmentCount: number;
+  crossSellerPostAdjustmentCount: number;
 };
 type OrderHistoryEvent = NonNullable<OrderAdmin["status_history"]>[number];
 type BookingHistoryEvent = NonNullable<BookingAdmin["status_history"]>[number];
@@ -203,6 +221,184 @@ function isRecentWithinDays(value: string | null | undefined, days: number) {
 
 function truncateId(value: string) {
   return value.slice(0, 8);
+}
+
+function formatBuyerBrowseContextLabel(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isLocalDrivenBrowseContext(value: string | null | undefined) {
+  return formatBuyerBrowseContextLabel(value)?.toLowerCase().includes("local only") ?? false;
+}
+
+function isSearchDrivenBrowseContext(value: string | null | undefined) {
+  return formatBuyerBrowseContextLabel(value)?.toLowerCase().includes('search: "') ?? false;
+}
+
+function isPriceDrivenBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return normalized?.includes("lowest price") || normalized?.includes("highest price") || false;
+}
+
+function isSameSellerFollowOnBrowseContext(value: string | null | undefined) {
+  return formatBuyerBrowseContextLabel(value)?.toLowerCase().includes("same seller follow-on") ?? false;
+}
+
+function isCrossSellerFollowOnBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return (
+    normalized?.includes("cross-seller follow-on") ||
+    normalized?.includes("cross seller follow-on") ||
+    false
+  );
+}
+
+function getTransactionListingId(item: SupportItem) {
+  if (item.kind === "order") {
+    return item.raw.items?.[0]?.listing_id ?? null;
+  }
+
+  return item.raw.listing_id ?? null;
+}
+
+function getTransactionBrowseContext(item: SupportItem) {
+  return item.raw.buyer_browse_context ?? null;
+}
+
+function getListingAdjustmentTimestamp(listing: Listing) {
+  if (!listing.last_operating_adjustment_at) {
+    return null;
+  }
+
+  const parsed = new Date(listing.last_operating_adjustment_at).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function getListingAdjustmentType(summary: string | null | undefined): ListingAdjustmentType {
+  const normalized = summary?.toLowerCase() ?? "";
+  if (!normalized) {
+    return "other";
+  }
+
+  if (normalized.includes("pricing")) {
+    return "pricing";
+  }
+
+  if (normalized.includes("local fit")) {
+    return "local-fit";
+  }
+
+  if (
+    normalized.includes("booking mode") ||
+    normalized.includes("duration") ||
+    normalized.includes("lead time")
+  ) {
+    return "booking";
+  }
+
+  if (
+    normalized.includes("pickup") ||
+    normalized.includes("meetup") ||
+    normalized.includes("delivery") ||
+    normalized.includes("shipping")
+  ) {
+    return "fulfillment";
+  }
+
+  return "other";
+}
+
+function getListingRetentionTrend(input: {
+  sameSellerCount: number;
+  crossSellerCount: number;
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerPostAdjustmentCount: number;
+  crossSellerPostAdjustmentCount: number;
+}) {
+  const totalPostAdjustment = input.sameSellerPostAdjustmentCount + input.crossSellerPostAdjustmentCount;
+  if (totalPostAdjustment > 0) {
+    const totalAllTime = input.sameSellerCount + input.crossSellerCount;
+    const overallRetentionRate = totalAllTime > 0 ? input.sameSellerCount / totalAllTime : 0;
+    const postAdjustmentRetentionRate = input.sameSellerPostAdjustmentCount / totalPostAdjustment;
+
+    if (postAdjustmentRetentionRate - overallRetentionRate >= 0.15) {
+      return { label: "Improving since change", key: "improving" as const };
+    }
+
+    if (overallRetentionRate - postAdjustmentRetentionRate >= 0.15) {
+      return { label: "Softening since change", key: "softening" as const };
+    }
+
+    return { label: "Stable since change", key: "stable" as const };
+  }
+
+  const totalAllTime = input.sameSellerCount + input.crossSellerCount;
+  const totalRecent = input.sameSellerRecentCount + input.crossSellerRecentCount;
+  if (totalRecent === 0) {
+    return { label: "No recent signal", key: "no-signal" as const };
+  }
+
+  if (totalAllTime === 0) {
+    return { label: "Recent signal only", key: "stable" as const };
+  }
+
+  const overallRetentionRate = input.sameSellerCount / totalAllTime;
+  const recentRetentionRate = input.sameSellerRecentCount / totalRecent;
+  if (recentRetentionRate - overallRetentionRate >= 0.15) {
+    return { label: "Improving recently", key: "improving" as const };
+  }
+
+  if (overallRetentionRate - recentRetentionRate >= 0.15) {
+    return { label: "Softening recently", key: "softening" as const };
+  }
+
+  return { label: "Stable recently", key: "stable" as const };
+}
+
+function getListingTrendToneClass(key: ListingRetentionTrendKey) {
+  if (key === "improving") {
+    return "text-olive";
+  }
+  if (key === "softening") {
+    return "text-danger";
+  }
+  if (key === "stable") {
+    return "text-foreground/68";
+  }
+  return "text-foreground/52";
+}
+
+function matchesListingHealthFilter(args: {
+  listingHealthFilter: ListingHealthFilter;
+  listingOpsContext: ListingOpsContext | null;
+  sellerTrustCount: number;
+}) {
+  if (args.listingHealthFilter === "all") {
+    return true;
+  }
+
+  if (!args.listingOpsContext) {
+    return false;
+  }
+
+  if (args.listingHealthFilter === "softening") {
+    return args.listingOpsContext.retentionTrendKey === "softening";
+  }
+
+  if (args.listingHealthFilter === "recent_pricing") {
+    return (
+      args.listingOpsContext.adjustmentType === "pricing" &&
+      isRecentWithinDays(args.listingOpsContext.adjustmentAt, 7)
+    );
+  }
+
+  return args.sellerTrustCount > 0;
 }
 
 function formatAdminOptionLabel(admin: AdminUser) {
@@ -367,6 +563,7 @@ export function TransactionSupportPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<SupportItem[]>([]);
+  const [listings, setListings] = useState<Listing[]>([]);
   const [adminRoster, setAdminRoster] = useState<AdminUser[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
   const [reviewReports, setReviewReports] = useState<ReviewModerationItem[]>([]);
@@ -379,6 +576,8 @@ export function TransactionSupportPanel() {
   const [roleFilter, setRoleFilter] = useState<AdminRoleFilter>("all");
   const [deliveryFilter, setDeliveryFilter] = useState<DeliveryFilter>("all");
   const [trustFilter, setTrustFilter] = useState<TrustContextFilter>("all");
+  const [listingFilter, setListingFilter] = useState<string>("all");
+  const [listingHealthFilter, setListingHealthFilter] = useState<ListingHealthFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [currentAdminUserId, setCurrentAdminUserId] = useState<string | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
@@ -402,6 +601,8 @@ export function TransactionSupportPanel() {
     const nextRole = searchParams.get("role");
     const nextDelivery = searchParams.get("delivery");
     const nextTrust = searchParams.get("trust");
+    const nextListing = searchParams.get("listing");
+    const nextListingHealth = searchParams.get("listingHealth");
     const nextSearch = searchParams.get("q");
     const nextFocus = searchParams.get("focus");
 
@@ -454,6 +655,14 @@ export function TransactionSupportPanel() {
         : "all",
     );
     setTrustFilter(nextTrust === "trust_driven" ? "trust_driven" : "all");
+    setListingFilter(nextListing?.trim() ? nextListing : "all");
+    setListingHealthFilter(
+      nextListingHealth === "softening" ||
+        nextListingHealth === "recent_pricing" ||
+        nextListingHealth === "trust_flagged"
+        ? nextListingHealth
+        : "all",
+    );
     setSearchQuery(nextSearch ?? "");
     setFocusKey(nextFocus ?? null);
   }, [searchParams]);
@@ -484,6 +693,12 @@ export function TransactionSupportPanel() {
     if (trustFilter !== "all") {
       params.set("trust", trustFilter);
     }
+    if (listingFilter !== "all") {
+      params.set("listing", listingFilter);
+    }
+    if (listingHealthFilter !== "all") {
+      params.set("listingHealth", listingHealthFilter);
+    }
     if (searchQuery.trim()) {
       params.set("q", searchQuery.trim());
     }
@@ -496,7 +711,7 @@ export function TransactionSupportPanel() {
     if (nextQuery !== currentQuery) {
       router.replace(nextQuery ? `?${nextQuery}` : "/admin/transactions", { scroll: false });
     }
-  }, [assigneeFilter, deliveryFilter, escalationFilter, focusKey, preset, roleFilter, router, searchParams, searchQuery, statusFilter, trustFilter, typeFilter]);
+  }, [assigneeFilter, deliveryFilter, escalationFilter, focusKey, listingFilter, listingHealthFilter, preset, roleFilter, router, searchParams, searchQuery, statusFilter, trustFilter, typeFilter]);
 
   function applyQueueState(next: {
     preset: QueuePreset;
@@ -507,6 +722,8 @@ export function TransactionSupportPanel() {
     role: AdminRoleFilter;
     delivery: DeliveryFilter;
     trust?: TrustContextFilter;
+    listing?: string;
+    listingHealth?: ListingHealthFilter;
   }) {
     setPreset(next.preset);
     setTypeFilter(next.type);
@@ -516,6 +733,8 @@ export function TransactionSupportPanel() {
     setRoleFilter(next.role);
     setDeliveryFilter(next.delivery);
     setTrustFilter(next.trust ?? "all");
+    setListingFilter(next.listing?.trim() ? next.listing : "all");
+    setListingHealthFilter(next.listingHealth ?? "all");
     setFocusKey("__AUTO__");
   }
 
@@ -790,6 +1009,7 @@ export function TransactionSupportPanel() {
             ...data.orders.map(toSupportOrder),
             ...data.bookings.map(toSupportBooking),
           ].sort((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? ""));
+          setListings(data.listings);
           setAdminRoster(data.admins);
           setDeliveries(data.deliveries);
           setReviewReports(reports);
@@ -876,6 +1096,103 @@ export function TransactionSupportPanel() {
     [getDeliveriesForTransaction],
   );
 
+  const listingsById = useMemo(
+    () => new Map(listings.map((listing) => [listing.id, listing])),
+    [listings],
+  );
+
+  const listingOpsContextByItemKey = useMemo(() => {
+    const itemsByListingId = new Map<string, SupportItem[]>();
+    for (const item of items) {
+      const listingId = getTransactionListingId(item);
+      if (!listingId) {
+        continue;
+      }
+      const bucket = itemsByListingId.get(listingId);
+      if (bucket) {
+        bucket.push(item);
+      } else {
+        itemsByListingId.set(listingId, [item]);
+      }
+    }
+
+    const contextByItemKey = new Map<string, ListingOpsContext>();
+    for (const [listingId, listingItems] of itemsByListingId) {
+      const listing = listingsById.get(listingId);
+      if (!listing) {
+        continue;
+      }
+
+      let sameSellerCount = 0;
+      let crossSellerCount = 0;
+      let sameSellerRecentCount = 0;
+      let crossSellerRecentCount = 0;
+      let sameSellerPostAdjustmentCount = 0;
+      let crossSellerPostAdjustmentCount = 0;
+      const adjustmentTimestamp = getListingAdjustmentTimestamp(listing);
+
+      for (const item of listingItems) {
+        const browseContext = getTransactionBrowseContext(item);
+        const createdTimestamp = item.createdAt ? new Date(item.createdAt).getTime() : NaN;
+        const isRecent = isRecentWithinDays(item.createdAt, 7);
+        const isPostAdjustment =
+          adjustmentTimestamp !== null &&
+          !Number.isNaN(createdTimestamp) &&
+          createdTimestamp >= adjustmentTimestamp;
+
+        if (isSameSellerFollowOnBrowseContext(browseContext)) {
+          sameSellerCount += 1;
+          if (isRecent) {
+            sameSellerRecentCount += 1;
+          }
+          if (isPostAdjustment) {
+            sameSellerPostAdjustmentCount += 1;
+          }
+        }
+
+        if (isCrossSellerFollowOnBrowseContext(browseContext)) {
+          crossSellerCount += 1;
+          if (isRecent) {
+            crossSellerRecentCount += 1;
+          }
+          if (isPostAdjustment) {
+            crossSellerPostAdjustmentCount += 1;
+          }
+        }
+      }
+
+      const trend = getListingRetentionTrend({
+        sameSellerCount,
+        crossSellerCount,
+        sameSellerRecentCount,
+        crossSellerRecentCount,
+        sameSellerPostAdjustmentCount,
+        crossSellerPostAdjustmentCount,
+      });
+
+      const context: ListingOpsContext = {
+        listing,
+        adjustmentType: getListingAdjustmentType(listing.last_operating_adjustment_summary),
+        adjustmentSummary: listing.last_operating_adjustment_summary ?? null,
+        adjustmentAt: listing.last_operating_adjustment_at ?? null,
+        retentionTrendLabel: trend.label,
+        retentionTrendKey: trend.key,
+        sameSellerCount,
+        crossSellerCount,
+        sameSellerRecentCount,
+        crossSellerRecentCount,
+        sameSellerPostAdjustmentCount,
+        crossSellerPostAdjustmentCount,
+      };
+
+      for (const item of listingItems) {
+        contextByItemKey.set(`${item.kind}:${item.id}`, context);
+      }
+    }
+
+    return contextByItemKey;
+  }, [items, listingsById]);
+
   const counts = useMemo(
     () => ({
       all: items.length,
@@ -943,6 +1260,78 @@ export function TransactionSupportPanel() {
     }),
     [currentAdminUserId, deliveries, getAssignedRole, hasFailedDelivery, hasQueuedDelivery, isTrustDrivenItem, items],
   );
+
+  const listingHealthCounts = useMemo(() => {
+    const seen = new Set<string>();
+    let softening = 0;
+    let recentPricing = 0;
+    let trustFlagged = 0;
+
+    for (const item of items) {
+      const context = listingOpsContextByItemKey.get(`${item.kind}:${item.id}`);
+      if (!context || seen.has(context.listing.id)) {
+        continue;
+      }
+      seen.add(context.listing.id);
+
+      if (context.retentionTrendKey === "softening") {
+        softening += 1;
+      }
+      if (
+        context.adjustmentType === "pricing" &&
+        isRecentWithinDays(context.adjustmentAt, 7)
+      ) {
+        recentPricing += 1;
+      }
+      if (getSellerTrustSummary(item.seller_id).total > 0) {
+        trustFlagged += 1;
+      }
+    }
+
+    return {
+      softening,
+      recentPricing,
+      trustFlagged,
+    };
+  }, [getSellerTrustSummary, items, listingOpsContextByItemKey]);
+
+  const listingHealthDiagnosticCounts = useMemo(() => {
+    const baseItems = items.filter((item) => {
+      const listingOpsContext = listingOpsContextByItemKey.get(`${item.kind}:${item.id}`) ?? null;
+      const sellerTrustCount = getSellerTrustSummary(item.seller_id).total;
+      if (listingHealthFilter !== "all") {
+        return matchesListingHealthFilter({
+          listingHealthFilter,
+          listingOpsContext,
+          sellerTrustCount,
+        });
+      }
+
+      return (
+        matchesListingHealthFilter({
+          listingHealthFilter: "softening",
+          listingOpsContext,
+          sellerTrustCount,
+        }) ||
+        matchesListingHealthFilter({
+          listingHealthFilter: "recent_pricing",
+          listingOpsContext,
+          sellerTrustCount,
+        }) ||
+        matchesListingHealthFilter({
+          listingHealthFilter: "trust_flagged",
+          listingOpsContext,
+          sellerTrustCount,
+        })
+      );
+    });
+
+    return {
+      failedDelivery: baseItems.filter((item) => hasFailedDelivery(item)).length,
+      queuedDelivery: baseItems.filter((item) => hasQueuedDelivery(item)).length,
+      trustDriven: baseItems.filter((item) => isTrustDrivenItem(item)).length,
+    };
+  }, [getSellerTrustSummary, hasFailedDelivery, hasQueuedDelivery, isTrustDrivenItem, items, listingHealthFilter, listingOpsContextByItemKey]);
 
   const agingSummary = useMemo(() => {
     const oldestUnassigned = items
@@ -1027,6 +1416,8 @@ export function TransactionSupportPanel() {
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
     return items.filter((item) => {
+      const listingOpsContext = listingOpsContextByItemKey.get(`${item.kind}:${item.id}`) ?? null;
+
       if (typeFilter !== "all" && item.kind !== typeFilter) {
         return false;
       }
@@ -1049,6 +1440,24 @@ export function TransactionSupportPanel() {
 
       if (trustFilter === "trust_driven" && !isTrustDrivenItem(item)) {
         return false;
+      }
+
+      if (listingFilter !== "all") {
+        const listingId = getTransactionListingId(item);
+        if (listingId !== listingFilter) {
+          return false;
+        }
+      }
+
+      if (listingHealthFilter !== "all") {
+        const context = listingOpsContextByItemKey.get(`${item.kind}:${item.id}`) ?? null;
+        if (!matchesListingHealthFilter({
+          listingHealthFilter,
+          listingOpsContext: context,
+          sellerTrustCount: getSellerTrustSummary(item.seller_id).total,
+        })) {
+          return false;
+        }
       }
 
       if (roleFilter !== "all" && getAssignedRole(item.adminAssigneeUserId) !== roleFilter) {
@@ -1135,6 +1544,10 @@ export function TransactionSupportPanel() {
         item.adminHandoffNote,
         item.adminAssigneeUserId,
         item.kind,
+        listingOpsContext?.listing.title,
+        listingOpsContext?.adjustmentSummary,
+        listingOpsContext?.adjustmentType,
+        listingOpsContext?.retentionTrendLabel,
         ...item.history.flatMap((event) => [event.status, event.actorRole, event.note]),
         ...item.adminHistory.flatMap((event) => [event.action, event.actorUserId, event.note]),
       ]
@@ -1144,7 +1557,7 @@ export function TransactionSupportPanel() {
 
       return haystack.includes(normalizedQuery);
     });
-  }, [assigneeFilter, currentAdminUserId, deliveryFilter, escalationFilter, getAssignedRole, hasFailedDelivery, hasQueuedDelivery, isTrustDrivenItem, items, preset, roleFilter, searchQuery, statusFilter, trustFilter, typeFilter]);
+  }, [assigneeFilter, currentAdminUserId, deliveryFilter, escalationFilter, getAssignedRole, getSellerTrustSummary, hasFailedDelivery, hasQueuedDelivery, isTrustDrivenItem, items, listingFilter, listingHealthFilter, listingOpsContextByItemKey, preset, roleFilter, searchQuery, statusFilter, trustFilter, typeFilter]);
 
   useEffect(() => {
     if (focusKey === "__AUTO__") {
@@ -1185,6 +1598,10 @@ export function TransactionSupportPanel() {
     () => (focusedItem ? getSellerTrustSummary(focusedItem.seller_id) : null),
     [focusedItem, getSellerTrustSummary],
   );
+  const focusedListingOpsContext = useMemo(
+    () => (focusedItem ? listingOpsContextByItemKey.get(`${focusedItem.kind}:${focusedItem.id}`) ?? null : null),
+    [focusedItem, listingOpsContextByItemKey],
+  );
   const focusedDeliveries = useMemo(
     () =>
       focusedItem
@@ -1222,6 +1639,13 @@ export function TransactionSupportPanel() {
     if (trustFilter !== "all") {
       parts.push("Trust-Driven");
     }
+    if (listingFilter !== "all") {
+      const listing = listingsById.get(listingFilter);
+      parts.push(`Listing: ${listing?.title ?? `#${truncateId(listingFilter)}`}`);
+    }
+    if (listingHealthFilter !== "all") {
+      parts.push(`Listing Health: ${titleCaseFilterLabel(listingHealthFilter)}`);
+    }
     if (typeFilter !== "all") {
       parts.push(`Type: ${titleCaseFilterLabel(typeFilter)}`);
     }
@@ -1230,7 +1654,7 @@ export function TransactionSupportPanel() {
     }
 
     return parts.length > 0 ? parts.join(" · ") : "Default open support queue";
-  }, [assigneeFilter, deliveryFilter, escalationFilter, preset, roleFilter, searchQuery, statusFilter, trustFilter, typeFilter]);
+  }, [assigneeFilter, deliveryFilter, escalationFilter, listingFilter, listingHealthFilter, listingsById, preset, roleFilter, searchQuery, statusFilter, trustFilter, typeFilter]);
   const isDefaultSlice =
     preset === "default" &&
     typeFilter === "all" &&
@@ -1240,6 +1664,8 @@ export function TransactionSupportPanel() {
     roleFilter === "all" &&
     deliveryFilter === "all" &&
     trustFilter === "all" &&
+    listingFilter === "all" &&
+    listingHealthFilter === "all" &&
     !searchQuery.trim();
 
   async function copyCurrentSliceLink() {
@@ -1746,6 +2172,165 @@ export function TransactionSupportPanel() {
             <p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-foreground">
               {card.value}
             </p>
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {[
+          {
+            label: "Softening Listings",
+            value: listingHealthCounts.softening.toString(),
+            detail: "Linked listings whose retention is currently softening",
+            tone: listingHealthCounts.softening > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset: "default",
+                type: "all",
+                status: "all",
+                assignee: "all",
+                priority: "all",
+                role: "all",
+                delivery: "all",
+                trust: "all",
+                listingHealth: "softening",
+              }),
+          },
+          {
+            label: "Recent Pricing Changes",
+            value: listingHealthCounts.recentPricing.toString(),
+            detail: "Listings repriced in the last 7 days",
+            tone: listingHealthCounts.recentPricing > 0 ? "warning" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset: "default",
+                type: "all",
+                status: "all",
+                assignee: "all",
+                priority: "all",
+                role: "all",
+                delivery: "all",
+                trust: "all",
+                listingHealth: "recent_pricing",
+              }),
+          },
+          {
+            label: "Trust-Flagged Listings",
+            value: listingHealthCounts.trustFlagged.toString(),
+            detail: "Listings tied to sellers with active review moderation pressure",
+            tone: listingHealthCounts.trustFlagged > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset: "default",
+                type: "all",
+                status: "all",
+                assignee: "all",
+                priority: "all",
+                role: "all",
+                delivery: "all",
+                trust: "all",
+                listingHealth: "trust_flagged",
+              }),
+          },
+        ].map((card) => (
+          <button
+            key={card.label}
+            type="button"
+            onClick={card.onClick}
+            className={`card-shadow rounded-[1.5rem] border p-4 text-left transition hover:border-foreground/28 ${
+              card.tone === "danger"
+                ? "border-danger/30 bg-danger/8"
+                : card.tone === "warning"
+                  ? "border-amber-500/30 bg-amber-500/10"
+                  : "border-border bg-surface"
+            }`}
+          >
+            <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">{card.label}</p>
+            <p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-foreground">
+              {card.value}
+            </p>
+            <p className="mt-2 text-sm text-foreground/64">{card.detail}</p>
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {[
+          {
+            label: listingHealthFilter === "all" ? "Listing Risk + Failed Delivery" : `${titleCaseFilterLabel(listingHealthFilter)} + Failed Delivery`,
+            value: listingHealthDiagnosticCounts.failedDelivery.toString(),
+            detail: "Items in this listing-risk lane that also have failed notifications",
+            tone: listingHealthDiagnosticCounts.failedDelivery > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset,
+                type: typeFilter,
+                status: statusFilter,
+                assignee: assigneeFilter,
+                priority: escalationFilter,
+                role: roleFilter,
+                delivery: "failed",
+                trust: trustFilter,
+                listing: listingFilter,
+                listingHealth: listingHealthFilter,
+              }),
+          },
+          {
+            label: listingHealthFilter === "all" ? "Listing Risk + Queued Delivery" : `${titleCaseFilterLabel(listingHealthFilter)} + Queued Delivery`,
+            value: listingHealthDiagnosticCounts.queuedDelivery.toString(),
+            detail: "Items in this listing-risk lane that still have queued notifications",
+            tone: listingHealthDiagnosticCounts.queuedDelivery > 0 ? "warning" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset,
+                type: typeFilter,
+                status: statusFilter,
+                assignee: assigneeFilter,
+                priority: escalationFilter,
+                role: roleFilter,
+                delivery: "queued",
+                trust: trustFilter,
+                listing: listingFilter,
+                listingHealth: listingHealthFilter,
+              }),
+          },
+          {
+            label: listingHealthFilter === "all" ? "Listing Risk + Trust-Driven" : `${titleCaseFilterLabel(listingHealthFilter)} + Trust-Driven`,
+            value: listingHealthDiagnosticCounts.trustDriven.toString(),
+            detail: "Items in this listing-risk lane already routed through trust support",
+            tone: listingHealthDiagnosticCounts.trustDriven > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset,
+                type: typeFilter,
+                status: statusFilter,
+                assignee: assigneeFilter,
+                priority: escalationFilter,
+                role: roleFilter,
+                delivery: deliveryFilter,
+                trust: "trust_driven",
+                listing: listingFilter,
+                listingHealth: listingHealthFilter,
+              }),
+          },
+        ].map((card) => (
+          <button
+            key={card.label}
+            type="button"
+            onClick={card.onClick}
+            className={`card-shadow rounded-[1.5rem] border p-4 text-left transition hover:border-foreground/28 ${
+              card.tone === "danger"
+                ? "border-danger/30 bg-danger/8"
+                : card.tone === "warning"
+                  ? "border-amber-500/30 bg-amber-500/10"
+                  : "border-border bg-surface"
+            }`}
+          >
+            <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">{card.label}</p>
+            <p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-foreground">
+              {card.value}
+            </p>
+            <p className="mt-2 text-sm text-foreground/64">{card.detail}</p>
           </button>
         ))}
       </div>
@@ -2291,6 +2876,34 @@ export function TransactionSupportPanel() {
           </div>
 
           <div className="flex flex-col gap-2 text-sm text-foreground/72">
+            <span>Listing Health</span>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { value: "all", label: "All" },
+                { value: "softening", label: `Softening (${listingHealthCounts.softening})` },
+                { value: "recent_pricing", label: `Recent Pricing (${listingHealthCounts.recentPricing})` },
+                { value: "trust_flagged", label: `Trust-Flagged (${listingHealthCounts.trustFlagged})` },
+              ].map((option) => {
+                const active = listingHealthFilter === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setListingHealthFilter(option.value as ListingHealthFilter)}
+                    className={`rounded-full border px-4 py-2 text-sm transition ${
+                      active
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-background text-foreground/72 hover:border-foreground/28"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 text-sm text-foreground/72">
             <span>Status Scope</span>
             <div className="flex flex-wrap gap-2">
               {[
@@ -2794,6 +3407,30 @@ export function TransactionSupportPanel() {
                       ? `${focusedTrustSummary.open} open · ${focusedTrustSummary.escalated} escalated · ${focusedTrustSummary.hidden} hidden`
                       : "No seller review reports"}
                   </p>
+                  <p>
+                    <span className="text-foreground/46">Listing ops:</span>{" "}
+                    {focusedListingOpsContext
+                      ? `${titleCaseFilterLabel(focusedListingOpsContext.adjustmentType)} · ${focusedListingOpsContext.retentionTrendLabel}`
+                      : "No linked listing context"}
+                  </p>
+                  <p>
+                    <span className="text-foreground/46">Last adjustment:</span>{" "}
+                    {focusedListingOpsContext?.adjustmentSummary?.trim()
+                      ? focusedListingOpsContext.adjustmentSummary
+                      : "No operating adjustment recorded"}
+                  </p>
+                  <p>
+                    <span className="text-foreground/46">Adjustment age:</span>{" "}
+                    {focusedListingOpsContext?.adjustmentAt
+                      ? formatAgeLabel(focusedListingOpsContext.adjustmentAt)
+                      : "No adjustment timestamp"}
+                  </p>
+                  <p>
+                    <span className="text-foreground/46">Retention since change:</span>{" "}
+                    {focusedListingOpsContext
+                      ? `${focusedListingOpsContext.sameSellerPostAdjustmentCount} retained · ${focusedListingOpsContext.crossSellerPostAdjustmentCount} branched`
+                      : "No linked listing context"}
+                  </p>
                 </div>
               </div>
               <div className="rounded-[1.25rem] border border-border bg-background p-4">
@@ -2896,6 +3533,7 @@ export function TransactionSupportPanel() {
             >
               {(() => {
                 const trustSummary = getSellerTrustSummary(item.seller_id);
+                const listingOpsContext = listingOpsContextByItemKey.get(`${item.kind}:${item.id}`) ?? null;
                 return (
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="space-y-3 lg:flex-1">
@@ -2953,8 +3591,8 @@ export function TransactionSupportPanel() {
                         Unassigned
                       </span>
                     ) : null}
-                    <span className="text-xs text-foreground/48">#{truncateId(item.id)}</span>
-                  </div>
+                      <span className="text-xs text-foreground/48">#{truncateId(item.id)}</span>
+                    </div>
 
                   <div>
                     <h3 className="text-xl font-semibold tracking-[-0.03em] text-foreground">
@@ -2971,6 +3609,77 @@ export function TransactionSupportPanel() {
                       </button>
                     </div>
                   </div>
+
+                  {listingOpsContext ? (
+                    <div className="rounded-[1.25rem] border border-border bg-surface p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">
+                            Listing Ops Context
+                          </p>
+                          <p className="mt-1 text-sm font-medium text-foreground">
+                            {listingOpsContext.listing.title}
+                          </p>
+                          <p className="mt-1 text-sm text-foreground/64">
+                            {titleCaseFilterLabel(listingOpsContext.adjustmentType)} ·{" "}
+                            <span className={getListingTrendToneClass(listingOpsContext.retentionTrendKey)}>
+                              {listingOpsContext.retentionTrendLabel}
+                            </span>
+                          </p>
+                        </div>
+                        <div className="text-right text-xs text-foreground/50">
+                          <p>
+                            {listingOpsContext.adjustmentAt
+                              ? `Adjusted ${formatAgeLabel(listingOpsContext.adjustmentAt)} ago`
+                              : "No adjustment timestamp"}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-4">
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                            Last Change
+                          </p>
+                          <p className="mt-1 text-foreground">
+                            {listingOpsContext.adjustmentSummary?.trim() || "No operating adjustment recorded"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                            Since Change
+                          </p>
+                          <p className="mt-1 text-foreground">
+                            {listingOpsContext.sameSellerPostAdjustmentCount} retained ·{" "}
+                            {listingOpsContext.crossSellerPostAdjustmentCount} branched
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                            Follow-On Mix
+                          </p>
+                          <p className="mt-1 text-foreground">
+                            {listingOpsContext.sameSellerCount} same-seller · {listingOpsContext.crossSellerCount} cross-seller
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                            Browse Pressure
+                          </p>
+                          <p className="mt-1 text-foreground">
+                            {(() => {
+                              const browseContext = getTransactionBrowseContext(item);
+                              const browseSignals = [
+                                isPriceDrivenBrowseContext(browseContext) ? "Price-led" : null,
+                                isSearchDrivenBrowseContext(browseContext) ? "Search-led" : null,
+                                isLocalDrivenBrowseContext(browseContext) ? "Local-fit" : null,
+                              ].filter(Boolean);
+                              return browseSignals.length > 0 ? browseSignals.join(" · ") : "No browse signal";
+                            })()}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
 
                     <div className="grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-4">
                     <div>

@@ -637,6 +637,176 @@
         }
       }
     },
+    "/listings/admin": {
+      "get": {
+        "tags": [
+          "listings"
+        ],
+        "summary": "Read Admin Listings",
+        "operationId": "read_admin_listings_listings_admin_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ListingRead"
+                  },
+                  "title": "Response Read Admin Listings Listings Admin Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/listings/ai-assist": {
+      "post": {
+        "tags": [
+          "listings"
+        ],
+        "summary": "Request Ai Listing Suggestion",
+        "operationId": "request_ai_listing_suggestion_listings_ai_assist_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListingAiAssistRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingAiAssistResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/listings/{listing_id}/price-insights": {
+      "get": {
+        "tags": [
+          "listings"
+        ],
+        "summary": "Read Listing Price Insight",
+        "operationId": "read_listing_price_insight_listings__listing_id__price_insights_get",
+        "parameters": [
+          {
+            "name": "listing_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Listing Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingPriceInsight"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/listings/{listing_id}": {
       "get": {
         "tags": [
@@ -3443,6 +3613,187 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "ListingAiAssistRequest": {
+        "properties": {
+          "listing_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Id"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "highlights": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Highlights"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tone"
+          }
+        },
+        "type": "object",
+        "title": "ListingAiAssistRequest"
+      },
+      "ListingAiAssistResponse": {
+        "properties": {
+          "listing_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Id"
+          },
+          "suggestion": {
+            "$ref": "#/components/schemas/ListingAiAssistSuggestion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "suggestion"
+        ],
+        "title": "ListingAiAssistResponse"
+      },
+      "ListingAiAssistSuggestion": {
+        "properties": {
+          "suggested_title": {
+            "type": "string",
+            "title": "Suggested Title"
+          },
+          "suggested_description": {
+            "type": "string",
+            "title": "Suggested Description"
+          },
+          "suggested_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Suggested Tags"
+          },
+          "suggested_category_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Category Id"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "suggested_title",
+          "suggested_description",
+          "suggested_tags",
+          "summary"
+        ],
+        "title": "ListingAiAssistSuggestion"
+      },
       "ListingCreate": {
         "properties": {
           "seller_id": {
@@ -3750,6 +4101,89 @@
         ],
         "title": "ListingListResponse"
       },
+      "ListingPriceInsight": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "title": "Listing Id"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "sample_size": {
+            "type": "integer",
+            "title": "Sample Size"
+          },
+          "min_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Price Cents"
+          },
+          "max_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Price Cents"
+          },
+          "avg_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Price Cents"
+          },
+          "median_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Price Cents"
+          },
+          "suggested_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Price Cents"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "listing_id",
+          "currency",
+          "sample_size",
+          "summary"
+        ],
+        "title": "ListingPriceInsight"
+      },
       "ListingRead": {
         "properties": {
           "id": {
@@ -3925,6 +4359,43 @@
           "updated_at": {
             "type": "string",
             "title": "Updated At"
+          },
+          "last_operating_adjustment_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Operating Adjustment At"
+          },
+          "last_operating_adjustment_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Operating Adjustment Summary"
+          },
+          "available_today": {
+            "type": "boolean",
+            "title": "Available Today",
+            "default": false
+          },
+          "is_new_listing": {
+            "type": "boolean",
+            "title": "Is New Listing",
+            "default": false
+          },
+          "recent_transaction_count": {
+            "type": "integer",
+            "title": "Recent Transaction Count",
+            "default": 0
           }
         },
         "type": "object",

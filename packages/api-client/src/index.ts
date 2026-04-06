@@ -125,6 +125,10 @@ export type ListingCreateInput = ApiSchemaMap["ListingCreate"];
 export type ListingImageCreateInput = ApiSchemaMap["ListingImageCreate"];
 export type ListingImageUploadCreateInput = ApiSchemaMap["ListingImageUploadCreate"];
 export type ListingUpdateInput = ApiSchemaMap["ListingUpdate"];
+export type ListingAiAssistRequest = ApiSchemaMap["ListingAiAssistRequest"];
+export type ListingAiAssistSuggestion = ApiSchemaMap["ListingAiAssistSuggestion"];
+export type ListingAiAssistResponse = ApiSchemaMap["ListingAiAssistResponse"];
+export type ListingPriceInsight = ApiSchemaMap["ListingPriceInsight"];
 export type OrderCreateInput = ApiSchemaMap["OrderCreate"];
 export type OrderStatusUpdateInput = ApiSchemaMap["OrderStatusUpdate"];
 export type SellerCreateInput = ApiSchemaMap["SellerCreate"];
@@ -157,6 +161,7 @@ export type AdminTransactionsData = {
   bookings: BookingAdmin[];
   admins: AdminUser[];
   deliveries: NotificationDelivery[];
+  listings: Listing[];
 };
 export type AdminDeliveriesData = {
   admins: AdminUser[];
@@ -204,6 +209,7 @@ export const apiRoutes = {
   listingById: (listingId: string) => `/listings/${listingId}`,
   listingImages: (listingId: string) => `/listings/${listingId}/images`,
   listingImageUpload: (listingId: string) => `/listings/${listingId}/images/upload`,
+  listingPriceInsight: (listingId: string) => `/listings/${listingId}/price-insights`,
   orderById: (orderId: string) => `/orders/${orderId}`,
   bookingById: (bookingId: string) => `/bookings/${bookingId}`,
 } as const;
@@ -379,6 +385,14 @@ export function createApiClient(baseUrl: string) {
     return patch<Listing>(apiRoutes.listingById(listingId), body, options);
   }
 
+  function getListingPriceInsight(listingId: string, options: RequestConfig) {
+    return get<ListingPriceInsight>(apiRoutes.listingPriceInsight(listingId), options);
+  }
+
+  function assistListing(body: ListingAiAssistRequest, options: RequestConfig) {
+    return post<ListingAiAssistResponse>("/listings/ai-assist", body, options);
+  }
+
   function addListingImage(
     listingId: string,
     body: ListingImageCreateInput,
@@ -498,11 +512,12 @@ export function createApiClient(baseUrl: string) {
   }
 
   async function loadAdminTransactions(accessToken: string): Promise<AdminTransactionsData> {
-    const [orders, bookings, admins, deliveries] = await Promise.all([
+    const [orders, bookings, admins, deliveries, listings] = await Promise.all([
       get<OrderAdmin[]>("/orders/admin", { accessToken }),
       get<BookingAdmin[]>("/bookings/admin", { accessToken }),
       get<AdminUser[]>("/admin/users", { accessToken }),
       get<NotificationDelivery[]>("/notifications/admin", { accessToken }),
+      get<Listing[]>("/listings/admin", { accessToken }),
     ]);
 
     return {
@@ -510,6 +525,7 @@ export function createApiClient(baseUrl: string) {
       bookings,
       admins,
       deliveries,
+      listings,
     };
   }
 
@@ -589,6 +605,7 @@ export function createApiClient(baseUrl: string) {
     getSellerReviewsBySlug,
     getMyReviewLookup,
     getListingById,
+    getListingPriceInsight,
     getOrderById,
     getBookingById,
     updateOrderStatus,
@@ -600,6 +617,7 @@ export function createApiClient(baseUrl: string) {
     createSellerProfile,
     createListing,
     updateListing,
+    assistListing,
     addListingImage,
     uploadListingImage,
     deleteListingImage,

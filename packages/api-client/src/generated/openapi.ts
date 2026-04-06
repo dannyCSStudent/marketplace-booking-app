@@ -114,6 +114,32 @@ export type HTTPValidationError = {
     detail?: ValidationError[];
   };
 
+export type ListingAiAssistRequest = {
+    listing_id?: string | null;
+    title?: string | null;
+    description?: string | null;
+    type?: string | null;
+    category_id?: string | null;
+    city?: string | null;
+    state?: string | null;
+    country?: string | null;
+    highlights?: string | null;
+    tone?: string | null;
+  };
+
+export type ListingAiAssistResponse = {
+    listing_id?: string | null;
+    suggestion: ListingAiAssistSuggestion;
+  };
+
+export type ListingAiAssistSuggestion = {
+    suggested_title: string;
+    suggested_description: string;
+    suggested_tags: string[];
+    suggested_category_id?: string | null;
+    summary: string;
+  };
+
 export type ListingCreate = {
     seller_id: string;
     category_id?: string | null;
@@ -165,6 +191,18 @@ export type ListingListResponse = {
     total: number;
   };
 
+export type ListingPriceInsight = {
+    listing_id: string;
+    currency: string;
+    sample_size: number;
+    min_price_cents?: number | null;
+    max_price_cents?: number | null;
+    avg_price_cents?: number | null;
+    median_price_cents?: number | null;
+    suggested_price_cents?: number | null;
+    summary: string;
+  };
+
 export type ListingRead = {
     id: string;
     seller_id: string;
@@ -191,6 +229,11 @@ export type ListingRead = {
     images?: ListingImageRead[];
     created_at: string;
     updated_at: string;
+    last_operating_adjustment_at?: string | null;
+    last_operating_adjustment_summary?: string | null;
+    available_today?: boolean;
+    is_new_listing?: boolean;
+    recent_transaction_count?: number;
   };
 
 export type ListingUpdate = {
@@ -538,11 +581,15 @@ export type ApiSchemaMap = {
   BookingStatusEventRead: BookingStatusEventRead;
   BookingStatusUpdate: BookingStatusUpdate;
   HTTPValidationError: HTTPValidationError;
+  ListingAiAssistRequest: ListingAiAssistRequest;
+  ListingAiAssistResponse: ListingAiAssistResponse;
+  ListingAiAssistSuggestion: ListingAiAssistSuggestion;
   ListingCreate: ListingCreate;
   ListingImageCreate: ListingImageCreate;
   ListingImageRead: ListingImageRead;
   ListingImageUploadCreate: ListingImageUploadCreate;
   ListingListResponse: ListingListResponse;
+  ListingPriceInsight: ListingPriceInsight;
   ListingRead: ListingRead;
   ListingUpdate: ListingUpdate;
   NotificationDeliveryBulkActionFailure: NotificationDeliveryBulkActionFailure;
@@ -645,6 +692,17 @@ export type ApiOperations = {
       response: ListingRead;
     };
   };
+  "/listings/admin": {
+    get: {
+      response: ListingRead[];
+    };
+  };
+  "/listings/ai-assist": {
+    post: {
+      requestBody: ListingAiAssistRequest;
+      response: ListingAiAssistResponse;
+    };
+  };
   "/listings/me": {
     get: {
       response: ListingRead[];
@@ -674,6 +732,11 @@ export type ApiOperations = {
   "/listings/{listing_id}/images/{image_id}": {
     delete: {
       response: ListingImageRead;
+    };
+  };
+  "/listings/{listing_id}/price-insights": {
+    get: {
+      response: ListingPriceInsight;
     };
   };
   "/notifications/admin": {

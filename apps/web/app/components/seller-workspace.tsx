@@ -26,7 +26,10 @@ import type {
   SellerCreateInput,
   SellerProfile,
   SellerWorkspaceData,
+  ListingAiAssistSuggestion,
+  ListingPriceInsight,
 } from "@/app/lib/api";
+import type { NotificationDeliveryBulkRetryResult } from "@repo/api-client";
 
 type WorkspaceState = {
   seller: SellerProfile;
@@ -51,6 +54,18 @@ type ListingDraft = {
 type ListingImageDraft = {
   image_url: string;
   alt_text: string;
+};
+
+type ListingAiState = {
+  loading: boolean;
+  error: string | null;
+  suggestion: ListingAiAssistSuggestion | null;
+};
+
+type ListingPriceInsightState = {
+  loading: boolean;
+  error: string | null;
+  insight: ListingPriceInsight | null;
 };
 
 type ActionFeedback = {
@@ -145,6 +160,22 @@ function titleCaseWorkspaceLabel(value: string) {
     .join(" ");
 }
 
+function getPressureLanePillClass(lane: "support" | "drag" | "recovery" | "trust") {
+  if (lane === "support") {
+    return "border-sky-200 bg-sky-50 text-sky-700";
+  }
+
+  if (lane === "drag") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  if (lane === "recovery") {
+    return "border-lime-200 bg-lime-50 text-lime-700";
+  }
+
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
 function formatBuyerBrowseContextLabel(value: string | null | undefined) {
   if (!value) {
     return null;
@@ -169,6 +200,20 @@ function isPriceDrivenBrowseContext(value: string | null | undefined) {
   return (
     normalized?.includes("lowest price") ||
     normalized?.includes("highest price") ||
+    false
+  );
+}
+
+function isSameSellerFollowOnBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return normalized?.includes("same seller follow-on") ?? false;
+}
+
+function isCrossSellerFollowOnBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return (
+    normalized?.includes("cross-seller follow-on") ||
+    normalized?.includes("cross seller follow-on") ||
     false
   );
 }
@@ -201,6 +246,479 @@ function matchesActivityRecency(
   return isRecentTransactionEvent(history, 7);
 }
 
+function getLatestTransactionTimestamp(transaction: Order | Booking) {
+  const latestHistoryEvent =
+    transaction.status_history && transaction.status_history.length > 0
+      ? transaction.status_history[0]?.created_at
+      : null;
+
+  if (!latestHistoryEvent) {
+    return 0;
+  }
+
+  return new Date(latestHistoryEvent).getTime();
+}
+
+function getListingAdjustmentTimestamp(listing: Listing) {
+  if (!listing.last_operating_adjustment_at) {
+    return null;
+  }
+
+  const parsed = new Date(listing.last_operating_adjustment_at).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function getTransactionListingId(transaction: Order | Booking) {
+  if ("items" in transaction) {
+    return transaction.items?.[0]?.listing_id ?? null;
+  }
+
+  if ("listing_id" in transaction) {
+    return transaction.listing_id ?? null;
+  }
+
+  return null;
+}
+
+function getListingRetentionTone(input: {
+  sameSellerCount: number;
+  crossSellerCount: number;
+}) {
+  if (input.sameSellerCount === 0 && input.crossSellerCount === 0) {
+    return {
+      label: "No follow-on yet",
+      toneClass: "text-foreground/52",
+    };
+  }
+
+  if (input.sameSellerCount >= input.crossSellerCount) {
+    return {
+      label: "Holding repeat demand",
+      toneClass: "text-olive",
+    };
+  }
+
+  return {
+    label: "Losing buyers to other sellers",
+    toneClass: "text-rose-700",
+  };
+}
+
+function getListingLeakageLabel(input: {
+  localCount: number;
+  searchCount: number;
+  priceCount: number;
+  crossSellerCount: number;
+}) {
+  if (input.crossSellerCount === 0) {
+    return null;
+  }
+
+  const rankedSignals = [
+    { label: "price-led", count: input.priceCount },
+    { label: "search-led", count: input.searchCount },
+    { label: "local-fit", count: input.localCount },
+  ].sort((left, right) => right.count - left.count);
+
+  const primarySignal = rankedSignals[0];
+  if (!primarySignal || primarySignal.count === 0) {
+    return "General branching";
+  }
+
+  const secondarySignal = rankedSignals[1];
+  if (secondarySignal && secondarySignal.count === primarySignal.count && primarySignal.count > 0) {
+    return "Mixed leakage";
+  }
+
+  return `Mostly ${primarySignal.label}`;
+}
+
+function getListingLeakageTuneAction(input: {
+  listing: Listing;
+  localCount: number;
+  searchCount: number;
+  priceCount: number;
+}) {
+  const rankedSignals = [
+    {
+      label: "price",
+      count: input.priceCount,
+      actionLabel: "Tune Pricing",
+      target: "pricing" as const,
+    },
+    {
+      label: "local",
+      count: input.localCount,
+      actionLabel: "Tune Local Fit",
+      target: "booking" as const,
+    },
+    {
+      label: "search",
+      count: input.searchCount,
+      actionLabel: "Tune Listing Fit",
+      target: getListingOperatingRole(input.listing) === "order-led" ? "fulfillment" as const : "booking" as const,
+    },
+  ].sort((left, right) => right.count - left.count);
+
+  const primarySignal = rankedSignals[0];
+  if (!primarySignal || primarySignal.count === 0) {
+    return null;
+  }
+
+  return {
+    label: primarySignal.actionLabel,
+    target: primarySignal.target,
+  };
+}
+
+function getListingRetentionTrend(input: {
+  sameSellerCount: number;
+  crossSellerCount: number;
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerPostAdjustmentCount?: number;
+  crossSellerPostAdjustmentCount?: number;
+}) {
+  const totalPostAdjustment =
+    (input.sameSellerPostAdjustmentCount ?? 0) + (input.crossSellerPostAdjustmentCount ?? 0);
+  if (totalPostAdjustment > 0) {
+    const totalAllTime = input.sameSellerCount + input.crossSellerCount;
+    const overallRetentionRate = totalAllTime > 0 ? input.sameSellerCount / totalAllTime : 0;
+    const postAdjustmentRetentionRate =
+      (input.sameSellerPostAdjustmentCount ?? 0) / totalPostAdjustment;
+
+    if (postAdjustmentRetentionRate - overallRetentionRate >= 0.15) {
+      return {
+        label: "Improving since change",
+        toneClass: "text-olive",
+      };
+    }
+
+    if (overallRetentionRate - postAdjustmentRetentionRate >= 0.15) {
+      return {
+        label: "Softening since change",
+        toneClass: "text-rose-700",
+      };
+    }
+
+    return {
+      label: "Stable since change",
+      toneClass: "text-foreground/68",
+    };
+  }
+
+  const totalAllTime = input.sameSellerCount + input.crossSellerCount;
+  const totalRecent = input.sameSellerRecentCount + input.crossSellerRecentCount;
+
+  if (totalRecent === 0) {
+    return {
+      label: "No recent signal",
+      toneClass: "text-foreground/52",
+    };
+  }
+
+  if (totalAllTime === 0) {
+    return {
+      label: "Recent signal only",
+      toneClass: "text-sky-700",
+    };
+  }
+
+  const overallRetentionRate = input.sameSellerCount / totalAllTime;
+  const recentRetentionRate = input.sameSellerRecentCount / totalRecent;
+
+  if (recentRetentionRate - overallRetentionRate >= 0.15) {
+    return {
+      label: "Improving recently",
+      toneClass: "text-olive",
+    };
+  }
+
+  if (overallRetentionRate - recentRetentionRate >= 0.15) {
+    return {
+      label: "Softening recently",
+      toneClass: "text-rose-700",
+    };
+  }
+
+  return {
+    label: "Stable recently",
+    toneClass: "text-foreground/68",
+  };
+}
+
+function getListingRetentionTrendKey(input: {
+  sameSellerCount: number;
+  crossSellerCount: number;
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerPostAdjustmentCount?: number;
+  crossSellerPostAdjustmentCount?: number;
+}): "all" | "improving" | "softening" | "stable" | "no-signal" {
+  const trend = getListingRetentionTrend(input);
+  if (trend.label.includes("Improving")) {
+    return "improving";
+  }
+  if (trend.label.includes("Softening")) {
+    return "softening";
+  }
+  if (trend.label.includes("Stable")) {
+    return "stable";
+  }
+  return "no-signal";
+}
+
+function getListingAdjustmentType(
+  summary: string | null | undefined,
+): "all" | "pricing" | "local-fit" | "booking" | "fulfillment" | "other" {
+  const normalized = summary?.toLowerCase() ?? "";
+  if (!normalized) {
+    return "other";
+  }
+
+  if (normalized.includes("pricing")) {
+    return "pricing";
+  }
+
+  if (normalized.includes("local fit")) {
+    return "local-fit";
+  }
+
+  if (
+    normalized.includes("booking mode") ||
+    normalized.includes("duration") ||
+    normalized.includes("lead time")
+  ) {
+    return "booking";
+  }
+
+  if (
+    normalized.includes("pickup") ||
+    normalized.includes("meetup") ||
+    normalized.includes("delivery") ||
+    normalized.includes("shipping")
+  ) {
+    return "fulfillment";
+  }
+
+  return "other";
+}
+
+function getListingAdjustmentTuneAction(summary: string | null | undefined) {
+  const adjustmentType = getListingAdjustmentType(summary);
+
+  if (adjustmentType === "pricing") {
+    return {
+      label: "Tune Pricing",
+      target: "pricing" as const,
+    };
+  }
+
+  if (adjustmentType === "local-fit") {
+    return {
+      label: "Tune Local Fit",
+      target: "booking" as const,
+    };
+  }
+
+  if (adjustmentType === "booking") {
+    return {
+      label: "Tune Booking",
+      target: "booking" as const,
+    };
+  }
+
+  if (adjustmentType === "fulfillment") {
+    return {
+      label: "Tune Fulfillment",
+      target: "fulfillment" as const,
+    };
+  }
+
+  return null;
+}
+
+function getListingPreviewRetentionTrendLabel(input: {
+  sameSellerCount: number;
+  crossSellerCount: number;
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerPostAdjustmentCount: number;
+  crossSellerPostAdjustmentCount: number;
+}) {
+  return getListingRetentionTrend(input).label;
+}
+
+function getListingPreviewRetentionTrendToneClass(label: string) {
+  if (label.includes("Improving")) {
+    return "border-olive/20 bg-olive/10 text-olive";
+  }
+
+  if (label.includes("Softening")) {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  if (label.includes("Stable")) {
+    return "border-border bg-background/40 text-foreground/68";
+  }
+
+  return "border-sky-200 bg-sky-50 text-sky-700";
+}
+
+function getDeliveryLaneConcentrationLabel(share: number | null, mode: "drag" | "recovery") {
+  if (share == null) {
+    return null;
+  }
+
+  const qualifier =
+    share >= 0.7 ? "Highly concentrated" : share >= 0.45 ? "Moderately concentrated" : "Spread out";
+  const percent = Math.round(share * 100);
+
+  return `${qualifier} ${mode === "drag" ? "drag" : "recovery"} · top listing ${percent}%`;
+}
+
+function getTrustLaneConcentrationLabel(share: number | null) {
+  if (share == null) {
+    return null;
+  }
+
+  const qualifier =
+    share >= 0.7 ? "Highly concentrated" : share >= 0.45 ? "Moderately concentrated" : "Spread out";
+  const percent = Math.round(share * 100);
+
+  return `${qualifier} trust watch · top listing ${percent}%`;
+}
+
+function getSupportLaneConcentrationLabel(share: number | null) {
+  if (share == null) {
+    return null;
+  }
+
+  const qualifier =
+    share >= 0.7 ? "Highly concentrated" : share >= 0.45 ? "Moderately concentrated" : "Spread out";
+  const percent = Math.round(share * 100);
+
+  return `${qualifier} support watch · top listing ${percent}%`;
+}
+
+function getListingSupportPressure(input: {
+  failedDeliveryCount: number;
+  queuedDeliveryCount: number;
+  retentionTrendLabel: string | null;
+  hasReviewPressure: boolean;
+}) {
+  const isSoftening = input.retentionTrendLabel?.toLowerCase().includes("softening") ?? false;
+
+  if (input.failedDeliveryCount > 0 && isSoftening) {
+    return {
+      label: "Support pressure",
+      detail: `Softening + ${input.failedDeliveryCount} failed deliver${input.failedDeliveryCount === 1 ? "y" : "ies"}`,
+      toneClass: "border-red-200 bg-red-50 text-red-700",
+    };
+  }
+
+  if (input.failedDeliveryCount > 0) {
+    return {
+      label: "Delivery pressure",
+      detail: `${input.failedDeliveryCount} failed deliver${input.failedDeliveryCount === 1 ? "y" : "ies"}`,
+      toneClass: "border-red-200 bg-red-50 text-red-700",
+    };
+  }
+
+  if (input.queuedDeliveryCount > 0 && isSoftening) {
+    return {
+      label: "Support watch",
+      detail: `Softening + ${input.queuedDeliveryCount} queued alert${input.queuedDeliveryCount === 1 ? "" : "s"}`,
+      toneClass: "border-amber-200 bg-amber-50 text-amber-800",
+    };
+  }
+
+  if (input.hasReviewPressure) {
+    return {
+      label: "Trust watch",
+      detail: "Seller review pressure is elevated",
+      toneClass: "border-rose-200 bg-rose-50 text-rose-700",
+    };
+  }
+
+  return null;
+}
+
+function getListingSupportPressureLaneMode(input: {
+  failedDeliveryCount: number;
+  queuedDeliveryCount: number;
+  supportPressureLabel: string | null;
+}) {
+  if (input.failedDeliveryCount > 0) {
+    return "failed" as const;
+  }
+
+  if (input.queuedDeliveryCount > 0) {
+    return "queued" as const;
+  }
+
+  if (input.supportPressureLabel === "Trust watch") {
+    return "trust" as const;
+  }
+
+  return null;
+}
+
+function getListingSupportPressureLaneLabel(mode: "failed" | "queued" | "trust") {
+  if (mode === "failed") {
+    return "Open Delivery Pressure Lane";
+  }
+
+  if (mode === "queued") {
+    return "Open Support Watch Lane";
+  }
+
+  return "Open Trust Watch Lane";
+}
+
+function getListingSupportPressureLaneCountLabel(
+  mode: "failed" | "queued" | "trust",
+  count: number,
+) {
+  if (mode === "failed") {
+    return `${count} failed alert${count === 1 ? "" : "s"}`;
+  }
+
+  if (mode === "queued") {
+    return `${count} queued alert${count === 1 ? "" : "s"}`;
+  }
+
+  return `${count} related transaction${count === 1 ? "" : "s"}`;
+}
+
+function getListingSupportPressureDriverLabel(mode: "failed" | "queued" | "trust") {
+  if (mode === "failed") {
+    return "Failed alerts";
+  }
+
+  if (mode === "queued") {
+    return "Queued alerts";
+  }
+
+  return "Trust watch";
+}
+
+function getListingSupportPressureLanePriority(mode: "failed" | "queued" | "trust" | null) {
+  if (mode === "failed") {
+    return 3;
+  }
+
+  if (mode === "queued") {
+    return 2;
+  }
+
+  if (mode === "trust") {
+    return 1;
+  }
+
+  return 0;
+}
+
 export function SellerWorkspace() {
   const pathname = usePathname();
   const router = useRouter();
@@ -228,6 +746,11 @@ export function SellerWorkspace() {
   const [listingImageDrafts, setListingImageDrafts] = useState<Record<string, ListingImageDraft>>(
     {},
   );
+  const [listingAiState, setListingAiState] = useState<Record<string, ListingAiState>>({});
+  const [listingCreateAiState, setListingCreateAiState] = useState<ListingAiState | null>(null);
+  const [listingPriceInsights, setListingPriceInsights] = useState<
+    Record<string, ListingPriceInsightState>
+  >({});
   const [listingImageActionLoading, setListingImageActionLoading] = useState<string | null>(null);
   const [reviewResponseLoading, setReviewResponseLoading] = useState<string | null>(null);
   const [responseNotes, setResponseNotes] = useState<Record<string, string>>({});
@@ -246,11 +769,21 @@ export function SellerWorkspace() {
     () => searchParams.get("activityStatus") ?? "all",
   );
   const [activityDiscoveryFilter, setActivityDiscoveryFilter] = useState<
-    "all" | "local" | "search" | "price"
+    "all" | "local" | "search" | "price" | "same-seller" | "cross-seller"
   >(
     () =>
-      (searchParams.get("activityDiscovery") as "all" | "local" | "search" | "price") ??
-      "all",
+      (
+        searchParams.get("activityDiscovery") as
+          | "all"
+          | "local"
+          | "search"
+          | "price"
+          | "same-seller"
+          | "cross-seller"
+      ) ?? "all",
+  );
+  const [activityListingFilter, setActivityListingFilter] = useState<string>(
+    () => searchParams.get("activityListing") ?? "all",
   );
   const [activityRecencyFilter, setActivityRecencyFilter] = useState<"7d" | "all">(
     () => (searchParams.get("activityWindow") as "7d" | "all") ?? "all",
@@ -258,16 +791,148 @@ export function SellerWorkspace() {
   const [activityContextFilter, setActivityContextFilter] = useState<"all" | "unread" | "focused">(
     () => (searchParams.get("activityContext") as "all" | "unread" | "focused") ?? "all",
   );
-  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<"all" | "queued" | "sent" | "failed">(
-    () => (searchParams.get("deliveryStatus") as "all" | "queued" | "sent" | "failed") ?? "all",
-  );
-  const [deliveryRecencyFilter, setDeliveryRecencyFilter] = useState<"today" | "7d" | "all">(
-    () => (searchParams.get("deliveryWindow") as "today" | "7d" | "all") ?? "7d",
-  );
-  const [workspacePreset, setWorkspacePreset] = useState<"default" | "needs-action" | "recent-failures" | "focused-work">(
+  type ActivitySortMode = "default" | "pressured" | "drag" | "recovery";
+  const [activitySortMode, setActivitySortMode] = useState<ActivitySortMode>(
     () =>
-      (searchParams.get("preset") as "default" | "needs-action" | "recent-failures" | "focused-work") ??
-      "default",
+      (
+        searchParams.get("activitySort") as ActivitySortMode
+      ) ?? "default",
+  );
+  const [activityPressureFilter, setActivityPressureFilter] = useState<"all" | "delivery" | "trust">(
+    () => (searchParams.get("activityPressure") as "all" | "delivery" | "trust") ?? "all",
+  );
+  const [activityRecoveryFilter, setActivityRecoveryFilter] = useState<"all" | "easing">(
+    () => (searchParams.get("activityRecovery") as "all" | "easing") ?? "all",
+  );
+  type DeliveryStatusFilter = "all" | "queued" | "sent" | "failed";
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<DeliveryStatusFilter>(
+    () => (searchParams.get("deliveryStatus") as DeliveryStatusFilter) ?? "all",
+  );
+  type DeliveryRecencyFilter = "today" | "7d" | "all";
+  const [deliveryRecencyFilter, setDeliveryRecencyFilter] = useState<DeliveryRecencyFilter>(
+    () => (searchParams.get("deliveryWindow") as DeliveryRecencyFilter) ?? "7d",
+  );
+  type WorkspacePreset =
+    | "default"
+    | "needs-action"
+    | "recent-failures"
+    | "focused-work"
+    | "pressure-queue"
+    | "delivery-drag"
+    | "delivery-pressure"
+    | "trust-watch"
+    | "recovery-lane"
+    | "recovered-recently";
+
+  const [workspacePreset, setWorkspacePreset] = useState<WorkspacePreset>(
+    () =>
+      (
+        searchParams.get("preset") as WorkspacePreset
+      ) ?? "default",
+  );
+
+  type ListingAdjustmentFilter =
+    | "all"
+    | "pricing"
+    | "local-fit"
+    | "booking"
+    | "fulfillment"
+    | "other";
+  type ListingTrendFilter = "all" | "improving" | "softening" | "stable" | "no-signal";
+
+  type ActivityFilterConfig = {
+    preset: WorkspacePreset;
+    activityType: "all" | "order" | "booking";
+    activityStatus: "all";
+    activityDiscovery: "all" | "local" | "search" | "price" | "same-seller" | "cross-seller";
+    activityListing?: string | null;
+    activityRecency: "all" | "7d";
+    activityContext: "all" | "unread" | "focused";
+    activityPressure: "all" | "delivery" | "trust";
+    activitySort: ActivitySortMode;
+    activityRecovery: "all" | "easing";
+    deliveryStatus: DeliveryStatusFilter;
+    deliveryRecency: DeliveryRecencyFilter;
+    listingAdjustment: ListingAdjustmentFilter;
+    listingTrend: ListingTrendFilter;
+  };
+
+  function applyActivityFilters(config: ActivityFilterConfig) {
+    // Keep every workspace view in sync by mutating the complete filter bundle in one place.
+    setWorkspacePreset(config.preset);
+    setActivityTypeFilter(config.activityType);
+    setActivityStatusFilter(config.activityStatus);
+    setActivityDiscoveryFilter(config.activityDiscovery);
+    setActivityListingFilter(config.activityListing ?? "all");
+    setActivityRecencyFilter(config.activityRecency);
+    setActivityContextFilter(config.activityContext);
+    setActivityPressureFilter(config.activityPressure);
+    setActivitySortMode(config.activitySort);
+    setActivityRecoveryFilter(config.activityRecovery);
+    setDeliveryStatusFilter(config.deliveryStatus);
+    setDeliveryRecencyFilter(config.deliveryRecency);
+    setListingAdjustmentFilter(config.listingAdjustment);
+    setListingTrendFilter(config.listingTrend);
+  }
+
+  function buildCurrentActivityFilterConfig(): ActivityFilterConfig {
+    return {
+      preset: workspacePreset,
+      activityType: activityTypeFilter,
+      activityStatus: activityStatusFilter as "all",
+      activityDiscovery: activityDiscoveryFilter,
+      activityListing: activityListingFilter,
+      activityRecency: activityRecencyFilter,
+      activityContext: activityContextFilter,
+      activityPressure: activityPressureFilter,
+      activitySort: activitySortMode,
+      activityRecovery: activityRecoveryFilter,
+      deliveryStatus: deliveryStatusFilter,
+      deliveryRecency: deliveryRecencyFilter,
+      listingAdjustment: listingAdjustmentFilter,
+      listingTrend: listingTrendFilter,
+    };
+  }
+
+  function updateListingAdjustmentFilter(value: ListingAdjustmentFilter) {
+    applyActivityFilters({
+      ...buildCurrentActivityFilterConfig(),
+      listingAdjustment: value,
+    });
+  }
+
+  function updateListingTrendFilterValue(value: ListingTrendFilter) {
+    applyActivityFilters({
+      ...buildCurrentActivityFilterConfig(),
+      listingTrend: value,
+    });
+  }
+  const [listingAdjustmentFilter, setListingAdjustmentFilter] = useState<
+    "all" | "pricing" | "local-fit" | "booking" | "fulfillment" | "other"
+  >(
+    () =>
+      (
+        searchParams.get("listingAdjustment") as
+          | "all"
+          | "pricing"
+          | "local-fit"
+          | "booking"
+          | "fulfillment"
+          | "other"
+      ) ?? "all",
+  );
+  const [listingTrendFilter, setListingTrendFilter] = useState<
+    "all" | "improving" | "softening" | "stable" | "no-signal"
+  >(
+    () =>
+      (
+        searchParams.get("listingTrend") as
+          | "all"
+          | "improving"
+          | "softening"
+          | "stable"
+          | "no-signal"
+      ) ?? "all",
   );
   const [highlightedListingControlKey, setHighlightedListingControlKey] = useState<string | null>(null);
   const [highlightedFocusedPanelKey, setHighlightedFocusedPanelKey] = useState<string | null>(null);
@@ -307,6 +972,7 @@ export function SellerWorkspace() {
     setPendingBulkAction(null);
     setCreateError(null);
     setCreateMessage(null);
+    setListingPriceInsights({});
   }, []);
 
   const loadWorkspace = useCallback(async (accessToken: string) => {
@@ -322,8 +988,10 @@ export function SellerWorkspace() {
       setResponseNotes({});
       setReviewResponseDrafts({});
       setNotificationDeliveries([]);
+      setListingPriceInsights({});
       return;
     }
+    setListingPriceInsights({});
     setWorkspace(nextWorkspace);
     const nextDrafts: Record<string, ListingDraft> = Object.fromEntries(
       nextWorkspace.listings.map((listing) => [
@@ -367,6 +1035,13 @@ export function SellerWorkspace() {
       ),
     );
   }, []);
+
+  function updateResponseNote(id: string, value: string) {
+    setResponseNotes((current) => ({
+      ...current,
+      [id]: value,
+    }));
+  }
 
   useEffect(() => {
     const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
@@ -492,6 +1167,10 @@ export function SellerWorkspace() {
   }, [searchParams]);
 
   useEffect(() => {
+    setActivityListingFilter(searchParams.get("activityListing") ?? "all");
+  }, [searchParams]);
+
+  useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
 
     if (activityTypeFilter === "all") {
@@ -512,6 +1191,12 @@ export function SellerWorkspace() {
       params.set("activityDiscovery", activityDiscoveryFilter);
     }
 
+    if (activityListingFilter === "all") {
+      params.delete("activityListing");
+    } else {
+      params.set("activityListing", activityListingFilter);
+    }
+
     if (activityRecencyFilter === "all") {
       params.delete("activityWindow");
     } else {
@@ -522,6 +1207,24 @@ export function SellerWorkspace() {
       params.delete("activityContext");
     } else {
       params.set("activityContext", activityContextFilter);
+    }
+
+    if (activityPressureFilter === "all") {
+      params.delete("activityPressure");
+    } else {
+      params.set("activityPressure", activityPressureFilter);
+    }
+
+    if (activityRecoveryFilter === "all") {
+      params.delete("activityRecovery");
+    } else {
+      params.set("activityRecovery", activityRecoveryFilter);
+    }
+
+    if (activitySortMode === "default") {
+      params.delete("activitySort");
+    } else {
+      params.set("activitySort", activitySortMode);
     }
 
     if (deliveryRecencyFilter === "7d") {
@@ -542,6 +1245,18 @@ export function SellerWorkspace() {
       params.set("preset", workspacePreset);
     }
 
+    if (listingAdjustmentFilter === "all") {
+      params.delete("listingAdjustment");
+    } else {
+      params.set("listingAdjustment", listingAdjustmentFilter);
+    }
+
+    if (listingTrendFilter === "all") {
+      params.delete("listingTrend");
+    } else {
+      params.set("listingTrend", listingTrendFilter);
+    }
+
     if (bulkExecutionMode === "best_effort") {
       params.delete("bulkMode");
     } else {
@@ -556,12 +1271,18 @@ export function SellerWorkspace() {
   }, [
     activityContextFilter,
     activityDiscoveryFilter,
+    activityListingFilter,
+    activityPressureFilter,
+    activityRecoveryFilter,
     activityRecencyFilter,
+    activitySortMode,
     activityStatusFilter,
     activityTypeFilter,
     bulkExecutionMode,
     deliveryStatusFilter,
     deliveryRecencyFilter,
+    listingAdjustmentFilter,
+    listingTrendFilter,
     pathname,
     router,
     searchParams,
@@ -612,28 +1333,35 @@ export function SellerWorkspace() {
 
         window.localStorage.setItem(SELLER_ACCESS_TOKEN_KEY, session.access_token);
         window.localStorage.setItem(SELLER_REFRESH_TOKEN_KEY, session.refresh_token);
-        await loadWorkspace(session.access_token);
+        executeSellerApiAction({
+          missingAccessTokenMessage: "Sign in again before loading seller workspace.",
+          errorMessage: "Unable to continue",
+          onFinally: () => setLoading(false),
+          successFeedback: {
+            tone: "success",
+            message: "Signed in to seller workspace.",
+          },
+          reloadWorkspace: false,
+          execute: () => loadWorkspace(session.access_token),
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to continue");
-      } finally {
         setLoading(false);
       }
     });
   }
 
   function handleCreateSellerProfile() {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken) {
-      setError("Sign in before creating a seller profile.");
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setActionFeedback(null);
-
-    startTransition(async () => {
-      try {
+    executeSellerApiAction({
+      missingAccessTokenMessage: "Sign in before creating a seller profile.",
+      errorMessage: "Unable to create seller profile",
+      onStart: () => {
+        setLoading(true);
+        setError(null);
+        setActionFeedback(null);
+      },
+      onFinally: () => setLoading(false),
+      execute: (accessToken) => {
         const sellerPayload: SellerCreateInput = {
           display_name: sellerName,
           slug: sellerSlug,
@@ -643,16 +1371,8 @@ export function SellerWorkspace() {
           country,
           accepts_custom_orders: true,
         };
-        await api.createSellerProfile(sellerPayload, {
-          accessToken,
-        });
-
-        await loadWorkspace(accessToken);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to create seller profile");
-      } finally {
-        setLoading(false);
-      }
+        return api.createSellerProfile(sellerPayload, { accessToken });
+      },
     });
   }
 
@@ -661,63 +1381,124 @@ export function SellerWorkspace() {
       return;
     }
 
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken) {
-      setCreateError("Sign in again before creating a listing.");
-      return;
-    }
+    const listingPayload: ListingCreateInput = {
+      seller_id: workspace.seller.id,
+      title,
+      description,
+      type: listingType,
+      price_cents: Number(price),
+      currency: "USD",
+      city: workspace.seller.city,
+      state: workspace.seller.state,
+      country: workspace.seller.country,
+      pickup_enabled: listingType !== "service",
+      meetup_enabled: true,
+      delivery_enabled: listingType === "hybrid",
+      shipping_enabled: false,
+      requires_booking: listingType !== "product",
+    };
 
-    setCreateError(null);
-    setCreateMessage(null);
-    setLoading(true);
-
-    startTransition(async () => {
-      try {
-        const listingPayload: ListingCreateInput = {
-          seller_id: workspace.seller.id,
-          title,
-          description,
-          type: listingType,
-          price_cents: Number(price),
-          currency: "USD",
-          city: workspace.seller.city,
-          state: workspace.seller.state,
-          country: workspace.seller.country,
-          pickup_enabled: listingType !== "service",
-          meetup_enabled: true,
-          delivery_enabled: listingType === "hybrid",
-          shipping_enabled: false,
-          requires_booking: listingType !== "product",
-        };
-        await api.createListing(listingPayload, {
-          accessToken,
-        });
-
-        await loadWorkspace(accessToken);
+    executeSellerApiAction({
+      missingAccessTokenMessage: "Sign in again before creating a listing.",
+      errorMessage: "Unable to create listing",
+      onStart: () => {
+        setCreateError(null);
+        setCreateMessage(null);
+        setLoading(true);
+      },
+      onFinally: () => setLoading(false),
+      onSuccess: () => {
         setCreateMessage("Listing created and workspace refreshed.");
-      } catch (err) {
-        setCreateError(err instanceof Error ? err.message : "Unable to create listing");
-      } finally {
-        setLoading(false);
-      }
+      },
+      execute: (accessToken) => api.createListing(listingPayload, { accessToken }),
     });
   }
 
-  function updateOrderStatus(orderId: string, status: string) {
+  function executeTransactionStatusUpdate(args: {
+    id: string;
+    kind: "order" | "booking";
+    status: string;
+    missingAccessTokenMessage: string;
+    errorMessage: string;
+    execute: (accessToken: string) => Promise<unknown>;
+  }) {
     const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     if (!accessToken) {
-      setError("Sign in again before updating orders.");
+      setError(args.missingAccessTokenMessage);
       return;
     }
 
-    setQueueLoading(orderId);
+    setQueueLoading(args.id);
     setError(null);
     setActionFeedback(null);
     setPendingBulkAction(null);
 
     startTransition(async () => {
       try {
-        await api.updateOrderStatus(
+        await args.execute(accessToken);
+        await loadWorkspace(accessToken);
+        setActionFeedback({
+          tone: "success",
+          message: `${args.kind === "order" ? "Order" : "Booking"} moved to ${args.status.replaceAll("_", " ")}.`,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : args.errorMessage);
+        setActionFeedback(null);
+      } finally {
+        setQueueLoading(null);
+      }
+    });
+  }
+
+  function executeSellerApiAction<Result = unknown>(args: {
+    missingAccessTokenMessage: string;
+    errorMessage: string;
+    execute: (accessToken: string) => Promise<Result>;
+    successFeedback?: ActionFeedback;
+    onSuccess?: (result: Result) => ActionFeedback | void;
+    onStart?: () => void;
+    onFinally?: () => void;
+    reloadWorkspace?: boolean;
+  }) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      setError(args.missingAccessTokenMessage);
+      return;
+    }
+
+    setError(null);
+    setActionFeedback(null);
+    setPendingBulkAction(null);
+    args.onStart?.();
+
+    startTransition(async () => {
+      try {
+        const result = await args.execute(accessToken);
+        if (args.reloadWorkspace ?? true) {
+          await loadWorkspace(accessToken);
+        }
+        const feedback = args.onSuccess?.(result) ?? args.successFeedback;
+        if (feedback) {
+          setActionFeedback(feedback);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : args.errorMessage);
+        setActionFeedback(null);
+      } finally {
+        args.onFinally?.();
+      }
+    });
+  }
+
+  function updateOrderStatus(orderId: string, status: string) {
+    executeTransactionStatusUpdate({
+      id: orderId,
+      kind: "order",
+      status,
+      missingAccessTokenMessage: "Sign in again before updating orders.",
+      errorMessage: "Unable to update order",
+      execute: (accessToken) =>
+        api.updateOrderStatus(
           orderId,
           {
             status,
@@ -726,36 +1507,19 @@ export function SellerWorkspace() {
           {
             accessToken,
           },
-        );
-        await loadWorkspace(accessToken);
-        setActionFeedback({
-          tone: "success",
-          message: `Order moved to ${status.replaceAll("_", " ")}.`,
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to update order");
-        setActionFeedback(null);
-      } finally {
-        setQueueLoading(null);
-      }
+        ),
     });
   }
 
   function updateBookingStatus(bookingId: string, status: string) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken) {
-      setError("Sign in again before updating bookings.");
-      return;
-    }
-
-    setQueueLoading(bookingId);
-    setError(null);
-    setActionFeedback(null);
-    setPendingBulkAction(null);
-
-    startTransition(async () => {
-      try {
-        await api.updateBookingStatus(
+    executeTransactionStatusUpdate({
+      id: bookingId,
+      kind: "booking",
+      status,
+      missingAccessTokenMessage: "Sign in again before updating bookings.",
+      errorMessage: "Unable to update booking",
+      execute: (accessToken) =>
+        api.updateBookingStatus(
           bookingId,
           {
             status,
@@ -764,42 +1528,29 @@ export function SellerWorkspace() {
           {
             accessToken,
           },
-        );
-        await loadWorkspace(accessToken);
-        setActionFeedback({
-          tone: "success",
-          message: `Booking moved to ${status.replaceAll("_", " ")}.`,
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to update booking");
-        setActionFeedback(null);
-      } finally {
-        setQueueLoading(null);
-      }
+        ),
     });
   }
 
   function updateListingStatus(listingId: string, status: ListingUpdateInput["status"]) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken || !status) {
+    if (!status) {
       setCreateError("Sign in again before updating listings.");
       return;
     }
 
-    setListingActionLoading(listingId);
-    setCreateError(null);
-    setCreateMessage(null);
-
-    startTransition(async () => {
-      try {
-        await api.updateListing(listingId, { status }, { accessToken });
-        await loadWorkspace(accessToken);
+    executeSellerApiAction({
+      missingAccessTokenMessage: "Sign in again before updating listings.",
+      errorMessage: "Unable to update listing",
+      onStart: () => {
+        setListingActionLoading(listingId);
+        setCreateError(null);
+        setCreateMessage(null);
+      },
+      onFinally: () => setListingActionLoading(null),
+      onSuccess: () => {
         setCreateMessage(`Listing moved to ${status.replaceAll("_", " ")}.`);
-      } catch (err) {
-        setCreateError(err instanceof Error ? err.message : "Unable to update listing");
-      } finally {
-        setListingActionLoading(null);
-      }
+      },
+      execute: (accessToken) => api.updateListing(listingId, { status }, { accessToken }),
     });
   }
 
@@ -821,20 +1572,26 @@ export function SellerWorkspace() {
   }
 
   function saveListingDetails(listing: Listing) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     const draft = listingDrafts[listing.id];
-    if (!accessToken || !draft) {
+    if (!draft) {
       setCreateError("Sign in again before updating listings.");
       return;
     }
 
-    setListingSaveLoading(listing.id);
-    setCreateError(null);
-    setCreateMessage(null);
-
-    startTransition(async () => {
-      try {
-        const payload: ListingUpdateInput = {
+    executeSellerApiAction({
+      missingAccessTokenMessage: "Sign in again before updating listings.",
+      errorMessage: "Unable to save listing details",
+      onStart: () => {
+        setListingSaveLoading(listing.id);
+        setCreateError(null);
+        setCreateMessage(null);
+      },
+      onFinally: () => setListingSaveLoading(null),
+      onSuccess: () => {
+        setCreateMessage(`Saved operating settings for ${listing.title}.`);
+      },
+      execute: (accessToken) =>
+        api.updateListing(listing.id, {
           price_cents: draft.price_cents === "" ? null : Number(draft.price_cents),
           requires_booking: draft.requires_booking,
           duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
@@ -844,17 +1601,134 @@ export function SellerWorkspace() {
           meetup_enabled: draft.meetup_enabled,
           delivery_enabled: draft.delivery_enabled,
           shipping_enabled: draft.shipping_enabled,
-        };
-
-        await api.updateListing(listing.id, payload, { accessToken });
-        await loadWorkspace(accessToken);
-        setCreateMessage(`Saved operating settings for ${listing.title}.`);
-      } catch (err) {
-        setCreateError(err instanceof Error ? err.message : "Unable to save listing details");
-      } finally {
-        setListingSaveLoading(null);
-      }
+        }, { accessToken }),
     });
+  }
+
+  function requestListingAiAssist(listing: Listing) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      setError("Sign in again before using the AI assistant.");
+      return;
+    }
+
+    setListingAiState((current) => ({
+      ...current,
+      [listing.id]: { loading: true, error: null, suggestion: null },
+    }));
+
+    void (async () => {
+      try {
+        const result = await api.assistListing(
+          {
+            listing_id: listing.id,
+            title: listing.title,
+            description: listing.description ?? undefined,
+            type: listing.type,
+            category_id: listing.category_id ?? undefined,
+            city: listing.city ?? undefined,
+            state: listing.state ?? undefined,
+            country: listing.country ?? undefined,
+            highlights: listing.last_operating_adjustment_summary ?? undefined,
+          },
+          { accessToken },
+        );
+
+        setListingAiState((current) => ({
+          ...current,
+          [listing.id]: { loading: false, error: null, suggestion: result.suggestion },
+        }));
+      } catch (err) {
+        setListingAiState((current) => ({
+          ...current,
+          [listing.id]: {
+            loading: false,
+            error: err instanceof Error ? err.message : "Unable to generate AI suggestions.",
+            suggestion: null,
+          },
+        }));
+      }
+    })();
+  }
+
+  function requestListingPriceInsight(listing: Listing) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      setError("Sign in again before fetching price insights.");
+      return;
+    }
+
+    setListingPriceInsights((current) => ({
+      ...current,
+      [listing.id]: { loading: true, error: null, insight: null },
+    }));
+
+    void (async () => {
+      try {
+        const insight = await api.getListingPriceInsight(listing.id, { accessToken });
+        setListingPriceInsights((current) => ({
+          ...current,
+          [listing.id]: { loading: false, error: null, insight },
+        }));
+      } catch (err) {
+        setListingPriceInsights((current) => ({
+          ...current,
+          [listing.id]: {
+            loading: false,
+            error: err instanceof Error ? err.message : "Unable to load price insights.",
+            insight: null,
+          },
+        }));
+      }
+    })();
+  }
+
+  function requestCreateListingAiAssist() {
+    if (!workspace) {
+      return;
+    }
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      setListingCreateAiState({
+        loading: false,
+        error: "Sign in again before using the AI assistant.",
+        suggestion: null,
+      });
+      return;
+    }
+
+    setListingCreateAiState({ loading: true, error: null, suggestion: null });
+
+    void (async () => {
+      try {
+        const result = await api.assistListing(
+          {
+            title,
+            description: description?.trim() ? description : undefined,
+            type: listingType,
+            city: workspace.seller.city ?? undefined,
+            state: workspace.seller.state ?? undefined,
+            country: workspace.seller.country ?? undefined,
+            highlights: description?.trim() || undefined,
+          },
+          { accessToken },
+        );
+
+        setListingCreateAiState({ loading: false, error: null, suggestion: result.suggestion });
+      } catch (err) {
+        setListingCreateAiState({
+          loading: false,
+          error: err instanceof Error ? err.message : "Unable to generate AI suggestions.",
+          suggestion: null,
+        });
+      }
+    })();
+  }
+
+  function applyCreateListingSuggestion(suggestion: ListingAiAssistSuggestion) {
+    setTitle(suggestion.suggested_title);
+    setDescription(suggestion.suggested_description);
+    setListingCreateAiState((current) => (current ? { ...current, suggestion } : current));
   }
 
   function updateListingImageDraft(
@@ -928,59 +1802,54 @@ export function SellerWorkspace() {
   }
 
   async function uploadListingImageFile(listing: Listing, file: File) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
     const draft = listingImageDrafts[listing.id];
-    if (!accessToken) {
+    if (!draft) {
       setCreateError("Sign in again before uploading listing images.");
       return;
     }
 
-    setListingImageActionLoading(`${listing.id}:upload`);
-    setCreateError(null);
-    setCreateMessage(null);
-
-    try {
-      const base64Data = await fileToBase64(file);
-      await api.uploadListingImage(
-        listing.id,
-        {
-          filename: file.name,
-          content_type: file.type || "image/jpeg",
-          base64_data: base64Data,
-          alt_text: draft?.alt_text.trim() || listing.title,
-        },
-        { accessToken },
-      );
-      await loadWorkspace(accessToken);
-      setCreateMessage(`Uploaded image media for ${listing.title}.`);
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "Unable to upload listing image");
-    } finally {
-      setListingImageActionLoading(null);
-    }
+    executeSellerApiAction({
+      missingAccessTokenMessage: "Sign in again before uploading listing images.",
+      errorMessage: "Unable to upload listing image",
+      onStart: () => {
+        setListingImageActionLoading(`${listing.id}:upload`);
+        setCreateError(null);
+        setCreateMessage(null);
+      },
+      onFinally: () => setListingImageActionLoading(null),
+      onSuccess: () => {
+        setCreateMessage(`Uploaded image media for ${listing.title}.`);
+      },
+      execute: async (accessToken) => {
+        const base64Data = await fileToBase64(file);
+        await api.uploadListingImage(
+          listing.id,
+          {
+            filename: file.name,
+            content_type: file.type || "image/jpeg",
+            base64_data: base64Data,
+            alt_text: draft.alt_text.trim() || listing.title,
+          },
+          { accessToken },
+        );
+      },
+    });
   }
 
   function removeListingImage(listing: Listing, image: ListingImage) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken) {
-      setCreateError("Sign in again before updating listing images.");
-      return;
-    }
-
-    setListingImageActionLoading(image.id);
-    setCreateError(null);
-    setCreateMessage(null);
-
-    startTransition(async () => {
-      try {
-        await api.deleteListingImage(listing.id, image.id, { accessToken });
-        await loadWorkspace(accessToken);
+    executeSellerApiAction({
+      missingAccessTokenMessage: "Sign in again before updating listing images.",
+      errorMessage: "Unable to remove listing image",
+      onStart: () => {
+        setListingImageActionLoading(image.id);
+        setCreateError(null);
+        setCreateMessage(null);
+      },
+      onFinally: () => setListingImageActionLoading(null),
+      onSuccess: () => {
         setCreateMessage(`Removed an image from ${listing.title}.`);
-      } catch (err) {
-        setCreateError(err instanceof Error ? err.message : "Unable to remove listing image");
-      } finally {
-        setListingImageActionLoading(null);
-      }
+      },
+      execute: (accessToken) => api.deleteListingImage(listing.id, image.id, { accessToken }),
     });
   }
 
@@ -992,36 +1861,23 @@ export function SellerWorkspace() {
   }
 
   function saveReviewResponse(review: ReviewRead) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken) {
-      setError("Sign in again before responding to reviews.");
-      return;
-    }
-
-    setReviewResponseLoading(review.id);
-    setError(null);
-    setActionFeedback(null);
-
-    startTransition(async () => {
-      try {
-        await api.updateReviewSellerResponse(
+    executeSellerApiAction<Profile>({
+      missingAccessTokenMessage: "Sign in again before responding to reviews.",
+      errorMessage: "Unable to save seller response",
+      onStart: () => setReviewResponseLoading(review.id),
+      onFinally: () => setReviewResponseLoading(null),
+      successFeedback: {
+        tone: "success",
+        message: "Seller review response saved.",
+      },
+      execute: (accessToken) =>
+        api.updateReviewSellerResponse(
           review.id,
           {
             seller_response: reviewResponseDrafts[review.id] ?? null,
           },
           { accessToken },
-        );
-        await loadWorkspace(accessToken);
-        setActionFeedback({
-          tone: "success",
-          message: "Seller review response saved.",
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to save seller response");
-        setActionFeedback(null);
-      } finally {
-        setReviewResponseLoading(null);
-      }
+        ),
     });
   }
 
@@ -1073,14 +1929,63 @@ export function SellerWorkspace() {
   const focusedBooking = focusedActivityKey?.startsWith("booking:")
     ? workspace?.bookings.find((booking) => `booking:${booking.id}` === focusedActivityKey) ?? null
     : null;
+  const listingsById = useMemo(
+    () => Object.fromEntries((workspace?.listings ?? []).map((listing) => [listing.id, listing])),
+    [workspace?.listings],
+  );
   const filteredOrders = useMemo(() => {
     if (!workspace) {
       return [];
     }
 
-    return workspace.orders.filter((order) => {
+    const filtered = workspace.orders.filter((order) => {
       const activityKey = `order:${order.id}`;
+      const hasInlineReviewPressure =
+        (((workspace.seller.average_rating ?? 0) > 0 && (workspace.seller.average_rating ?? 0) < 4.2) ||
+          (workspace.reviews ?? []).some((review) => review.rating <= 3));
+      const listingId = getTransactionListingId(order);
+      const deliveryPressure = listingId
+        ? {
+            failed: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "failed" || delivery.transaction_kind !== "order") {
+                return false;
+              }
+              return delivery.transaction_id === order.id;
+            }).length,
+            queued: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "queued" || delivery.transaction_kind !== "order") {
+                return false;
+              }
+              return delivery.transaction_id === order.id;
+            }).length,
+          }
+        : { failed: 0, queued: 0 };
+      const supportPressure = getListingSupportPressure({
+        failedDeliveryCount: deliveryPressure.failed,
+        queuedDeliveryCount: deliveryPressure.queued,
+        retentionTrendLabel: null,
+        hasReviewPressure: hasInlineReviewPressure,
+      });
+      const pressureMode = getListingSupportPressureLaneMode({
+        failedDeliveryCount: deliveryPressure.failed,
+        queuedDeliveryCount: deliveryPressure.queued,
+        supportPressureLabel: supportPressure?.label ?? null,
+      });
+      const isRecoveryEasing =
+        Boolean(listingId) &&
+        deliveryPressure.failed === 0 &&
+        deliveryPressure.queued === 0 &&
+        notificationDeliveries.some(
+          (delivery) =>
+            delivery.transaction_kind === "order" &&
+            delivery.delivery_status === "sent" &&
+            delivery.transaction_id === order.id &&
+            matchesDeliveryRecency(delivery.created_at, "7d"),
+        );
       if (activityTypeFilter === "booking") {
+        return false;
+      }
+      if (activityListingFilter !== "all" && getTransactionListingId(order) !== activityListingFilter) {
         return false;
       }
       if (activityStatusFilter !== "all" && order.status !== activityStatusFilter) {
@@ -1104,6 +2009,18 @@ export function SellerWorkspace() {
       ) {
         return false;
       }
+      if (
+        activityDiscoveryFilter === "same-seller" &&
+        !isSameSellerFollowOnBrowseContext(order.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (
+        activityDiscoveryFilter === "cross-seller" &&
+        !isCrossSellerFollowOnBrowseContext(order.buyer_browse_context)
+      ) {
+        return false;
+      }
       if (!matchesActivityRecency(order.status_history, activityRecencyFilter)) {
         return false;
       }
@@ -1113,26 +2030,315 @@ export function SellerWorkspace() {
       if (activityContextFilter === "focused" && focusedActivityKey !== activityKey) {
         return false;
       }
+      if (activityPressureFilter === "delivery" && pressureMode !== "failed") {
+        return false;
+      }
+      if (activityPressureFilter === "trust" && pressureMode !== "trust") {
+        return false;
+      }
+      if (activityRecoveryFilter === "easing" && !isRecoveryEasing) {
+        return false;
+      }
       return true;
+    });
+
+    if (activitySortMode === "default") {
+      return filtered;
+    }
+
+    return [...filtered].sort((left, right) => {
+      const hasInlineReviewPressure =
+        (((workspace.seller.average_rating ?? 0) > 0 && (workspace.seller.average_rating ?? 0) < 4.2) ||
+          (workspace.reviews ?? []).some((review) => review.rating <= 3));
+      const leftListingId = getTransactionListingId(left);
+      const rightListingId = getTransactionListingId(right);
+      const leftTransactions = [...workspace.orders, ...workspace.bookings].filter(
+        (transaction) => getTransactionListingId(transaction) === leftListingId,
+      );
+      const rightTransactions = [...workspace.orders, ...workspace.bookings].filter(
+        (transaction) => getTransactionListingId(transaction) === rightListingId,
+      );
+      const leftRetention = leftListingId
+        ? {
+            sameSellerCount: leftTransactions.filter((transaction) =>
+              isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            crossSellerCount: leftTransactions.filter((transaction) =>
+              isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            sameSellerRecentCount: leftTransactions.filter(
+              (transaction) =>
+                isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            crossSellerRecentCount: leftTransactions.filter(
+              (transaction) =>
+                isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            sameSellerPostAdjustmentCount: 0,
+            crossSellerPostAdjustmentCount: 0,
+          }
+        : null;
+      const rightRetention = rightListingId
+        ? {
+            sameSellerCount: rightTransactions.filter((transaction) =>
+              isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            crossSellerCount: rightTransactions.filter((transaction) =>
+              isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            sameSellerRecentCount: rightTransactions.filter(
+              (transaction) =>
+                isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            crossSellerRecentCount: rightTransactions.filter(
+              (transaction) =>
+                isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            sameSellerPostAdjustmentCount: 0,
+            crossSellerPostAdjustmentCount: 0,
+          }
+        : null;
+      const leftRetentionTrend = leftRetention
+        ? getListingRetentionTrend({
+            sameSellerCount: leftRetention.sameSellerCount,
+            crossSellerCount: leftRetention.crossSellerCount,
+            sameSellerRecentCount: leftRetention.sameSellerRecentCount,
+            crossSellerRecentCount: leftRetention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: leftRetention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: leftRetention.crossSellerPostAdjustmentCount,
+          })
+        : null;
+      const rightRetentionTrend = rightRetention
+        ? getListingRetentionTrend({
+            sameSellerCount: rightRetention.sameSellerCount,
+            crossSellerCount: rightRetention.crossSellerCount,
+            sameSellerRecentCount: rightRetention.sameSellerRecentCount,
+            crossSellerRecentCount: rightRetention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: rightRetention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: rightRetention.crossSellerPostAdjustmentCount,
+          })
+        : null;
+      const leftDeliveryPressure = leftListingId
+        ? {
+            failed: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "failed") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === leftListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === leftListingId : false;
+            }).length,
+            queued: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "queued") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === leftListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === leftListingId : false;
+            }).length,
+          }
+        : { failed: 0, queued: 0 };
+      const rightDeliveryPressure = rightListingId
+        ? {
+            failed: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "failed") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === rightListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === rightListingId : false;
+            }).length,
+            queued: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "queued") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === rightListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === rightListingId : false;
+            }).length,
+          }
+        : { failed: 0, queued: 0 };
+      const leftSupportPressure = getListingSupportPressure({
+        failedDeliveryCount: leftDeliveryPressure.failed,
+        queuedDeliveryCount: leftDeliveryPressure.queued,
+        retentionTrendLabel: leftRetentionTrend?.label ?? null,
+        hasReviewPressure: hasInlineReviewPressure,
+      });
+      const rightSupportPressure = getListingSupportPressure({
+        failedDeliveryCount: rightDeliveryPressure.failed,
+        queuedDeliveryCount: rightDeliveryPressure.queued,
+        retentionTrendLabel: rightRetentionTrend?.label ?? null,
+        hasReviewPressure: hasInlineReviewPressure,
+      });
+      const leftPriority = getListingSupportPressureLanePriority(
+        getListingSupportPressureLaneMode({
+          failedDeliveryCount: leftDeliveryPressure.failed,
+          queuedDeliveryCount: leftDeliveryPressure.queued,
+          supportPressureLabel: leftSupportPressure?.label ?? null,
+        }),
+      );
+      const rightPriority = getListingSupportPressureLanePriority(
+        getListingSupportPressureLaneMode({
+          failedDeliveryCount: rightDeliveryPressure.failed,
+          queuedDeliveryCount: rightDeliveryPressure.queued,
+          supportPressureLabel: rightSupportPressure?.label ?? null,
+        }),
+      );
+      const leftRecoveryDelta =
+        notificationDeliveries.filter((delivery) => {
+          if (!leftListingId || !matchesDeliveryRecency(delivery.created_at, "7d")) {
+            return false;
+          }
+          if (delivery.transaction_kind === "order") {
+            const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+            return matchingOrder ? getTransactionListingId(matchingOrder) === leftListingId : false;
+          }
+          const matchingBooking = workspace.bookings.find((booking) => booking.id === delivery.transaction_id);
+          return matchingBooking ? getTransactionListingId(matchingBooking) === leftListingId : false;
+        }).reduce((sum, delivery) => {
+          if (delivery.delivery_status === "sent") {
+            return sum + 1;
+          }
+          if (delivery.delivery_status === "failed") {
+            return sum - 1;
+          }
+          return sum;
+        }, 0);
+      const rightRecoveryDelta =
+        notificationDeliveries.filter((delivery) => {
+          if (!rightListingId || !matchesDeliveryRecency(delivery.created_at, "7d")) {
+            return false;
+          }
+          if (delivery.transaction_kind === "order") {
+            const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+            return matchingOrder ? getTransactionListingId(matchingOrder) === rightListingId : false;
+          }
+          const matchingBooking = workspace.bookings.find((booking) => booking.id === delivery.transaction_id);
+          return matchingBooking ? getTransactionListingId(matchingBooking) === rightListingId : false;
+        }).reduce((sum, delivery) => {
+          if (delivery.delivery_status === "sent") {
+            return sum + 1;
+          }
+          if (delivery.delivery_status === "failed") {
+            return sum - 1;
+          }
+          return sum;
+        }, 0);
+
+      if (activitySortMode === "drag" && leftRecoveryDelta !== rightRecoveryDelta) {
+        return leftRecoveryDelta - rightRecoveryDelta;
+      }
+
+      if (activitySortMode === "recovery" && leftRecoveryDelta !== rightRecoveryDelta) {
+        return rightRecoveryDelta - leftRecoveryDelta;
+      }
+
+      if (activitySortMode === "pressured" && leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
+      }
+
+      return getLatestTransactionTimestamp(right) - getLatestTransactionTimestamp(left);
     });
   }, [
     activityContextFilter,
     activityDiscoveryFilter,
+    activityListingFilter,
+    activityPressureFilter,
+    activityRecoveryFilter,
     activityRecencyFilter,
+    activitySortMode,
     activityStatusFilter,
     activityTypeFilter,
     focusedActivityKey,
     unreadActivityKeys,
     workspace,
+    notificationDeliveries,
   ]);
   const filteredBookings = useMemo(() => {
     if (!workspace) {
       return [];
     }
 
-    return workspace.bookings.filter((booking) => {
+    const filtered = workspace.bookings.filter((booking) => {
       const activityKey = `booking:${booking.id}`;
+      const hasInlineReviewPressure =
+        (((workspace.seller.average_rating ?? 0) > 0 && (workspace.seller.average_rating ?? 0) < 4.2) ||
+          (workspace.reviews ?? []).some((review) => review.rating <= 3));
+      const listingId = getTransactionListingId(booking);
+      const deliveryPressure = listingId
+        ? {
+            failed: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "failed" || delivery.transaction_kind !== "booking") {
+                return false;
+              }
+              return delivery.transaction_id === booking.id;
+            }).length,
+            queued: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "queued" || delivery.transaction_kind !== "booking") {
+                return false;
+              }
+              return delivery.transaction_id === booking.id;
+            }).length,
+          }
+        : { failed: 0, queued: 0 };
+      const supportPressure = getListingSupportPressure({
+        failedDeliveryCount: deliveryPressure.failed,
+        queuedDeliveryCount: deliveryPressure.queued,
+        retentionTrendLabel: null,
+        hasReviewPressure: hasInlineReviewPressure,
+      });
+      const pressureMode = getListingSupportPressureLaneMode({
+        failedDeliveryCount: deliveryPressure.failed,
+        queuedDeliveryCount: deliveryPressure.queued,
+        supportPressureLabel: supportPressure?.label ?? null,
+      });
+      const isRecoveryEasing =
+        Boolean(listingId) &&
+        deliveryPressure.failed === 0 &&
+        deliveryPressure.queued === 0 &&
+        notificationDeliveries.some(
+          (delivery) =>
+            delivery.transaction_kind === "booking" &&
+            delivery.delivery_status === "sent" &&
+            delivery.transaction_id === booking.id &&
+            matchesDeliveryRecency(delivery.created_at, "7d"),
+        );
       if (activityTypeFilter === "order") {
+        return false;
+      }
+      if (activityListingFilter !== "all" && getTransactionListingId(booking) !== activityListingFilter) {
         return false;
       }
       if (activityStatusFilter !== "all" && booking.status !== activityStatusFilter) {
@@ -1156,6 +2362,18 @@ export function SellerWorkspace() {
       ) {
         return false;
       }
+      if (
+        activityDiscoveryFilter === "same-seller" &&
+        !isSameSellerFollowOnBrowseContext(booking.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (
+        activityDiscoveryFilter === "cross-seller" &&
+        !isCrossSellerFollowOnBrowseContext(booking.buyer_browse_context)
+      ) {
+        return false;
+      }
       if (!matchesActivityRecency(booking.status_history, activityRecencyFilter)) {
         return false;
       }
@@ -1165,17 +2383,261 @@ export function SellerWorkspace() {
       if (activityContextFilter === "focused" && focusedActivityKey !== activityKey) {
         return false;
       }
+      if (activityPressureFilter === "delivery" && pressureMode !== "failed") {
+        return false;
+      }
+      if (activityPressureFilter === "trust" && pressureMode !== "trust") {
+        return false;
+      }
+      if (activityRecoveryFilter === "easing" && !isRecoveryEasing) {
+        return false;
+      }
       return true;
+    });
+
+    if (activitySortMode === "default") {
+      return filtered;
+    }
+
+    return [...filtered].sort((left, right) => {
+      const hasInlineReviewPressure =
+        (((workspace.seller.average_rating ?? 0) > 0 && (workspace.seller.average_rating ?? 0) < 4.2) ||
+          (workspace.reviews ?? []).some((review) => review.rating <= 3));
+      const leftListingId = getTransactionListingId(left);
+      const rightListingId = getTransactionListingId(right);
+      const leftTransactions = [...workspace.orders, ...workspace.bookings].filter(
+        (transaction) => getTransactionListingId(transaction) === leftListingId,
+      );
+      const rightTransactions = [...workspace.orders, ...workspace.bookings].filter(
+        (transaction) => getTransactionListingId(transaction) === rightListingId,
+      );
+      const leftRetention = leftListingId
+        ? {
+            sameSellerCount: leftTransactions.filter((transaction) =>
+              isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            crossSellerCount: leftTransactions.filter((transaction) =>
+              isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            sameSellerRecentCount: leftTransactions.filter(
+              (transaction) =>
+                isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            crossSellerRecentCount: leftTransactions.filter(
+              (transaction) =>
+                isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            sameSellerPostAdjustmentCount: 0,
+            crossSellerPostAdjustmentCount: 0,
+          }
+        : null;
+      const rightRetention = rightListingId
+        ? {
+            sameSellerCount: rightTransactions.filter((transaction) =>
+              isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            crossSellerCount: rightTransactions.filter((transaction) =>
+              isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+            ).length,
+            sameSellerRecentCount: rightTransactions.filter(
+              (transaction) =>
+                isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            crossSellerRecentCount: rightTransactions.filter(
+              (transaction) =>
+                isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+                isRecentTransactionEvent(transaction.status_history, 7),
+            ).length,
+            sameSellerPostAdjustmentCount: 0,
+            crossSellerPostAdjustmentCount: 0,
+          }
+        : null;
+      const leftRetentionTrend = leftRetention
+        ? getListingRetentionTrend({
+            sameSellerCount: leftRetention.sameSellerCount,
+            crossSellerCount: leftRetention.crossSellerCount,
+            sameSellerRecentCount: leftRetention.sameSellerRecentCount,
+            crossSellerRecentCount: leftRetention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: leftRetention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: leftRetention.crossSellerPostAdjustmentCount,
+          })
+        : null;
+      const rightRetentionTrend = rightRetention
+        ? getListingRetentionTrend({
+            sameSellerCount: rightRetention.sameSellerCount,
+            crossSellerCount: rightRetention.crossSellerCount,
+            sameSellerRecentCount: rightRetention.sameSellerRecentCount,
+            crossSellerRecentCount: rightRetention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: rightRetention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: rightRetention.crossSellerPostAdjustmentCount,
+          })
+        : null;
+      const leftDeliveryPressure = leftListingId
+        ? {
+            failed: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "failed") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === leftListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === leftListingId : false;
+            }).length,
+            queued: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "queued") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === leftListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === leftListingId : false;
+            }).length,
+          }
+        : { failed: 0, queued: 0 };
+      const rightDeliveryPressure = rightListingId
+        ? {
+            failed: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "failed") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === rightListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === rightListingId : false;
+            }).length,
+            queued: notificationDeliveries.filter((delivery) => {
+              if (delivery.delivery_status !== "queued") {
+                return false;
+              }
+
+              if (delivery.transaction_kind === "order") {
+                const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+                return matchingOrder ? getTransactionListingId(matchingOrder) === rightListingId : false;
+              }
+
+              const matchingBooking = workspace.bookings.find(
+                (booking) => booking.id === delivery.transaction_id,
+              );
+              return matchingBooking ? getTransactionListingId(matchingBooking) === rightListingId : false;
+            }).length,
+          }
+        : { failed: 0, queued: 0 };
+      const leftSupportPressure = getListingSupportPressure({
+        failedDeliveryCount: leftDeliveryPressure.failed,
+        queuedDeliveryCount: leftDeliveryPressure.queued,
+        retentionTrendLabel: leftRetentionTrend?.label ?? null,
+        hasReviewPressure: hasInlineReviewPressure,
+      });
+      const rightSupportPressure = getListingSupportPressure({
+        failedDeliveryCount: rightDeliveryPressure.failed,
+        queuedDeliveryCount: rightDeliveryPressure.queued,
+        retentionTrendLabel: rightRetentionTrend?.label ?? null,
+        hasReviewPressure: hasInlineReviewPressure,
+      });
+      const leftPriority = getListingSupportPressureLanePriority(
+        getListingSupportPressureLaneMode({
+          failedDeliveryCount: leftDeliveryPressure.failed,
+          queuedDeliveryCount: leftDeliveryPressure.queued,
+          supportPressureLabel: leftSupportPressure?.label ?? null,
+        }),
+      );
+      const rightPriority = getListingSupportPressureLanePriority(
+        getListingSupportPressureLaneMode({
+          failedDeliveryCount: rightDeliveryPressure.failed,
+          queuedDeliveryCount: rightDeliveryPressure.queued,
+          supportPressureLabel: rightSupportPressure?.label ?? null,
+        }),
+      );
+      const leftRecoveryDelta =
+        notificationDeliveries.filter((delivery) => {
+          if (!leftListingId || !matchesDeliveryRecency(delivery.created_at, "7d")) {
+            return false;
+          }
+          if (delivery.transaction_kind === "order") {
+            const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+            return matchingOrder ? getTransactionListingId(matchingOrder) === leftListingId : false;
+          }
+          const matchingBooking = workspace.bookings.find((booking) => booking.id === delivery.transaction_id);
+          return matchingBooking ? getTransactionListingId(matchingBooking) === leftListingId : false;
+        }).reduce((sum, delivery) => {
+          if (delivery.delivery_status === "sent") {
+            return sum + 1;
+          }
+          if (delivery.delivery_status === "failed") {
+            return sum - 1;
+          }
+          return sum;
+        }, 0);
+      const rightRecoveryDelta =
+        notificationDeliveries.filter((delivery) => {
+          if (!rightListingId || !matchesDeliveryRecency(delivery.created_at, "7d")) {
+            return false;
+          }
+          if (delivery.transaction_kind === "order") {
+            const matchingOrder = workspace.orders.find((order) => order.id === delivery.transaction_id);
+            return matchingOrder ? getTransactionListingId(matchingOrder) === rightListingId : false;
+          }
+          const matchingBooking = workspace.bookings.find((booking) => booking.id === delivery.transaction_id);
+          return matchingBooking ? getTransactionListingId(matchingBooking) === rightListingId : false;
+        }).reduce((sum, delivery) => {
+          if (delivery.delivery_status === "sent") {
+            return sum + 1;
+          }
+          if (delivery.delivery_status === "failed") {
+            return sum - 1;
+          }
+          return sum;
+        }, 0);
+
+      if (activitySortMode === "drag" && leftRecoveryDelta !== rightRecoveryDelta) {
+        return leftRecoveryDelta - rightRecoveryDelta;
+      }
+
+      if (activitySortMode === "recovery" && leftRecoveryDelta !== rightRecoveryDelta) {
+        return rightRecoveryDelta - leftRecoveryDelta;
+      }
+
+      if (activitySortMode === "pressured" && leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
+      }
+
+      return getLatestTransactionTimestamp(right) - getLatestTransactionTimestamp(left);
     });
   }, [
     activityContextFilter,
     activityDiscoveryFilter,
+    activityListingFilter,
+    activityPressureFilter,
+    activityRecoveryFilter,
     activityRecencyFilter,
+    activitySortMode,
     activityStatusFilter,
     activityTypeFilter,
     focusedActivityKey,
     unreadActivityKeys,
     workspace,
+    notificationDeliveries,
   ]);
   const filteredNotificationDeliveries = useMemo(
     () =>
@@ -1200,6 +2662,31 @@ export function SellerWorkspace() {
     () => notificationDeliveries.filter((delivery) => delivery.delivery_status === "failed").length,
     [notificationDeliveries],
   );
+  const failedDeliveryRecentCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) =>
+          delivery.delivery_status === "failed" && matchesDeliveryRecency(delivery.created_at, "7d"),
+      ).length,
+    [notificationDeliveries],
+  );
+  const queuedDeliveryRecentCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) =>
+          delivery.delivery_status === "queued" && matchesDeliveryRecency(delivery.created_at, "7d"),
+      ).length,
+    [notificationDeliveries],
+  );
+  const sentDeliveryRecentCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) =>
+          delivery.delivery_status === "sent" && matchesDeliveryRecency(delivery.created_at, "7d"),
+      ).length,
+    [notificationDeliveries],
+  );
+  const recoveredVsFailedDelta = sentDeliveryRecentCount - failedDeliveryRecentCount;
   const pendingVisibleOrdersCount = useMemo(
     () => filteredOrders.filter((order) => order.status === "pending").length,
     [filteredOrders],
@@ -1245,6 +2732,20 @@ export function SellerWorkspace() {
       ).length,
     [workspace?.bookings, workspace?.orders],
   );
+  const sameSellerFollowOnConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter((transaction) =>
+        isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const crossSellerFollowOnConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter((transaction) =>
+        isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
   const localDrivenRecentConversionsCount = useMemo(
     () =>
       [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
@@ -1281,11 +2782,648 @@ export function SellerWorkspace() {
       ).length,
     [workspace?.bookings, workspace?.orders],
   );
+  const hasSellerReviewPressure = useMemo(() => {
+    if (!workspace) {
+      return false;
+    }
+
+    if ((workspace.seller.average_rating ?? 0) > 0 && (workspace.seller.average_rating ?? 0) < 4.2) {
+      return true;
+    }
+
+    return workspace.reviews.some((review) => review.rating <= 3);
+  }, [workspace]);
+  const listingDeliveryPressureById = useMemo(() => {
+    if (!workspace) {
+      return {};
+    }
+
+    const transactionListingByKey = {
+      ...Object.fromEntries(
+        workspace.orders.map((order) => [`order:${order.id}`, getTransactionListingId(order) ?? ""]),
+      ),
+      ...Object.fromEntries(
+        workspace.bookings.map((booking) => [`booking:${booking.id}`, getTransactionListingId(booking) ?? ""]),
+      ),
+    };
+
+    return notificationDeliveries.reduce<Record<string, { failed: number; queued: number }>>((acc, delivery) => {
+      const listingId = transactionListingByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`];
+      if (!listingId) {
+        return acc;
+      }
+
+      const current = acc[listingId] ?? { failed: 0, queued: 0 };
+      if (delivery.delivery_status === "failed") {
+        current.failed += 1;
+      }
+      if (delivery.delivery_status === "queued") {
+        current.queued += 1;
+      }
+      acc[listingId] = current;
+      return acc;
+    }, {});
+  }, [notificationDeliveries, workspace]);
+  const listingRecoveryDeltaById = useMemo(() => {
+    if (!workspace) {
+      return {};
+    }
+
+    const transactionListingByKey = {
+      ...Object.fromEntries(
+        workspace.orders.map((order) => [`order:${order.id}`, getTransactionListingId(order) ?? ""]),
+      ),
+      ...Object.fromEntries(
+        workspace.bookings.map((booking) => [`booking:${booking.id}`, getTransactionListingId(booking) ?? ""]),
+      ),
+    };
+
+    return notificationDeliveries.reduce<Record<string, number>>((acc, delivery) => {
+      if (!matchesDeliveryRecency(delivery.created_at, "7d")) {
+        return acc;
+      }
+
+      const listingId = transactionListingByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`];
+      if (!listingId) {
+        return acc;
+      }
+
+      const current = acc[listingId] ?? 0;
+      if (delivery.delivery_status === "sent") {
+        acc[listingId] = current + 1;
+        return acc;
+      }
+
+      if (delivery.delivery_status === "failed") {
+        acc[listingId] = current - 1;
+      }
+
+      return acc;
+    }, {});
+  }, [notificationDeliveries, workspace]);
+  const sameSellerFollowOnRecentConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+        (transaction) =>
+          isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+          isRecentTransactionEvent(transaction.status_history, 7),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const crossSellerFollowOnRecentConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+        (transaction) =>
+          isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+          isRecentTransactionEvent(transaction.status_history, 7),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const listingFollowOnBreakdown = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    const transactions = [...workspace.orders, ...workspace.bookings];
+
+    return workspace.listings
+      .map((listing) => {
+        const matchingTransactions = transactions.filter(
+          (transaction) => getTransactionListingId(transaction) === listing.id,
+        );
+        const sameSellerCount = matchingTransactions.filter((transaction) =>
+          isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+        ).length;
+        const crossSellerCount = matchingTransactions.filter((transaction) =>
+          isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+        ).length;
+        const sameSellerRecentCount = matchingTransactions.filter(
+          (transaction) =>
+            isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+            isRecentTransactionEvent(transaction.status_history, 7),
+        ).length;
+        const crossSellerRecentCount = matchingTransactions.filter(
+          (transaction) =>
+            isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+            isRecentTransactionEvent(transaction.status_history, 7),
+        ).length;
+        const crossSellerLocalCount = matchingTransactions.filter(
+          (transaction) =>
+            isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+            isLocalDrivenBrowseContext(transaction.buyer_browse_context),
+        ).length;
+        const crossSellerSearchCount = matchingTransactions.filter(
+          (transaction) =>
+            isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+            isSearchDrivenBrowseContext(transaction.buyer_browse_context),
+        ).length;
+        const crossSellerPriceCount = matchingTransactions.filter(
+          (transaction) =>
+            isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context) &&
+            isPriceDrivenBrowseContext(transaction.buyer_browse_context),
+        ).length;
+        const listingAdjustmentTimestamp = getListingAdjustmentTimestamp(listing);
+        const postAdjustmentTransactions =
+          listingAdjustmentTimestamp == null
+            ? []
+            : matchingTransactions.filter(
+                (transaction) => getLatestTransactionTimestamp(transaction) >= listingAdjustmentTimestamp,
+              );
+        const sameSellerPostAdjustmentCount = postAdjustmentTransactions.filter((transaction) =>
+          isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+        ).length;
+        const crossSellerPostAdjustmentCount = postAdjustmentTransactions.filter((transaction) =>
+          isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+        ).length;
+
+        return {
+          listing,
+          sameSellerCount,
+          crossSellerCount,
+          sameSellerRecentCount,
+          crossSellerRecentCount,
+          crossSellerLocalCount,
+          crossSellerSearchCount,
+          crossSellerPriceCount,
+          sameSellerPostAdjustmentCount,
+          crossSellerPostAdjustmentCount,
+          totalFollowOnCount: sameSellerCount + crossSellerCount,
+          totalRecentFollowOnCount: sameSellerRecentCount + crossSellerRecentCount,
+        };
+      })
+      .filter((item) => item.totalFollowOnCount > 0)
+      .sort((left, right) => {
+        if (right.totalFollowOnCount !== left.totalFollowOnCount) {
+          return right.totalFollowOnCount - left.totalFollowOnCount;
+        }
+        if (right.totalRecentFollowOnCount !== left.totalRecentFollowOnCount) {
+          return right.totalRecentFollowOnCount - left.totalRecentFollowOnCount;
+        }
+        return left.listing.title.localeCompare(right.listing.title);
+      })
+      .slice(0, 6);
+  }, [workspace]);
+  const listingFollowOnBreakdownById = useMemo(
+    () =>
+      Object.fromEntries(
+        listingFollowOnBreakdown.map((item) => [item.listing.id, item]),
+      ),
+    [listingFollowOnBreakdown],
+  );
+  const supportWatchListingIds = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return workspace.listings
+      .filter((listing) => {
+        const retention = listingFollowOnBreakdownById[listing.id];
+        const retentionTrend = retention
+          ? getListingRetentionTrend({
+              sameSellerCount: retention.sameSellerCount,
+              crossSellerCount: retention.crossSellerCount,
+              sameSellerRecentCount: retention.sameSellerRecentCount,
+              crossSellerRecentCount: retention.crossSellerRecentCount,
+              sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
+              crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
+            })
+          : null;
+        const deliveryPressure = listingDeliveryPressureById[listing.id] ?? { failed: 0, queued: 0 };
+        return Boolean(
+          getListingSupportPressure({
+            failedDeliveryCount: deliveryPressure.failed,
+            queuedDeliveryCount: deliveryPressure.queued,
+            retentionTrendLabel: retentionTrend?.label ?? null,
+            hasReviewPressure: hasSellerReviewPressure,
+          }),
+        );
+      })
+      .map((listing) => listing.id);
+  }, [hasSellerReviewPressure, listingDeliveryPressureById, listingFollowOnBreakdownById, workspace]);
+  const supportWatchListingsCount = supportWatchListingIds.length;
+  const sortedSupportWatchListings = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return [...workspace.listings]
+      .filter((listing) => supportWatchListingIds.includes(listing.id))
+      .sort((left, right) => {
+        const leftPressure = listingDeliveryPressureById[left.id] ?? { failed: 0, queued: 0 };
+        const rightPressure = listingDeliveryPressureById[right.id] ?? { failed: 0, queued: 0 };
+        const leftPressureWeight = leftPressure.failed * 2 + leftPressure.queued;
+        const rightPressureWeight = rightPressure.failed * 2 + rightPressure.queued;
+        if (leftPressureWeight !== rightPressureWeight) {
+          return rightPressureWeight - leftPressureWeight;
+        }
+
+        const leftRetention = listingFollowOnBreakdownById[left.id];
+        const rightRetention = listingFollowOnBreakdownById[right.id];
+        const leftRecent = leftRetention?.totalRecentFollowOnCount ?? 0;
+        const rightRecent = rightRetention?.totalRecentFollowOnCount ?? 0;
+        if (leftRecent !== rightRecent) {
+          return rightRecent - leftRecent;
+        }
+
+        return left.title.localeCompare(right.title);
+      });
+  }, [listingDeliveryPressureById, listingFollowOnBreakdownById, supportWatchListingIds, workspace]);
+  const topSupportWatchListing = sortedSupportWatchListings[0] ?? null;
+  const nextSupportWatchListing = sortedSupportWatchListings[1] ?? null;
+  const supportWatchConcentrationShare = useMemo(() => {
+    if (sortedSupportWatchListings.length === 0) {
+      return null;
+    }
+
+    const getSupportWeight = (listingId: string) => {
+      const deliveryPressure = listingDeliveryPressureById[listingId] ?? { failed: 0, queued: 0 };
+      const retention = listingFollowOnBreakdownById[listingId];
+      return Math.max(
+        deliveryPressure.failed * 2 + deliveryPressure.queued,
+        retention?.totalRecentFollowOnCount ?? 0,
+        retention?.totalFollowOnCount ?? 1,
+        1,
+      );
+    };
+
+    const totalSupportWeight = sortedSupportWatchListings.reduce(
+      (sum, listing) => sum + getSupportWeight(listing.id),
+      0,
+    );
+    if (totalSupportWeight <= 0) {
+      return null;
+    }
+
+    return getSupportWeight(sortedSupportWatchListings[0]?.id ?? "") / totalSupportWeight;
+  }, [listingDeliveryPressureById, listingFollowOnBreakdownById, sortedSupportWatchListings]);
+  const deliveryPressureListingIds = useMemo(
+    () =>
+      (workspace?.listings ?? [])
+        .filter((listing) => (listingDeliveryPressureById[listing.id]?.failed ?? 0) > 0)
+        .map((listing) => listing.id),
+    [listingDeliveryPressureById, workspace?.listings],
+  );
+  const deliveryPressureListingsCount = deliveryPressureListingIds.length;
+  const deliveryDragListingIds = useMemo(
+    () =>
+      (workspace?.listings ?? [])
+        .filter((listing) => (listingRecoveryDeltaById[listing.id] ?? 0) < 0)
+        .map((listing) => listing.id),
+    [listingRecoveryDeltaById, workspace?.listings],
+  );
+  const deliveryDragListingsCount = deliveryDragListingIds.length;
+  const sortedDeliveryDragListings = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return [...workspace.listings]
+      .filter((listing) => (listingRecoveryDeltaById[listing.id] ?? 0) < 0)
+      .sort((left, right) => {
+        const leftDelta = listingRecoveryDeltaById[left.id] ?? 0;
+        const rightDelta = listingRecoveryDeltaById[right.id] ?? 0;
+        if (leftDelta !== rightDelta) {
+          return leftDelta - rightDelta;
+        }
+        return left.title.localeCompare(right.title);
+      });
+  }, [listingRecoveryDeltaById, workspace]);
+  const topDeliveryDragListing = sortedDeliveryDragListings[0] ?? null;
+  const nextDeliveryDragListing = sortedDeliveryDragListings[1] ?? null;
+  const deliveryDragConcentrationShare = useMemo(() => {
+    if (sortedDeliveryDragListings.length === 0) {
+      return null;
+    }
+
+    const totalDragMagnitude = sortedDeliveryDragListings.reduce(
+      (sum, listing) => sum + Math.abs(listingRecoveryDeltaById[listing.id] ?? 0),
+      0,
+    );
+    if (totalDragMagnitude <= 0) {
+      return null;
+    }
+
+    return Math.abs(listingRecoveryDeltaById[sortedDeliveryDragListings[0]?.id ?? ""] ?? 0) / totalDragMagnitude;
+  }, [listingRecoveryDeltaById, sortedDeliveryDragListings]);
+  const trustWatchListingIds = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return workspace.listings
+      .filter((listing) => {
+        const retention = listingFollowOnBreakdownById[listing.id];
+        const retentionTrend = retention
+          ? getListingRetentionTrend({
+              sameSellerCount: retention.sameSellerCount,
+              crossSellerCount: retention.crossSellerCount,
+              sameSellerRecentCount: retention.sameSellerRecentCount,
+              crossSellerRecentCount: retention.crossSellerRecentCount,
+              sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
+              crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
+            })
+          : null;
+        const deliveryPressure = listingDeliveryPressureById[listing.id] ?? { failed: 0, queued: 0 };
+        const supportPressure = getListingSupportPressure({
+          failedDeliveryCount: deliveryPressure.failed,
+          queuedDeliveryCount: deliveryPressure.queued,
+          retentionTrendLabel: retentionTrend?.label ?? null,
+          hasReviewPressure: hasSellerReviewPressure,
+        });
+
+        return (
+          getListingSupportPressureLaneMode({
+            failedDeliveryCount: deliveryPressure.failed,
+            queuedDeliveryCount: deliveryPressure.queued,
+            supportPressureLabel: supportPressure?.label ?? null,
+          }) === "trust"
+        );
+      })
+      .map((listing) => listing.id);
+  }, [hasSellerReviewPressure, listingDeliveryPressureById, listingFollowOnBreakdownById, workspace]);
+  const trustWatchListingsCount = trustWatchListingIds.length;
+  const sortedTrustWatchListings = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return [...workspace.listings]
+      .filter((listing) => trustWatchListingIds.includes(listing.id))
+      .sort((left, right) => {
+        const leftRetention = listingFollowOnBreakdownById[left.id];
+        const rightRetention = listingFollowOnBreakdownById[right.id];
+        const leftRecent = leftRetention?.totalRecentFollowOnCount ?? 0;
+        const rightRecent = rightRetention?.totalRecentFollowOnCount ?? 0;
+        if (leftRecent !== rightRecent) {
+          return rightRecent - leftRecent;
+        }
+        const leftAllTime = leftRetention?.totalFollowOnCount ?? 0;
+        const rightAllTime = rightRetention?.totalFollowOnCount ?? 0;
+        if (leftAllTime !== rightAllTime) {
+          return rightAllTime - leftAllTime;
+        }
+        return left.title.localeCompare(right.title);
+      });
+  }, [listingFollowOnBreakdownById, trustWatchListingIds, workspace]);
+  const topTrustWatchListing = sortedTrustWatchListings[0] ?? null;
+  const nextTrustWatchListing = sortedTrustWatchListings[1] ?? null;
+  const trustWatchConcentrationShare = useMemo(() => {
+    if (sortedTrustWatchListings.length === 0) {
+      return null;
+    }
+
+    const totalTrustWeight = sortedTrustWatchListings.reduce((sum, listing) => {
+      const retention = listingFollowOnBreakdownById[listing.id];
+      return sum + Math.max(retention?.totalRecentFollowOnCount ?? 0, retention?.totalFollowOnCount ?? 1, 1);
+    }, 0);
+    if (totalTrustWeight <= 0) {
+      return null;
+    }
+
+    const topRetention = listingFollowOnBreakdownById[sortedTrustWatchListings[0]?.id ?? ""];
+    const topWeight = Math.max(topRetention?.totalRecentFollowOnCount ?? 0, topRetention?.totalFollowOnCount ?? 1, 1);
+    return topWeight / totalTrustWeight;
+  }, [listingFollowOnBreakdownById, sortedTrustWatchListings]);
+  const pressureEasingListingIds = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    const transactionListingByKey = {
+      ...Object.fromEntries(
+        workspace.orders.map((order) => [`order:${order.id}`, getTransactionListingId(order) ?? ""]),
+      ),
+      ...Object.fromEntries(
+        workspace.bookings.map((booking) => [`booking:${booking.id}`, getTransactionListingId(booking) ?? ""]),
+      ),
+    };
+
+    const recentSentListingIds = new Set(
+      notificationDeliveries
+        .filter(
+          (delivery) =>
+            delivery.delivery_status === "sent" &&
+            matchesDeliveryRecency(delivery.created_at, "7d"),
+        )
+        .map((delivery) => transactionListingByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`])
+        .filter((value): value is string => Boolean(value)),
+    );
+
+    return workspace.listings
+      .filter((listing) => {
+        if (!recentSentListingIds.has(listing.id)) {
+          return false;
+        }
+
+        const deliveryPressure = listingDeliveryPressureById[listing.id] ?? { failed: 0, queued: 0 };
+        return deliveryPressure.failed === 0 && deliveryPressure.queued === 0;
+      })
+      .map((listing) => listing.id);
+  }, [listingDeliveryPressureById, notificationDeliveries, workspace]);
+  const pressureEasingListingsCount = pressureEasingListingIds.length;
+  const recoveryLaneListingIds = useMemo(
+    () =>
+      (workspace?.listings ?? [])
+        .filter((listing) => (listingRecoveryDeltaById[listing.id] ?? 0) > 0)
+        .map((listing) => listing.id),
+    [listingRecoveryDeltaById, workspace?.listings],
+  );
+  const recoveryLaneListingsCount = recoveryLaneListingIds.length;
+  const sortedRecoveryLaneListings = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    return [...workspace.listings]
+      .filter((listing) => (listingRecoveryDeltaById[listing.id] ?? 0) > 0)
+      .sort((left, right) => {
+        const leftDelta = listingRecoveryDeltaById[left.id] ?? 0;
+        const rightDelta = listingRecoveryDeltaById[right.id] ?? 0;
+        if (leftDelta !== rightDelta) {
+          return rightDelta - leftDelta;
+        }
+        return left.title.localeCompare(right.title);
+      });
+  }, [listingRecoveryDeltaById, workspace]);
+  const topRecoveryLaneListing = sortedRecoveryLaneListings[0] ?? null;
+  const nextRecoveryLaneListing = sortedRecoveryLaneListings[1] ?? null;
+  const recoveryLaneConcentrationShare = useMemo(() => {
+    if (sortedRecoveryLaneListings.length === 0) {
+      return null;
+    }
+
+    const totalRecoveryMagnitude = sortedRecoveryLaneListings.reduce(
+      (sum, listing) => sum + (listingRecoveryDeltaById[listing.id] ?? 0),
+      0,
+    );
+    if (totalRecoveryMagnitude <= 0) {
+      return null;
+    }
+
+    return (listingRecoveryDeltaById[sortedRecoveryLaneListings[0]?.id ?? ""] ?? 0) / totalRecoveryMagnitude;
+  }, [listingRecoveryDeltaById, sortedRecoveryLaneListings]);
+  const filteredListingFollowOnBreakdown = useMemo(
+    () =>
+      listingFollowOnBreakdown.filter((item) => {
+        if (listingAdjustmentFilter === "all") {
+          if (listingTrendFilter === "all") {
+            return true;
+          }
+        } else if (
+          getListingAdjustmentType(item.listing.last_operating_adjustment_summary) !==
+          listingAdjustmentFilter
+        ) {
+          return false;
+        }
+
+        if (listingTrendFilter === "all") {
+          return true;
+        }
+
+        return (
+          getListingRetentionTrendKey({
+            sameSellerCount: item.sameSellerCount,
+            crossSellerCount: item.crossSellerCount,
+            sameSellerRecentCount: item.sameSellerRecentCount,
+            crossSellerRecentCount: item.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: item.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: item.crossSellerPostAdjustmentCount,
+          }) === listingTrendFilter
+        );
+      }),
+    [listingAdjustmentFilter, listingFollowOnBreakdown, listingTrendFilter],
+  );
+  const filteredWorkspaceListings = useMemo(
+    () =>
+      (workspace?.listings ?? []).filter((listing) => {
+        if (listingAdjustmentFilter === "all") {
+          if (listingTrendFilter === "all") {
+            return true;
+          }
+        } else if (
+          getListingAdjustmentType(listing.last_operating_adjustment_summary) !==
+          listingAdjustmentFilter
+        ) {
+          return false;
+        }
+
+        if (listingTrendFilter === "all") {
+          return true;
+        }
+
+        const listingRetention = listingFollowOnBreakdownById[listing.id];
+        const trendKey = listingRetention
+          ? getListingRetentionTrendKey({
+              sameSellerCount: listingRetention.sameSellerCount,
+              crossSellerCount: listingRetention.crossSellerCount,
+              sameSellerRecentCount: listingRetention.sameSellerRecentCount,
+              crossSellerRecentCount: listingRetention.crossSellerRecentCount,
+              sameSellerPostAdjustmentCount: listingRetention.sameSellerPostAdjustmentCount,
+              crossSellerPostAdjustmentCount: listingRetention.crossSellerPostAdjustmentCount,
+            })
+          : "no-signal";
+
+        return trendKey === listingTrendFilter;
+      }),
+    [listingAdjustmentFilter, listingFollowOnBreakdownById, listingTrendFilter, workspace?.listings],
+  );
+  const listingAdjustmentCounts = useMemo(() => {
+    const counts = {
+      all: (workspace?.listings ?? []).length,
+      pricing: 0,
+      "local-fit": 0,
+      booking: 0,
+      fulfillment: 0,
+      other: 0,
+    } as Record<"all" | "pricing" | "local-fit" | "booking" | "fulfillment" | "other", number>;
+
+    for (const listing of workspace?.listings ?? []) {
+      const adjustmentType = getListingAdjustmentType(listing.last_operating_adjustment_summary);
+      if (adjustmentType !== "all") {
+        counts[adjustmentType] += 1;
+      }
+    }
+
+    return counts;
+  }, [workspace?.listings]);
+  const listingTrendCounts = useMemo(() => {
+    const counts = {
+      all: (workspace?.listings ?? []).length,
+      improving: 0,
+      softening: 0,
+      stable: 0,
+      "no-signal": 0,
+    } as Record<"all" | "improving" | "softening" | "stable" | "no-signal", number>;
+
+    for (const listing of workspace?.listings ?? []) {
+      const listingRetention = listingFollowOnBreakdownById[listing.id];
+      const trendKey = listingRetention
+        ? getListingRetentionTrendKey({
+            sameSellerCount: listingRetention.sameSellerCount,
+            crossSellerCount: listingRetention.crossSellerCount,
+            sameSellerRecentCount: listingRetention.sameSellerRecentCount,
+            crossSellerRecentCount: listingRetention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: listingRetention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: listingRetention.crossSellerPostAdjustmentCount,
+          })
+        : "no-signal";
+      counts[trendKey] += 1;
+    }
+
+    return counts;
+  }, [listingFollowOnBreakdownById, workspace?.listings]);
+  const listingShortcutCounts = useMemo(() => {
+    const counts = {
+      "pricing-softening": 0,
+      "local-fit-improving": 0,
+      "booking-softening": 0,
+      "fulfillment-improving": 0,
+    } as Record<
+      "pricing-softening" | "local-fit-improving" | "booking-softening" | "fulfillment-improving",
+      number
+    >;
+
+    for (const listing of workspace?.listings ?? []) {
+      const adjustmentType = getListingAdjustmentType(listing.last_operating_adjustment_summary);
+      const listingRetention = listingFollowOnBreakdownById[listing.id];
+      const trendKey = listingRetention
+        ? getListingRetentionTrendKey({
+            sameSellerCount: listingRetention.sameSellerCount,
+            crossSellerCount: listingRetention.crossSellerCount,
+            sameSellerRecentCount: listingRetention.sameSellerRecentCount,
+            crossSellerRecentCount: listingRetention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: listingRetention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: listingRetention.crossSellerPostAdjustmentCount,
+          })
+        : "no-signal";
+
+      if (adjustmentType === "pricing" && trendKey === "softening") {
+        counts["pricing-softening"] += 1;
+      }
+      if (adjustmentType === "local-fit" && trendKey === "improving") {
+        counts["local-fit-improving"] += 1;
+      }
+      if (adjustmentType === "booking" && trendKey === "softening") {
+        counts["booking-softening"] += 1;
+      }
+      if (adjustmentType === "fulfillment" && trendKey === "improving") {
+        counts["fulfillment-improving"] += 1;
+      }
+    }
+
+    return counts;
+  }, [listingFollowOnBreakdownById, workspace?.listings]);
   const activeWorkspaceSummary = useMemo(() => {
     const parts: string[] = [];
 
     if (workspacePreset !== "default") {
       parts.push(titleCaseWorkspaceLabel(workspacePreset));
+      if (workspacePreset === "delivery-drag") {
+        parts.push("Negative recent delivery net");
+      }
+      if (workspacePreset === "recovery-lane") {
+        parts.push("Positive recent delivery net");
+      }
     }
     if (activityTypeFilter !== "all") {
       parts.push(`Type: ${titleCaseWorkspaceLabel(activityTypeFilter)}`);
@@ -1296,11 +3434,36 @@ export function SellerWorkspace() {
     if (activityDiscoveryFilter !== "all") {
       parts.push(`Discovery: ${titleCaseWorkspaceLabel(activityDiscoveryFilter)}`);
     }
+    if (activityListingFilter !== "all") {
+      const listing = workspace?.listings.find((entry) => entry.id === activityListingFilter);
+      parts.push(`Listing: ${listing?.title ?? activityListingFilter.slice(0, 8)}`);
+    }
     if (activityRecencyFilter !== "all") {
       parts.push(`Activity Window: ${titleCaseWorkspaceLabel(activityRecencyFilter)}`);
     }
     if (activityContextFilter !== "all") {
       parts.push(`Context: ${titleCaseWorkspaceLabel(activityContextFilter)}`);
+    }
+    if (activityPressureFilter !== "all") {
+      parts.push(`Pressure: ${titleCaseWorkspaceLabel(activityPressureFilter)}`);
+    }
+    if (activityRecoveryFilter !== "all") {
+      parts.push("Recovery: Easing");
+    }
+    if (activitySortMode !== "default") {
+      parts.push(
+        activitySortMode === "pressured"
+          ? "Queue Order: Pressured First"
+          : activitySortMode === "drag"
+            ? "Queue Order: Drag First"
+            : "Queue Order: Recovery First",
+      );
+    }
+    if (listingAdjustmentFilter !== "all") {
+      parts.push(`Last Adjustment: ${titleCaseWorkspaceLabel(listingAdjustmentFilter)}`);
+    }
+    if (listingTrendFilter !== "all") {
+      parts.push(`Trend: ${titleCaseWorkspaceLabel(listingTrendFilter)}`);
     }
     if (deliveryStatusFilter !== "all") {
       parts.push(`Deliveries: ${titleCaseWorkspaceLabel(deliveryStatusFilter)}`);
@@ -1320,13 +3483,20 @@ export function SellerWorkspace() {
   }, [
     activityContextFilter,
     activityDiscoveryFilter,
+    activityListingFilter,
+    activityPressureFilter,
+    activityRecoveryFilter,
     activityRecencyFilter,
+    activitySortMode,
     activityStatusFilter,
     activityTypeFilter,
     bulkExecutionMode,
     deliveryRecencyFilter,
     deliveryStatusFilter,
     focusedActivityKey,
+    listingAdjustmentFilter,
+    listingTrendFilter,
+    workspace?.listings,
     workspacePreset,
   ]);
   const isDefaultWorkspaceView =
@@ -1334,8 +3504,14 @@ export function SellerWorkspace() {
     activityTypeFilter === "all" &&
     activityStatusFilter === "all" &&
     activityDiscoveryFilter === "all" &&
+    activityListingFilter === "all" &&
     activityRecencyFilter === "all" &&
     activityContextFilter === "all" &&
+    activityPressureFilter === "all" &&
+    activityRecoveryFilter === "all" &&
+    activitySortMode === "default" &&
+    listingAdjustmentFilter === "all" &&
+    listingTrendFilter === "all" &&
     deliveryStatusFilter === "all" &&
     deliveryRecencyFilter === "7d" &&
     bulkExecutionMode === "best_effort" &&
@@ -1381,8 +3557,11 @@ export function SellerWorkspace() {
     return role === "order-led" ? "fulfillment" : "booking";
   }
 
-  function focusListingRoleControls(listing: Listing) {
-    const targetKey = `${listing.id}:${getListingTuneRoleTarget(listing)}`;
+  function focusListingControlTarget(
+    listing: Listing,
+    target: "pricing" | "booking" | "fulfillment",
+  ) {
+    const targetKey = `${listing.id}:${target}`;
     setHighlightedListingControlKey(targetKey);
     if (listingControlHighlightTimeoutRef.current) {
       window.clearTimeout(listingControlHighlightTimeoutRef.current);
@@ -1396,6 +3575,224 @@ export function SellerWorkspace() {
       listingControlHighlightTimeoutRef.current = null;
     }, 1800);
   }
+
+  function focusListingRoleControls(listing: Listing) {
+    focusListingControlTarget(listing, getListingTuneRoleTarget(listing));
+  }
+
+  type ListingTransaction = Order | Booking;
+
+  type ActivitySliceConfig = ActivityFilterConfig & {
+    activityStatus: "all";
+    activityRecency: "all";
+    activityContext: "all";
+    activitySort: "default" | "pressured";
+    activityRecovery: "all" | "easing";
+    deliveryStatus: "all" | "sent" | "failed" | "queued";
+    deliveryRecency: "7d";
+    transactionPredicate: (transaction: ListingTransaction) => boolean;
+    transactionSort?: (transaction: ListingTransaction) => number;
+  };
+
+  function focusNextListingTransaction(
+    listing: Listing,
+    config: ActivitySliceConfig,
+  ) {
+    const transactionSort = config.transactionSort;
+    const transactions = [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])]
+      .filter((transaction) => {
+        if (getTransactionListingId(transaction) !== listing.id) {
+          return false;
+        }
+
+        return config.transactionPredicate(transaction);
+      })
+      .sort(
+        transactionSort
+          ? (left, right) => transactionSort(right) - transactionSort(left)
+          : () => 0,
+      );
+
+    const nextTransaction = transactions[0];
+    if (nextTransaction) {
+      const key = "items" in nextTransaction
+        ? `order:${nextTransaction.id}`
+        : `booking:${nextTransaction.id}`;
+      setActivityFocus(key);
+    }
+
+    focusListingRoleControls(listing);
+  }
+
+  function openListingLane(listing: Listing, config: ActivitySliceConfig) {
+    applyActivityFilters({
+      ...config,
+      activityListing: config.activityListing ?? listing.id,
+    });
+
+    focusNextListingTransaction(listing, config);
+  }
+
+  function openListingRetentionLane(
+    listing: Listing,
+    discovery: "same-seller" | "cross-seller",
+  ) {
+    openListingLane(listing, {
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: discovery,
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+      transactionPredicate: (transaction) =>
+        discovery === "same-seller"
+          ? isSameSellerFollowOnBrowseContext(transaction.buyer_browse_context)
+          : isCrossSellerFollowOnBrowseContext(transaction.buyer_browse_context),
+      transactionSort: getLatestTransactionTimestamp,
+    });
+  }
+
+  function openListingSupportPressureLane(
+    listing: Listing,
+    mode: "failed" | "queued" | "trust",
+  ) {
+    openListingLane(listing, {
+      preset:
+        mode === "failed"
+          ? "delivery-pressure"
+          : mode === "trust"
+            ? "trust-watch"
+            : "pressure-queue",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityListing: listing.id,
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: mode === "failed" ? "delivery" : mode === "trust" ? "trust" : "all",
+      activitySort: "pressured",
+      activityRecovery: "all",
+      deliveryStatus: mode === "trust" ? "all" : mode,
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "softening",
+      transactionPredicate: (transaction) => {
+        if (mode === "trust") {
+          return true;
+        }
+
+        return notificationDeliveries.some(
+          (delivery) =>
+            delivery.transaction_kind === ("items" in transaction ? "order" : "booking") &&
+            delivery.transaction_id === transaction.id &&
+            delivery.delivery_status === mode,
+        );
+      },
+      transactionSort: getLatestTransactionTimestamp,
+    });
+  }
+
+  function openListingPressureEasingLane(listing: Listing) {
+    openListingLane(listing, {
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityListing: listing.id,
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "sent",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "improving",
+      transactionPredicate: (transaction) =>
+        notificationDeliveries.some(
+          (delivery) =>
+            delivery.transaction_kind === ("items" in transaction ? "order" : "booking") &&
+            delivery.transaction_id === transaction.id &&
+            delivery.delivery_status === "sent" &&
+            matchesDeliveryRecency(delivery.created_at, "7d"),
+        ),
+      transactionSort: getLatestTransactionTimestamp,
+    });
+  }
+
+  function openListingRecentDeliveryNetLane(
+    listing: Listing,
+    mode: "sent" | "failed",
+  ) {
+    openListingLane(listing, {
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityListing: listing.id,
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: mode === "sent" ? "easing" : "all",
+      deliveryStatus: mode,
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+      transactionPredicate: (transaction) =>
+        notificationDeliveries.some(
+          (delivery) =>
+            delivery.transaction_kind === ("items" in transaction ? "order" : "booking") &&
+            delivery.transaction_id === transaction.id &&
+            delivery.delivery_status === mode &&
+            matchesDeliveryRecency(delivery.created_at, "7d"),
+        ),
+      transactionSort: getLatestTransactionTimestamp,
+    });
+  }
+
+  const getListingPressureLaneCount = useCallback(
+    (listingId: string, mode: "failed" | "queued" | "trust") => {
+      if (mode === "trust") {
+        return [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+          (transaction) => getTransactionListingId(transaction) === listingId,
+        ).length;
+      }
+
+      return notificationDeliveries.filter((delivery) => {
+        if (
+          delivery.delivery_status !== mode ||
+          !matchesDeliveryRecency(delivery.created_at, "7d")
+        ) {
+          return false;
+        }
+
+        if (delivery.transaction_kind === "order") {
+          const matchingOrder = (workspace?.orders ?? []).find(
+            (order) => order.id === delivery.transaction_id,
+          );
+          return matchingOrder
+            ? getTransactionListingId(matchingOrder) === listingId
+            : false;
+        }
+
+        const matchingBooking = (workspace?.bookings ?? []).find(
+          (booking) => booking.id === delivery.transaction_id,
+        );
+        return matchingBooking
+          ? getTransactionListingId(matchingBooking) === listingId
+          : false;
+      }).length;
+    },
+    [notificationDeliveries, workspace?.bookings, workspace?.orders],
+  );
 
   function markNotificationsSeen() {
     const latestTimestamp = notifications[0]?.createdAt ?? new Date().toISOString();
@@ -1447,66 +3844,856 @@ export function SellerWorkspace() {
     }
   }
 
-  function applySellerPreset(
-    preset: "default" | "needs-action" | "recent-failures" | "focused-work",
-  ) {
-    setWorkspacePreset(preset);
+  const presetConfigs: Record<WorkspacePreset, ActivityFilterConfig> = {
+    default: {
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "needs-action": {
+      preset: "needs-action",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "unread",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "queued",
+      deliveryRecency: "today",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "recent-failures": {
+      preset: "recent-failures",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "failed",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "pressure-queue": {
+      preset: "pressure-queue",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "pressured",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "delivery-drag": {
+      preset: "delivery-drag",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "drag",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "delivery-pressure": {
+      preset: "delivery-pressure",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "delivery",
+      activitySort: "pressured",
+      activityRecovery: "all",
+      deliveryStatus: "failed",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "trust-watch": {
+      preset: "trust-watch",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "trust",
+      activitySort: "pressured",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "recovery-lane": {
+      preset: "recovery-lane",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "recovery",
+      activityRecovery: "easing",
+      deliveryStatus: "sent",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "recovered-recently": {
+      preset: "recovered-recently",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "easing",
+      deliveryStatus: "sent",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "improving",
+    },
+    "focused-work": {
+      preset: "focused-work",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "focused",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+  };
 
-    if (preset === "default") {
-      setActivityTypeFilter("all");
-      setActivityStatusFilter("all");
-      setActivityDiscoveryFilter("all");
-      setActivityRecencyFilter("all");
-      setActivityContextFilter("all");
-      setDeliveryStatusFilter("all");
-      setDeliveryRecencyFilter("7d");
-      return;
-    }
-
-    if (preset === "needs-action") {
-      setActivityTypeFilter("all");
-      setActivityStatusFilter("all");
-      setActivityDiscoveryFilter("all");
-      setActivityRecencyFilter("all");
-      setActivityContextFilter("unread");
-      setDeliveryStatusFilter("queued");
-      setDeliveryRecencyFilter("today");
-      return;
-    }
-
-    if (preset === "recent-failures") {
-      setActivityTypeFilter("all");
-      setActivityStatusFilter("all");
-      setActivityDiscoveryFilter("all");
-      setActivityRecencyFilter("all");
-      setActivityContextFilter("all");
-      setDeliveryStatusFilter("failed");
-      setDeliveryRecencyFilter("7d");
-      return;
-    }
-
-    setActivityTypeFilter("all");
-    setActivityStatusFilter("all");
-    setActivityDiscoveryFilter("all");
-    setActivityRecencyFilter("all");
-    setActivityContextFilter("focused");
-    setDeliveryStatusFilter("all");
-    setDeliveryRecencyFilter("7d");
+  function applySellerPreset(preset: WorkspacePreset) {
+    applyActivityFilters(presetConfigs[preset]);
   }
 
   function applyDiscoveryQueueSlice(
-    discovery: "local" | "search" | "price",
+    discovery: "local" | "search" | "price" | "same-seller" | "cross-seller",
     type: "all" | "order" | "booking" = "all",
     recency: "7d" | "all" = "all",
   ) {
-    setWorkspacePreset("default");
-    setActivityTypeFilter(type);
-    setActivityStatusFilter("all");
-    setActivityDiscoveryFilter(discovery);
-    setActivityRecencyFilter(recency);
-    setActivityContextFilter("all");
-    setDeliveryStatusFilter("all");
-    setDeliveryRecencyFilter("7d");
+    applyActivityFilters({
+      preset: "default",
+      activityType: type,
+      activityStatus: "all",
+      activityDiscovery: discovery,
+      activityRecency: recency,
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    });
+  }
+
+  function openDiscoveryDemandLane(
+    discovery: "local" | "search" | "price" | "same-seller" | "cross-seller",
+    type: "all" | "order" | "booking" = "all",
+  ) {
+    applyDiscoveryQueueSlice(discovery, type);
+  }
+
+  function openRecentDiscoveryLane(
+    discovery: "local" | "search" | "price" | "same-seller" | "cross-seller",
+  ) {
+    applyDiscoveryQueueSlice(discovery, "all", "7d");
+  }
+
+  function openSupportWatchLane() {
+    applyActivityFilters({
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "softening",
+    });
+  }
+
+  function openRecentDeliveryStatusLane(status: "failed" | "queued" | "sent") {
+    applyActivityFilters({
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: status,
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    });
+  }
+
+  function openPressureEasingLane() {
+    applyActivityFilters({
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "sent",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "improving",
+    });
+  }
+
+  function openTrustWatchLane() {
+    applySellerPreset("trust-watch");
+  }
+
+  function openRecentBrowseContextLane() {
+    applyActivityFilters({
+      preset: "default",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "7d",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    });
+  }
+
+  function openDeliveryDragLane() {
+    applySellerPreset("delivery-drag");
+  }
+
+  function openRecoveryLane() {
+    applySellerPreset("recovery-lane");
+  }
+
+  function openRecoveredVsFailedLane() {
+    if (recoveredVsFailedDelta >= 0) {
+      applySellerPreset("recovered-recently");
+      return;
+    }
+
+    applySellerPreset("recent-failures");
+  }
+
+  function openSupportWatchLaneWithFocus(listing: Listing) {
+    openSupportWatchLane();
+    focusListingRoleControls(listing);
+  }
+
+  function openSupportWatchSummaryLane() {
+    openSupportWatchLane();
+    focusFirstMatchingListing(supportWatchListingIds);
+  }
+
+  function openTopSupportShareLane() {
+    if (
+      supportWatchConcentrationShare != null &&
+      supportWatchConcentrationShare >= 0.7 &&
+      topSupportWatchListing
+    ) {
+      openSupportWatchLaneWithFocus(topSupportWatchListing);
+      return;
+    }
+
+    openSupportWatchLane();
+  }
+
+  function openTopTrustShareLane() {
+    if (trustWatchConcentrationShare != null && trustWatchConcentrationShare >= 0.7 && topTrustWatchListing) {
+      openTrustWatchLane();
+      openListingSupportPressureLane(topTrustWatchListing, "trust");
+      return;
+    }
+
+    openTrustWatchLane();
+  }
+
+  function openPressureEasingSummaryLane() {
+    openPressureEasingLane();
+    focusFirstMatchingListing(pressureEasingListingIds);
+  }
+
+  function getListingSupportPressureAction(
+    listingId: string,
+    deliveryPressure: { failed: number; queued: number },
+    supportPressureLabel: string | null,
+  ) {
+    const mode = getListingSupportPressureLaneMode({
+      failedDeliveryCount: deliveryPressure.failed,
+      queuedDeliveryCount: deliveryPressure.queued,
+      supportPressureLabel,
+    });
+
+    if (!mode) {
+      return null;
+    }
+
+    const count =
+      mode === "failed"
+        ? deliveryPressure.failed
+        : mode === "queued"
+          ? deliveryPressure.queued
+          : getListingPressureLaneCount(listingId, "trust");
+
+    return { mode, count };
+  }
+
+  function getListingRetentionPreviewTrendLabel(listing: Listing) {
+    const retention = listingFollowOnBreakdownById[listing.id];
+    if (!retention) {
+      return null;
+    }
+
+    return getListingPreviewRetentionTrendLabel({
+      sameSellerCount: retention.sameSellerCount,
+      crossSellerCount: retention.crossSellerCount,
+      sameSellerRecentCount: retention.sameSellerRecentCount,
+      crossSellerRecentCount: retention.crossSellerRecentCount,
+      sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
+      crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
+    });
+  }
+
+  function getListingRetentionTrendSeedLabel(listing: Listing) {
+    const retention = listingFollowOnBreakdownById[listing.id];
+    if (!retention) {
+      return null;
+    }
+
+    return getListingRetentionTrend({
+      sameSellerCount: retention.sameSellerCount,
+      crossSellerCount: retention.crossSellerCount,
+      sameSellerRecentCount: retention.sameSellerRecentCount,
+      crossSellerRecentCount: retention.crossSellerRecentCount,
+      sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
+      crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
+    }).label;
+  }
+
+  function getListingPreviewTuneAction(listing: Listing) {
+    return getListingAdjustmentTuneAction(listing.last_operating_adjustment_summary);
+  }
+
+  function getListingAdjustmentPreviewLabel(listing: Listing) {
+    if (!listing.last_operating_adjustment_summary) {
+      return "";
+    }
+
+    return titleCaseWorkspaceLabel(
+      getListingAdjustmentType(listing.last_operating_adjustment_summary),
+    );
+  }
+
+  function getSupportPreviewDetail(listing: Listing) {
+    const deliveryPressure = listingDeliveryPressureById[listing.id] ?? { failed: 0, queued: 0 };
+    return getListingSupportPressure({
+      failedDeliveryCount: deliveryPressure.failed,
+      queuedDeliveryCount: deliveryPressure.queued,
+      retentionTrendLabel: getListingRetentionTrendSeedLabel(listing),
+      hasReviewPressure: hasSellerReviewPressure,
+    });
+  }
+
+  function openDeliveryDragLaneWithListing(listing: Listing) {
+    openDeliveryDragLane();
+    openListingRecentDeliveryNetLane(listing, "failed");
+  }
+
+  function openRecoveryLaneWithListing(listing: Listing) {
+    openRecoveryLane();
+    openListingRecentDeliveryNetLane(listing, "sent");
+  }
+
+  function openTrustWatchLaneWithListing(listing: Listing) {
+    openTrustWatchLane();
+    openListingSupportPressureLane(listing, "trust");
+  }
+
+  function openSupportWatchConcentrationLane() {
+    if (supportWatchConcentrationShare != null && supportWatchConcentrationShare >= 0.7 && topSupportWatchListing) {
+      openSupportWatchLaneWithFocus(topSupportWatchListing);
+      return;
+    }
+
+    openSupportWatchLane();
+  }
+
+  function openDeliveryDragConcentrationLane() {
+    if (deliveryDragConcentrationShare != null && deliveryDragConcentrationShare >= 0.7 && topDeliveryDragListing) {
+      openDeliveryDragLaneWithListing(topDeliveryDragListing);
+      return;
+    }
+
+    openDeliveryDragLane();
+  }
+
+  function openRecoveryConcentrationLane() {
+    if (recoveryLaneConcentrationShare != null && recoveryLaneConcentrationShare >= 0.7 && topRecoveryLaneListing) {
+      openRecoveryLaneWithListing(topRecoveryLaneListing);
+      return;
+    }
+
+    openRecoveryLane();
+  }
+
+  function openTrustConcentrationLane() {
+    if (trustWatchConcentrationShare != null && trustWatchConcentrationShare >= 0.7 && topTrustWatchListing) {
+      openTrustWatchLaneWithListing(topTrustWatchListing);
+      return;
+    }
+
+    openTrustWatchLane();
+  }
+
+  function getWorkspacePresetChipClass(
+    preset:
+      | "default"
+      | "needs-action"
+      | "recent-failures"
+      | "pressure-queue"
+      | "delivery-drag"
+      | "delivery-pressure"
+      | "trust-watch"
+      | "recovery-lane"
+      | "recovered-recently"
+      | "focused-work",
+  ) {
+    if (workspacePreset === preset) {
+      return "border-accent bg-accent text-white";
+    }
+
+    if (preset === "needs-action" && unreadNotificationCount > 0) {
+      return "border-amber-300 bg-amber-50 text-amber-900 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "recent-failures" && failedDeliveryCount > 0) {
+      return "border-red-300 bg-red-50 text-red-700 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "pressure-queue" && supportWatchListingsCount > 0) {
+      return "border-violet-300 bg-violet-50 text-violet-800 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "delivery-drag" && deliveryDragListingsCount > 0) {
+      return "border-orange-300 bg-orange-50 text-orange-800 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "delivery-pressure" && deliveryPressureListingsCount > 0) {
+      return "border-red-300 bg-red-50 text-red-700 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "trust-watch" && trustWatchListingsCount > 0) {
+      return "border-rose-300 bg-rose-50 text-rose-700 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "recovery-lane" && recoveryLaneListingsCount > 0) {
+      return "border-emerald-300 bg-emerald-50 text-emerald-800 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "recovered-recently" && pressureEasingListingsCount > 0) {
+      return "border-lime-300 bg-lime-50 text-lime-800 hover:border-accent hover:text-accent";
+    }
+
+    if (preset === "focused-work" && focusedItemCount > 0) {
+      return "border-sky-300 bg-sky-50 text-sky-800 hover:border-accent hover:text-accent";
+    }
+
+    return "border-border text-foreground hover:border-accent hover:text-accent";
+  }
+
+  function openListingSupportPressureAction(
+    listing: Listing,
+    action: { mode: "failed" | "queued" | "trust"; count: number } | null,
+  ) {
+    if (!action) {
+      return;
+    }
+
+    openListingSupportPressureLane(listing, action.mode);
+  }
+
+  const getTransactionListingContext = useCallback((transaction: Order | Booking) => {
+    const listing = listingsById[getTransactionListingId(transaction) ?? ""] ?? null;
+    const retention = listing ? listingFollowOnBreakdownById[listing.id] : null;
+    const retentionTrend = retention
+      ? getListingRetentionTrend({
+          sameSellerCount: retention.sameSellerCount,
+          crossSellerCount: retention.crossSellerCount,
+          sameSellerRecentCount: retention.sameSellerRecentCount,
+          crossSellerRecentCount: retention.crossSellerRecentCount,
+          sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
+          crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
+        })
+      : null;
+    const deliveryPressure = listing
+      ? listingDeliveryPressureById[listing.id] ?? { failed: 0, queued: 0 }
+      : { failed: 0, queued: 0 };
+    const supportPressure = listing
+      ? getListingSupportPressure({
+          failedDeliveryCount: deliveryPressure.failed,
+          queuedDeliveryCount: deliveryPressure.queued,
+          retentionTrendLabel: retentionTrend?.label ?? null,
+          hasReviewPressure: hasSellerReviewPressure,
+        })
+      : null;
+    const pressureLaneMode =
+      listing && supportPressure
+        ? getListingSupportPressureLaneMode({
+            failedDeliveryCount: deliveryPressure.failed,
+            queuedDeliveryCount: deliveryPressure.queued,
+            supportPressureLabel: supportPressure.label,
+          })
+        : null;
+    const pressureLaneCount =
+      listing && pressureLaneMode
+        ? getListingPressureLaneCount(listing.id, pressureLaneMode)
+        : 0;
+    const isPressureEasing = listing ? pressureEasingListingIds.includes(listing.id) : false;
+    const recoveryDelta = listing ? listingRecoveryDeltaById[listing.id] ?? 0 : 0;
+
+    return {
+      listing,
+      retention,
+      retentionTrend,
+      deliveryPressure,
+      supportPressure,
+      pressureLaneMode,
+      pressureLaneCount,
+      isPressureEasing,
+      recoveryDelta,
+    };
+  }, [
+    getListingPressureLaneCount,
+    hasSellerReviewPressure,
+    listingDeliveryPressureById,
+    listingFollowOnBreakdownById,
+    listingRecoveryDeltaById,
+    listingsById,
+    pressureEasingListingIds,
+  ]);
+
+  const getFocusedSupportPressureLaneCount = useCallback((
+    listing: Listing | null,
+    pressureLaneMode: "failed" | "queued" | "trust" | null,
+  ) => {
+    if (!listing || !pressureLaneMode) {
+      return 0;
+    }
+
+    if (pressureLaneMode === "trust") {
+      return [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+        (transaction) => getTransactionListingId(transaction) === listing.id,
+      ).length;
+    }
+
+    return notificationDeliveries.filter((delivery) => {
+      if (
+        delivery.delivery_status !== pressureLaneMode ||
+        !matchesDeliveryRecency(delivery.created_at, "7d")
+      ) {
+        return false;
+      }
+
+      const matchingOrder = (workspace?.orders ?? []).find((order) => order.id === delivery.transaction_id);
+      if (matchingOrder && delivery.transaction_kind === "order") {
+        return getTransactionListingId(matchingOrder) === listing.id;
+      }
+
+      const matchingBooking = (workspace?.bookings ?? []).find(
+        (booking) => booking.id === delivery.transaction_id,
+      );
+      if (matchingBooking && delivery.transaction_kind === "booking") {
+        return getTransactionListingId(matchingBooking) === listing.id;
+      }
+
+      return false;
+    }).length;
+  }, [notificationDeliveries, workspace?.bookings, workspace?.orders]);
+
+  const getFocusedTransactionContext = useCallback((transaction: Order | Booking | null) => {
+    if (!transaction) {
+      return {
+        listing: null,
+        supportPressure: null,
+        pressureLaneMode: null,
+        pressureLaneCount: 0,
+        isPressureEasing: false,
+        recoveryDelta: 0,
+      };
+    }
+
+    const context = getTransactionListingContext(transaction);
+
+    return {
+      ...context,
+      pressureLaneCount: getFocusedSupportPressureLaneCount(
+        context.listing,
+        context.pressureLaneMode,
+      ),
+    };
+  }, [getFocusedSupportPressureLaneCount, getTransactionListingContext]);
+
+  const focusedOrderContext = useMemo(
+    () => getFocusedTransactionContext(focusedOrder),
+    [focusedOrder, getFocusedTransactionContext],
+  );
+  const focusedBookingContext = useMemo(
+    () => getFocusedTransactionContext(focusedBooking),
+    [focusedBooking, getFocusedTransactionContext],
+  );
+  const focusedOrderListing = focusedOrderContext.listing;
+  const focusedBookingListing = focusedBookingContext.listing;
+  const focusedOrderSupportPressure = focusedOrderContext.supportPressure;
+  const focusedBookingSupportPressure = focusedBookingContext.supportPressure;
+  const focusedOrderSupportPressureLaneMode = focusedOrderContext.pressureLaneMode;
+  const focusedBookingSupportPressureLaneMode = focusedBookingContext.pressureLaneMode;
+  const focusedOrderSupportPressureLaneCount = focusedOrderContext.pressureLaneCount;
+  const focusedBookingSupportPressureLaneCount = focusedBookingContext.pressureLaneCount;
+
+  function getOrderQueueActions(orderId: string) {
+    return [
+      { key: "confirmed", label: "Confirm", onClick: () => updateOrderStatus(orderId, "confirmed") },
+      { key: "preparing", label: "Prep", onClick: () => updateOrderStatus(orderId, "preparing") },
+      { key: "ready", label: "Ready", onClick: () => updateOrderStatus(orderId, "ready") },
+      { key: "completed", label: "Complete", onClick: () => updateOrderStatus(orderId, "completed") },
+    ];
+  }
+
+  function getBookingQueueActions(bookingId: string) {
+    return [
+      { key: "confirmed", label: "Confirm", onClick: () => updateBookingStatus(bookingId, "confirmed") },
+      { key: "in_progress", label: "Start", onClick: () => updateBookingStatus(bookingId, "in_progress") },
+      { key: "completed", label: "Complete", onClick: () => updateBookingStatus(bookingId, "completed") },
+      { key: "declined", label: "Decline", onClick: () => updateBookingStatus(bookingId, "declined") },
+    ];
+  }
+
+  function buildBulkPendingActionLabel(
+    kind: "order" | "booking",
+    count: number,
+    nextStatus: "confirmed" | "completed",
+  ) {
+    const noun = count === 1 ? kind : `${kind}s`;
+    return nextStatus === "completed"
+      ? `Complete ${count} visible ${noun}`
+      : `Confirm ${count} visible ${noun}`;
+  }
+
+  function buildBulkStatusActionFeedback(args: {
+    kind: "order" | "booking";
+    nextStatus: "confirmed" | "completed";
+    targetCount: number;
+    succeededIds: string[];
+    failed: Array<{ id: string; detail: string }>;
+  }): ActionFeedback {
+    const { kind, nextStatus, targetCount, succeededIds, failed } = args;
+    const executionModeLabel = formatBulkExecutionMode(bulkExecutionMode);
+    const pluralKind = succeededIds.length === 1 ? kind : `${kind}s`;
+    const targetPluralKind = targetCount === 1 ? kind : `${kind}s`;
+
+    if (failed.length === 0) {
+      return {
+        tone: "success",
+        message: `${nextStatus === "completed" ? "Completed" : "Updated"} ${
+          succeededIds.length
+        } visible ${pluralKind} to ${nextStatus.replaceAll("_", " ")} using ${executionModeLabel} mode.`,
+      };
+    }
+
+    return {
+      tone: succeededIds.length > 0 ? "success" : "error",
+      message:
+        succeededIds.length > 0
+          ? `Updated ${succeededIds.length} of ${targetCount} visible ${targetPluralKind} using ${executionModeLabel} mode. ${failed.length} failed.`
+          : `Unable to update ${targetCount} visible ${targetPluralKind} using ${executionModeLabel} mode.`,
+      details: buildFailedActionDetails(failed),
+    };
+  }
+
+  function buildFailedActionDetails(failed: Array<{ id: string; detail: string }>) {
+    return failed.map((failure) => `${failure.id.slice(0, 8)} · ${failure.detail}`);
+  }
+
+  function buildBulkRetryDeliveryFeedback(args: {
+    targetCount: number;
+    succeededIds: string[];
+    failed: Array<{ id: string; detail: string }>;
+  }): ActionFeedback {
+    const { targetCount, succeededIds, failed } = args;
+    const executionModeLabel = formatBulkExecutionMode(bulkExecutionMode);
+
+    if (failed.length === 0) {
+      return {
+        tone: "success",
+        message: `Retried ${succeededIds.length} failed ${
+          succeededIds.length === 1 ? "delivery" : "deliveries"
+        } in view using ${executionModeLabel} mode.`,
+      };
+    }
+
+    return {
+      tone: succeededIds.length > 0 ? "success" : "error",
+      message:
+        succeededIds.length > 0
+          ? `Retried ${succeededIds.length} of ${targetCount} failed deliveries in view using ${executionModeLabel} mode. ${failed.length} failed again.`
+          : `Unable to retry ${targetCount} failed deliveries in view using ${executionModeLabel} mode.`,
+      details: buildFailedActionDetails(failed),
+    };
+  }
+
+  function stageBulkTransactionAction(args: {
+    kind: "order" | "booking";
+    currentStatus: "pending" | "ready" | "requested" | "in_progress";
+    nextStatus: "confirmed" | "completed";
+    actionKey: string;
+    count: number;
+  }) {
+    if (args.count === 0) {
+      return;
+    }
+
+    setActionFeedback(null);
+    setPendingBulkAction({
+      kind: args.kind,
+      currentStatus: args.currentStatus,
+      nextStatus: args.nextStatus,
+      actionKey: args.actionKey,
+      count: args.count,
+      label: buildBulkPendingActionLabel(args.kind, args.count, args.nextStatus),
+    });
+  }
+
+  function buildOrderBulkUpdates(
+    orders: Order[],
+    nextStatus: "confirmed" | "completed",
+  ) {
+    return orders.map((order) => ({
+      order_id: order.id,
+      status: nextStatus,
+      seller_response_note: responseNotes[order.id] || null,
+    }));
+  }
+
+  function buildBookingBulkUpdates(
+    bookings: Booking[],
+    nextStatus: "confirmed" | "completed",
+  ) {
+    return bookings.map((booking) => ({
+      booking_id: booking.id,
+      status: nextStatus,
+      seller_response_note: responseNotes[booking.id] || null,
+    }));
+  }
+
+  function getVisibleOrdersByStatus(currentStatus: "pending" | "ready") {
+    return filteredOrders.filter((order) => order.status === currentStatus);
+  }
+
+  function getVisibleBookingsByStatus(currentStatus: "requested" | "in_progress") {
+    return filteredBookings.filter((booking) => booking.status === currentStatus);
+  }
+
+  function executeBulkTransactionStatusAction(args: {
+    kind: "order" | "booking";
+    actionKey: string;
+    nextStatus: "confirmed" | "completed";
+    targetCount: number;
+    errorMessage: string;
+    execute: (accessToken: string) => Promise<{
+      succeeded_ids: string[];
+      failed: Array<{ id: string; detail: string }>;
+    }>;
+  }) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken || args.targetCount === 0) {
+      return;
+    }
+
+    setBulkQueueActionLoading(args.actionKey);
+    setError(null);
+    setActionFeedback(null);
+    startTransition(async () => {
+      try {
+        const result = await args.execute(accessToken);
+        await loadWorkspace(accessToken);
+        setPendingBulkAction(null);
+        setActionFeedback(
+          buildBulkStatusActionFeedback({
+            kind: args.kind,
+            nextStatus: args.nextStatus,
+            targetCount: args.targetCount,
+            succeededIds: result.succeeded_ids,
+            failed: result.failed,
+          }),
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : args.errorMessage);
+        setActionFeedback(null);
+      } finally {
+        setBulkQueueActionLoading(null);
+      }
+    });
+  }
+
+  function focusFirstMatchingListing(listingIds: string[]) {
+    const nextListing = workspace?.listings.find((listing) => listingIds.includes(listing.id));
+    if (nextListing) {
+      focusListingRoleControls(nextListing);
+    }
   }
 
   function updateNotificationPreferences(
@@ -1517,55 +4704,30 @@ export function SellerWorkspace() {
       | "marketing_notifications_enabled"
     >,
   ) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken) {
-      setError("Sign in again before updating notification settings.");
-      return;
-    }
-
-    setError(null);
-    setActionFeedback(null);
-    setPendingBulkAction(null);
-    startTransition(async () => {
-      try {
-        const updatedProfile = await api.updateProfile(changes, { accessToken });
-        setAccountProfile(updatedProfile);
-        setActionFeedback({
-          tone: "success",
-          message: "Notification preferences updated.",
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to update notification settings");
-        setActionFeedback(null);
-      }
+    executeSellerApiAction<Profile>({
+      missingAccessTokenMessage: "Sign in again before updating notification settings.",
+      errorMessage: "Unable to update notification settings",
+      onStart: () => setLoading(true),
+      onFinally: () => setLoading(false),
+      onSuccess: (updatedProfile) => {
+        setAccountProfile(updatedProfile as Profile);
+        return { tone: "success", message: "Notification preferences updated." };
+      },
+      execute: (accessToken) => api.updateProfile(changes, { accessToken }),
     });
   }
 
   function retryNotificationDelivery(deliveryId: string) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken) {
-      setError("Sign in again before retrying notification deliveries.");
-      return;
-    }
-
-    setDeliveryRetryLoading(deliveryId);
-    setError(null);
-    setActionFeedback(null);
-    setPendingBulkAction(null);
-    startTransition(async () => {
-      try {
-        await api.retryNotificationDelivery(deliveryId, accessToken);
-        await loadWorkspace(accessToken);
-        setActionFeedback({
-          tone: "success",
-          message: "Notification delivery requeued.",
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to retry notification delivery");
-        setActionFeedback(null);
-      } finally {
-        setDeliveryRetryLoading(null);
-      }
+    executeSellerApiAction<NotificationDelivery>({
+      missingAccessTokenMessage: "Sign in again before retrying notification deliveries.",
+      errorMessage: "Unable to retry notification delivery",
+      onStart: () => setDeliveryRetryLoading(deliveryId),
+      onFinally: () => setDeliveryRetryLoading(null),
+      successFeedback: {
+        tone: "success",
+        message: "Notification delivery requeued.",
+      },
+      execute: (accessToken) => api.retryNotificationDelivery(deliveryId, accessToken),
     });
   }
 
@@ -1573,49 +4735,27 @@ export function SellerWorkspace() {
     const failedDeliveries = filteredNotificationDeliveries.filter(
       (delivery) => delivery.delivery_status === "failed",
     );
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    if (!accessToken || failedDeliveries.length === 0) {
+    if (failedDeliveries.length === 0) {
       return;
     }
 
-    setRetryingFailedDeliveries(true);
-    setError(null);
-    setActionFeedback(null);
-    setPendingBulkAction(null);
-    startTransition(async () => {
-      try {
-        const result = await api.bulkRetryNotificationDeliveries(
+    executeSellerApiAction<NotificationDeliveryBulkRetryResult>({
+      missingAccessTokenMessage: "Sign in again before retrying failed deliveries.",
+      errorMessage: "Unable to retry failed deliveries",
+      onStart: () => setRetryingFailedDeliveries(true),
+      onFinally: () => setRetryingFailedDeliveries(false),
+      onSuccess: (result) =>
+        buildBulkRetryDeliveryFeedback({
+          targetCount: failedDeliveries.length,
+          succeededIds: result.succeeded_ids,
+          failed: result.failed,
+        }),
+      execute: (accessToken) =>
+        api.bulkRetryNotificationDeliveries(
           failedDeliveries.map((delivery) => delivery.id),
           accessToken,
           bulkExecutionMode,
-        );
-        await loadWorkspace(accessToken);
-        setActionFeedback(
-          result.failed.length === 0
-            ? {
-                tone: "success",
-                message: `Retried ${result.succeeded_ids.length} failed ${
-                  result.succeeded_ids.length === 1 ? "delivery" : "deliveries"
-                } in view using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
-              }
-            : {
-                tone: result.succeeded_ids.length > 0 ? "success" : "error",
-                message:
-                  result.succeeded_ids.length > 0
-                    ? `Retried ${result.succeeded_ids.length} of ${failedDeliveries.length} failed deliveries in view using ${formatBulkExecutionMode(bulkExecutionMode)} mode. ${result.failed.length} failed again.`
-                    : `Unable to retry ${failedDeliveries.length} failed deliveries in view using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
-                details: result.failed.map(
-                  (failure: { id: string; detail: string }) =>
-                    `${failure.id.slice(0, 8)} · ${failure.detail}`,
-                ),
-              },
-        );
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to retry failed deliveries");
-        setActionFeedback(null);
-      } finally {
-        setRetryingFailedDeliveries(false);
-      }
+        ),
     });
   }
 
@@ -1624,58 +4764,21 @@ export function SellerWorkspace() {
     nextStatus: "confirmed" | "completed",
     actionKey: string,
   ) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    const targetOrders = filteredOrders.filter((order) => order.status === currentStatus);
-    if (!accessToken || targetOrders.length === 0) {
-      return;
-    }
-
-    setBulkQueueActionLoading(actionKey);
-    setError(null);
-    setActionFeedback(null);
-    startTransition(async () => {
-      try {
-        const result = await api.bulkUpdateOrderStatuses(
+    const targetOrders = getVisibleOrdersByStatus(currentStatus);
+    executeBulkTransactionStatusAction({
+      kind: "order",
+      actionKey,
+      nextStatus,
+      targetCount: targetOrders.length,
+      errorMessage: "Unable to update visible orders",
+      execute: (accessToken) =>
+        api.bulkUpdateOrderStatuses(
           {
             execution_mode: bulkExecutionMode,
-            updates: targetOrders.map((order) => ({
-              order_id: order.id,
-              status: nextStatus,
-              seller_response_note: responseNotes[order.id] || null,
-            })),
+            updates: buildOrderBulkUpdates(targetOrders, nextStatus),
           },
           { accessToken },
-        );
-        await loadWorkspace(accessToken);
-        setPendingBulkAction(null);
-        setActionFeedback(
-          result.failed.length === 0
-            ? {
-                tone: "success",
-                message: `${nextStatus === "completed" ? "Completed" : "Updated"} ${
-                  result.succeeded_ids.length
-                } visible ${
-                  result.succeeded_ids.length === 1 ? "order" : "orders"
-                } to ${nextStatus.replaceAll("_", " ")} using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
-              }
-            : {
-                tone: result.succeeded_ids.length > 0 ? "success" : "error",
-                message:
-                  result.succeeded_ids.length > 0
-                    ? `Updated ${result.succeeded_ids.length} of ${targetOrders.length} visible orders using ${formatBulkExecutionMode(bulkExecutionMode)} mode. ${result.failed.length} failed.`
-                    : `Unable to update ${targetOrders.length} visible orders using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
-                details: result.failed.map(
-                  (failure: { id: string; detail: string }) =>
-                    `${failure.id.slice(0, 8)} · ${failure.detail}`,
-                ),
-              },
-        );
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to update visible orders");
-        setActionFeedback(null);
-      } finally {
-        setBulkQueueActionLoading(null);
-      }
+        ),
     });
   }
 
@@ -1684,22 +4787,12 @@ export function SellerWorkspace() {
     nextStatus: "confirmed" | "completed",
     actionKey: string,
   ) {
-    const targetOrders = filteredOrders.filter((order) => order.status === currentStatus);
-    if (targetOrders.length === 0) {
-      return;
-    }
-
-    setActionFeedback(null);
-    setPendingBulkAction({
+    stageBulkTransactionAction({
       kind: "order",
       currentStatus,
       nextStatus,
       actionKey,
-      count: targetOrders.length,
-      label:
-        nextStatus === "completed"
-          ? `Complete ${targetOrders.length} visible ${targetOrders.length === 1 ? "order" : "orders"}`
-          : `Confirm ${targetOrders.length} visible ${targetOrders.length === 1 ? "order" : "orders"}`,
+      count: getVisibleOrdersByStatus(currentStatus).length,
     });
   }
 
@@ -1708,58 +4801,21 @@ export function SellerWorkspace() {
     nextStatus: "confirmed" | "completed",
     actionKey: string,
   ) {
-    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
-    const targetBookings = filteredBookings.filter((booking) => booking.status === currentStatus);
-    if (!accessToken || targetBookings.length === 0) {
-      return;
-    }
-
-    setBulkQueueActionLoading(actionKey);
-    setError(null);
-    setActionFeedback(null);
-    startTransition(async () => {
-      try {
-        const result = await api.bulkUpdateBookingStatuses(
+    const targetBookings = getVisibleBookingsByStatus(currentStatus);
+    executeBulkTransactionStatusAction({
+      kind: "booking",
+      actionKey,
+      nextStatus,
+      targetCount: targetBookings.length,
+      errorMessage: "Unable to update visible bookings",
+      execute: (accessToken) =>
+        api.bulkUpdateBookingStatuses(
           {
             execution_mode: bulkExecutionMode,
-            updates: targetBookings.map((booking) => ({
-              booking_id: booking.id,
-              status: nextStatus,
-              seller_response_note: responseNotes[booking.id] || null,
-            })),
+            updates: buildBookingBulkUpdates(targetBookings, nextStatus),
           },
           { accessToken },
-        );
-        await loadWorkspace(accessToken);
-        setPendingBulkAction(null);
-        setActionFeedback(
-          result.failed.length === 0
-            ? {
-                tone: "success",
-                message: `${nextStatus === "completed" ? "Completed" : "Updated"} ${
-                  result.succeeded_ids.length
-                } visible ${
-                  result.succeeded_ids.length === 1 ? "booking" : "bookings"
-                } to ${nextStatus.replaceAll("_", " ")} using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
-              }
-            : {
-                tone: result.succeeded_ids.length > 0 ? "success" : "error",
-                message:
-                  result.succeeded_ids.length > 0
-                    ? `Updated ${result.succeeded_ids.length} of ${targetBookings.length} visible bookings using ${formatBulkExecutionMode(bulkExecutionMode)} mode. ${result.failed.length} failed.`
-                    : `Unable to update ${targetBookings.length} visible bookings using ${formatBulkExecutionMode(bulkExecutionMode)} mode.`,
-                details: result.failed.map(
-                  (failure: { id: string; detail: string }) =>
-                    `${failure.id.slice(0, 8)} · ${failure.detail}`,
-                ),
-              },
-        );
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to update visible bookings");
-        setActionFeedback(null);
-      } finally {
-        setBulkQueueActionLoading(null);
-      }
+        ),
     });
   }
 
@@ -1768,26 +4824,12 @@ export function SellerWorkspace() {
     nextStatus: "confirmed" | "completed",
     actionKey: string,
   ) {
-    const targetBookings = filteredBookings.filter((booking) => booking.status === currentStatus);
-    if (targetBookings.length === 0) {
-      return;
-    }
-
-    setActionFeedback(null);
-    setPendingBulkAction({
+    stageBulkTransactionAction({
       kind: "booking",
       currentStatus,
       nextStatus,
       actionKey,
-      count: targetBookings.length,
-      label:
-        nextStatus === "completed"
-          ? `Complete ${targetBookings.length} visible ${
-              targetBookings.length === 1 ? "booking" : "bookings"
-            }`
-          : `Confirm ${targetBookings.length} visible ${
-              targetBookings.length === 1 ? "booking" : "bookings"
-            }`,
+      count: getVisibleBookingsByStatus(currentStatus).length,
     });
   }
 
@@ -1963,30 +5005,42 @@ export function SellerWorkspace() {
                   Buyer discovery context
                 </p>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 <MiniStat
                   label="Local Match Orders"
                   value={String(localDrivenOrdersCount)}
                   accent="amber"
-                  onClick={() => applyDiscoveryQueueSlice("local", "order")}
+                  onClick={() => openDiscoveryDemandLane("local", "order")}
                 />
                 <MiniStat
                   label="Local Match Bookings"
                   value={String(localDrivenBookingsCount)}
                   accent="olive"
-                  onClick={() => applyDiscoveryQueueSlice("local", "booking")}
+                  onClick={() => openDiscoveryDemandLane("local", "booking")}
                 />
                 <MiniStat
                   label="Search-Led Bookings"
                   value={String(searchDrivenBookingsCount)}
                   accent="sky"
-                  onClick={() => applyDiscoveryQueueSlice("search", "booking")}
+                  onClick={() => openDiscoveryDemandLane("search", "booking")}
                 />
                 <MiniStat
                   label="Price-Led Conversions"
                   value={String(priceDrivenConversionsCount)}
                   accent="rose"
-                  onClick={() => applyDiscoveryQueueSlice("price", "all")}
+                  onClick={() => openDiscoveryDemandLane("price")}
+                />
+                <MiniStat
+                  label="Same-Seller Follow-On"
+                  value={String(sameSellerFollowOnConversionsCount)}
+                  accent="sky"
+                  onClick={() => openDiscoveryDemandLane("same-seller")}
+                />
+                <MiniStat
+                  label="Cross-Seller Follow-On"
+                  value={String(crossSellerFollowOnConversionsCount)}
+                  accent="olive"
+                  onClick={() => openDiscoveryDemandLane("cross-seller")}
                 />
               </div>
             </div>
@@ -2004,40 +5058,645 @@ export function SellerWorkspace() {
                   Recent mix
                 </p>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 <MiniStat
                   label="Local 7d"
                   value={String(localDrivenRecentConversionsCount)}
                   accent="amber"
-                  onClick={() => applyDiscoveryQueueSlice("local", "all", "7d")}
+                  onClick={() => openRecentDiscoveryLane("local")}
                 />
                 <MiniStat
                   label="Search 7d"
                   value={String(searchDrivenRecentConversionsCount)}
                   accent="sky"
-                  onClick={() => applyDiscoveryQueueSlice("search", "all", "7d")}
+                  onClick={() => openRecentDiscoveryLane("search")}
                 />
                 <MiniStat
                   label="Price 7d"
                   value={String(priceDrivenRecentConversionsCount)}
                   accent="rose"
-                  onClick={() => applyDiscoveryQueueSlice("price", "all", "7d")}
+                  onClick={() => openRecentDiscoveryLane("price")}
                 />
                 <MiniStat
                   label="Tracked Browse 7d"
                   value={String(recentBrowseContextConversionsCount)}
                   accent="olive"
-                  onClick={() => {
-                    setWorkspacePreset("default");
-                    setActivityTypeFilter("all");
-                    setActivityStatusFilter("all");
-                    setActivityDiscoveryFilter("all");
-                    setActivityRecencyFilter("7d");
-                    setActivityContextFilter("all");
-                    setDeliveryStatusFilter("all");
-                    setDeliveryRecencyFilter("7d");
-                  }}
+                  onClick={openRecentBrowseContextLane}
                 />
+                <MiniStat
+                  label="Same Seller 7d"
+                  value={String(sameSellerFollowOnRecentConversionsCount)}
+                  accent="sky"
+                  onClick={() => openRecentDiscoveryLane("same-seller")}
+                />
+                <MiniStat
+                  label="Cross Seller 7d"
+                  value={String(crossSellerFollowOnRecentConversionsCount)}
+                  accent="rose"
+                  onClick={() => openRecentDiscoveryLane("cross-seller")}
+                />
+              </div>
+            </div>
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Recent Pressure
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    Delivery and support pressure in the last 7 days
+                  </p>
+                </div>
+                <p className="text-xs uppercase tracking-[0.16em] text-foreground/46">
+                  Seller ops watch
+                </p>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-11">
+                <MiniStat
+                  label="Failed Alerts 7d"
+                  value={String(failedDeliveryRecentCount)}
+                  accent="rose"
+                  onClick={() => openRecentDeliveryStatusLane("failed")}
+                />
+                <MiniStat
+                  label="Queued Alerts 7d"
+                  value={String(queuedDeliveryRecentCount)}
+                  accent="amber"
+                  onClick={() => openRecentDeliveryStatusLane("queued")}
+                />
+                <MiniStat
+                  label="Resolved Alerts 7d"
+                  value={String(sentDeliveryRecentCount)}
+                  accent="olive"
+                  onClick={() => openRecentDeliveryStatusLane("sent")}
+                />
+                <MiniStat
+                  label="Delivery Drag"
+                  value={String(deliveryDragListingsCount)}
+                  accent="rose"
+                  onClick={openDeliveryDragLane}
+                />
+                <MiniStat
+                  label="Recovery Lane"
+                  value={String(recoveryLaneListingsCount)}
+                  accent="olive"
+                  onClick={openRecoveryLane}
+                />
+                <MiniStat
+                  label="Recovered vs Failed 7d"
+                  value={
+                    recoveredVsFailedDelta > 0
+                      ? `+${recoveredVsFailedDelta}`
+                      : String(recoveredVsFailedDelta)
+                  }
+                  accent={recoveredVsFailedDelta >= 0 ? "olive" : "rose"}
+                  onClick={openRecoveredVsFailedLane}
+                />
+                <MiniStat
+                  label="Support-Watch Listings"
+                  value={String(supportWatchListingsCount)}
+                  accent="sky"
+                  onClick={openSupportWatchSummaryLane}
+                />
+                <MiniStat
+                  label="Top Support Share"
+                  value={
+                    supportWatchConcentrationShare != null
+                      ? `${Math.round(supportWatchConcentrationShare * 100)}%`
+                      : "0%"
+                  }
+                  accent="sky"
+                  onClick={openTopSupportShareLane}
+                />
+                <MiniStat
+                  label="Trust Spread"
+                  value={String(trustWatchListingsCount)}
+                  accent="rose"
+                  onClick={openTrustWatchLane}
+                />
+                <MiniStat
+                  label="Top Trust Share"
+                  value={
+                    trustWatchConcentrationShare != null
+                      ? `${Math.round(trustWatchConcentrationShare * 100)}%`
+                      : "0%"
+                  }
+                  accent="rose"
+                  onClick={openTopTrustShareLane}
+                />
+                <MiniStat
+                  label="Pressure Easing"
+                  value={String(pressureEasingListingsCount)}
+                  accent="olive"
+                  onClick={openPressureEasingSummaryLane}
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-3 text-xs text-foreground/56">
+                <p>Delivery Drag: listings where failed sends are outpacing recent recovery.</p>
+                <p>Recovery Lane: listings where recent successful sends are ahead of failures.</p>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {topSupportWatchListing ? (
+                  (() => {
+                    const supportPressure = getSupportPreviewDetail(topSupportWatchListing);
+                    const trendLabel = getListingRetentionPreviewTrendLabel(topSupportWatchListing);
+                    const tuneAction = getListingPreviewTuneAction(topSupportWatchListing);
+                    const adjustmentLabel = getListingAdjustmentPreviewLabel(topSupportWatchListing);
+
+                    return (
+                      <PressurePreviewRow
+                        lane="Support"
+                        laneClassName={getPressureLanePillClass("support")}
+                        onLaneClick={openSupportWatchLane}
+                        primaryClassName="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:border-accent hover:text-accent"
+                        primaryLabel={`Top support listing: ${topSupportWatchListing.title}${
+                          adjustmentLabel ? ` · ${adjustmentLabel}` : ""
+                        }${supportPressure ? ` · ${supportPressure.detail}` : ""}`}
+                        onPrimaryClick={() => openSupportWatchLaneWithFocus(topSupportWatchListing)}
+                        trendLabel={trendLabel}
+                        tuneLabel={tuneAction?.label}
+                        onTuneClick={
+                          tuneAction
+                            ? () => focusListingControlTarget(topSupportWatchListing, tuneAction.target)
+                            : null
+                        }
+                      />
+                    );
+                  })()
+                ) : null}
+                {topDeliveryDragListing ? (
+                  (() => {
+                    const trendLabel = getListingRetentionPreviewTrendLabel(topDeliveryDragListing);
+                    const tuneAction = getListingPreviewTuneAction(topDeliveryDragListing);
+                    const adjustmentLabel = getListingAdjustmentPreviewLabel(topDeliveryDragListing);
+
+                    return (
+                      <PressurePreviewRow
+                        lane="Drag"
+                        laneClassName={getPressureLanePillClass("drag")}
+                        onLaneClick={openDeliveryDragLane}
+                        primaryClassName="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-800 transition hover:border-accent hover:text-accent"
+                        primaryLabel={`Worst drag: ${topDeliveryDragListing.title} · ${
+                          listingRecoveryDeltaById[topDeliveryDragListing.id] ?? 0
+                        }${adjustmentLabel ? ` · ${adjustmentLabel}` : ""}`}
+                        onPrimaryClick={() => openDeliveryDragLaneWithListing(topDeliveryDragListing)}
+                        trendLabel={trendLabel}
+                        tuneLabel={tuneAction?.label}
+                        onTuneClick={
+                          tuneAction
+                            ? () => focusListingControlTarget(topDeliveryDragListing, tuneAction.target)
+                            : null
+                        }
+                      />
+                    );
+                  })()
+                ) : null}
+                {topRecoveryLaneListing ? (
+                  (() => {
+                    const trendLabel = getListingRetentionPreviewTrendLabel(topRecoveryLaneListing);
+                    const tuneAction = getListingPreviewTuneAction(topRecoveryLaneListing);
+                    const adjustmentLabel = getListingAdjustmentPreviewLabel(topRecoveryLaneListing);
+
+                    return (
+                      <PressurePreviewRow
+                        lane="Recovery"
+                        laneClassName={getPressureLanePillClass("recovery")}
+                        onLaneClick={openRecoveryLane}
+                        primaryClassName="rounded-full border border-lime-200 bg-lime-50 px-3 py-1.5 text-xs font-medium text-lime-800 transition hover:border-accent hover:text-accent"
+                        primaryLabel={`Strongest recovery: ${topRecoveryLaneListing.title} · +${
+                          listingRecoveryDeltaById[topRecoveryLaneListing.id] ?? 0
+                        }${adjustmentLabel ? ` · ${adjustmentLabel}` : ""}`}
+                        onPrimaryClick={() => openRecoveryLaneWithListing(topRecoveryLaneListing)}
+                        trendLabel={trendLabel}
+                        tuneLabel={tuneAction?.label}
+                        onTuneClick={
+                          tuneAction
+                            ? () => focusListingControlTarget(topRecoveryLaneListing, tuneAction.target)
+                            : null
+                        }
+                      />
+                    );
+                  })()
+                ) : null}
+                {topTrustWatchListing ? (
+                  (() => {
+                    const trendLabel = getListingRetentionPreviewTrendLabel(topTrustWatchListing);
+                    const tuneAction = getListingPreviewTuneAction(topTrustWatchListing);
+                    const adjustmentLabel = getListingAdjustmentPreviewLabel(topTrustWatchListing);
+
+                    return (
+                      <PressurePreviewRow
+                        lane="Trust"
+                        laneClassName={getPressureLanePillClass("trust")}
+                        onLaneClick={openTrustWatchLane}
+                        primaryClassName="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:border-accent hover:text-accent"
+                        primaryLabel={`Top trust listing: ${topTrustWatchListing.title}${
+                          adjustmentLabel
+                            ? ` · ${adjustmentLabel}`
+                            : ""
+                        }`}
+                        onPrimaryClick={() => openTrustWatchLaneWithListing(topTrustWatchListing)}
+                        trendLabel={trendLabel}
+                        tuneLabel={tuneAction?.label}
+                        onTuneClick={
+                          tuneAction
+                            ? () => focusListingControlTarget(topTrustWatchListing, tuneAction.target)
+                            : null
+                        }
+                      />
+                    );
+                  })()
+                ) : null}
+              </div>
+              {nextSupportWatchListing || nextDeliveryDragListing || nextRecoveryLaneListing || nextTrustWatchListing ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {nextSupportWatchListing ? (
+                    (() => {
+                      const supportPressure = getSupportPreviewDetail(nextSupportWatchListing);
+                      const trendLabel = getListingRetentionPreviewTrendLabel(nextSupportWatchListing);
+                      const tuneAction = getListingPreviewTuneAction(nextSupportWatchListing);
+
+                      return (
+                        <PressurePreviewRow
+                          lane="Support"
+                          laneClassName={getPressureLanePillClass("support")}
+                          onLaneClick={openSupportWatchLane}
+                          primaryClassName="rounded-full border border-sky-100 bg-sky-50/60 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:border-accent hover:text-accent"
+                          primaryLabel={`Next support listing: ${nextSupportWatchListing.title}${
+                            supportPressure ? ` · ${supportPressure.detail}` : ""
+                          }`}
+                          onPrimaryClick={() => openSupportWatchLaneWithFocus(nextSupportWatchListing)}
+                          trendLabel={trendLabel}
+                          tuneLabel={tuneAction?.label}
+                          onTuneClick={
+                            tuneAction
+                              ? () => focusListingControlTarget(nextSupportWatchListing, tuneAction.target)
+                              : null
+                          }
+                        />
+                      );
+                    })()
+                  ) : null}
+                  {nextDeliveryDragListing ? (
+                    (() => {
+                      const trendLabel = getListingRetentionPreviewTrendLabel(nextDeliveryDragListing);
+                      const tuneAction = getListingPreviewTuneAction(nextDeliveryDragListing);
+                      const adjustmentLabel = getListingAdjustmentPreviewLabel(nextDeliveryDragListing);
+
+                      return (
+                        <PressurePreviewRow
+                          lane="Drag"
+                          laneClassName={getPressureLanePillClass("drag")}
+                          onLaneClick={openDeliveryDragLane}
+                          primaryClassName="rounded-full border border-rose-100 bg-rose-50/60 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:border-accent hover:text-accent"
+                          primaryLabel={`Next drag: ${nextDeliveryDragListing.title} · ${
+                            listingRecoveryDeltaById[nextDeliveryDragListing.id] ?? 0
+                          }${adjustmentLabel ? ` · ${adjustmentLabel}` : ""}`}
+                          onPrimaryClick={() => openDeliveryDragLaneWithListing(nextDeliveryDragListing)}
+                          trendLabel={trendLabel}
+                          tuneLabel={tuneAction?.label}
+                          onTuneClick={
+                            tuneAction
+                              ? () => focusListingControlTarget(nextDeliveryDragListing, tuneAction.target)
+                              : null
+                          }
+                        />
+                      );
+                    })()
+                  ) : null}
+                  {nextRecoveryLaneListing ? (
+                    (() => {
+                      const trendLabel = getListingRetentionPreviewTrendLabel(nextRecoveryLaneListing);
+                      const tuneAction = getListingPreviewTuneAction(nextRecoveryLaneListing);
+                      const adjustmentLabel = getListingAdjustmentPreviewLabel(nextRecoveryLaneListing);
+
+                      return (
+                        <PressurePreviewRow
+                          lane="Recovery"
+                          laneClassName={getPressureLanePillClass("recovery")}
+                          onLaneClick={openRecoveryLane}
+                          primaryClassName="rounded-full border border-lime-100 bg-lime-50/60 px-3 py-1.5 text-xs font-medium text-lime-700 transition hover:border-accent hover:text-accent"
+                          primaryLabel={`Next recovery: ${nextRecoveryLaneListing.title} · +${
+                            listingRecoveryDeltaById[nextRecoveryLaneListing.id] ?? 0
+                          }${adjustmentLabel ? ` · ${adjustmentLabel}` : ""}`}
+                          onPrimaryClick={() => openRecoveryLaneWithListing(nextRecoveryLaneListing)}
+                          trendLabel={trendLabel}
+                          tuneLabel={tuneAction?.label}
+                          onTuneClick={
+                            tuneAction
+                              ? () => focusListingControlTarget(nextRecoveryLaneListing, tuneAction.target)
+                              : null
+                          }
+                        />
+                      );
+                    })()
+                  ) : null}
+                  {nextTrustWatchListing ? (
+                    (() => {
+                      const trendLabel = getListingRetentionPreviewTrendLabel(nextTrustWatchListing);
+                      const tuneAction = getListingPreviewTuneAction(nextTrustWatchListing);
+                      const adjustmentLabel = getListingAdjustmentPreviewLabel(nextTrustWatchListing);
+
+                      return (
+                        <PressurePreviewRow
+                          lane="Trust"
+                          laneClassName={getPressureLanePillClass("trust")}
+                          onLaneClick={openTrustWatchLane}
+                          primaryClassName="rounded-full border border-rose-100 bg-rose-50/60 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:border-accent hover:text-accent"
+                          primaryLabel={`Next trust listing: ${nextTrustWatchListing.title}${
+                            adjustmentLabel
+                              ? ` · ${adjustmentLabel}`
+                              : ""
+                          }`}
+                          onPrimaryClick={() => openTrustWatchLaneWithListing(nextTrustWatchListing)}
+                          trendLabel={trendLabel}
+                          tuneLabel={tuneAction?.label}
+                          onTuneClick={
+                            tuneAction
+                              ? () => focusListingControlTarget(nextTrustWatchListing, tuneAction.target)
+                              : null
+                          }
+                        />
+                      );
+                    })()
+                  ) : null}
+                </div>
+              ) : null}
+              {supportWatchConcentrationShare != null ||
+              deliveryDragConcentrationShare != null ||
+              recoveryLaneConcentrationShare != null ||
+              trustWatchConcentrationShare != null ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {supportWatchConcentrationShare != null ? (
+                    <button
+                      className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-sky-700 transition hover:border-accent hover:text-accent"
+                      onClick={openSupportWatchConcentrationLane}
+                      type="button"
+                    >
+                      {getSupportLaneConcentrationLabel(supportWatchConcentrationShare)}
+                    </button>
+                  ) : null}
+                  {deliveryDragConcentrationShare != null ? (
+                    <button
+                      className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-rose-700 transition hover:border-accent hover:text-accent"
+                      onClick={openDeliveryDragConcentrationLane}
+                      type="button"
+                    >
+                      {getDeliveryLaneConcentrationLabel(deliveryDragConcentrationShare, "drag")}
+                    </button>
+                  ) : null}
+                  {recoveryLaneConcentrationShare != null ? (
+                    <button
+                      className="rounded-full border border-lime-200 bg-lime-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-lime-700 transition hover:border-accent hover:text-accent"
+                      onClick={openRecoveryConcentrationLane}
+                      type="button"
+                    >
+                      {getDeliveryLaneConcentrationLabel(recoveryLaneConcentrationShare, "recovery")}
+                    </button>
+                  ) : null}
+                  {trustWatchConcentrationShare != null ? (
+                    <button
+                      className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-rose-700 transition hover:border-accent hover:text-accent"
+                      onClick={openTrustConcentrationLane}
+                      type="button"
+                    >
+                      {getTrustLaneConcentrationLabel(trustWatchConcentrationShare)}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Listing Retention
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    Which listings keep buyers with this seller vs lose them elsewhere
+                  </p>
+                </div>
+                <p className="text-xs uppercase tracking-[0.16em] text-foreground/46">
+                  Top follow-on listings
+                </p>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["all", "All Adjustments"],
+                  ["pricing", "Pricing"],
+                  ["local-fit", "Local Fit"],
+                  ["booking", "Booking"],
+                  ["fulfillment", "Fulfillment"],
+                  ["other", "Other"],
+                ].map(([value, label]) => (
+                  <SelectChip
+                    key={value}
+                    active={listingAdjustmentFilter === value}
+                    onClick={() =>
+                      updateListingAdjustmentFilter(
+                        value as ListingAdjustmentFilter,
+                      )
+                    }
+                  >
+                    {label} · {listingAdjustmentCounts[value as keyof typeof listingAdjustmentCounts]}
+                  </SelectChip>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["all", "All Trends"],
+                  ["improving", "Improving"],
+                  ["softening", "Softening"],
+                  ["stable", "Stable"],
+                  ["no-signal", "No Signal"],
+                ].map(([value, label]) => (
+                  <SelectChip
+                    key={value}
+                    active={listingTrendFilter === value}
+                    onClick={() =>
+                      updateListingTrendFilterValue(
+                        value as ListingTrendFilter,
+                      )
+                    }
+                  >
+                    {label} · {listingTrendCounts[value as keyof typeof listingTrendCounts]}
+                  </SelectChip>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["pricing", "softening", "Pricing + Softening", listingShortcutCounts["pricing-softening"]],
+                  ["local-fit", "improving", "Local Fit + Improving", listingShortcutCounts["local-fit-improving"]],
+                  ["booking", "softening", "Booking + Softening", listingShortcutCounts["booking-softening"]],
+                  ["fulfillment", "improving", "Fulfillment + Improving", listingShortcutCounts["fulfillment-improving"]],
+                ].map(([adjustment, trend, label, count]) => (
+                  <SelectChip
+                    key={`${adjustment}-${trend}`}
+                    active={false}
+                    onClick={() => {
+                      updateListingAdjustmentFilter(
+                        adjustment as ListingAdjustmentFilter,
+                      );
+                      updateListingTrendFilterValue(
+                        trend as ListingTrendFilter,
+                      );
+                    }}
+                  >
+                    {label} · {String(count)}
+                  </SelectChip>
+                ))}
+              </div>
+              <div className="mt-4 space-y-3">
+                {filteredListingFollowOnBreakdown.length > 0 ? (
+                  filteredListingFollowOnBreakdown.map((item) => {
+                    const retentionTone = getListingRetentionTone({
+                      sameSellerCount: item.sameSellerCount,
+                      crossSellerCount: item.crossSellerCount,
+                    });
+                    const retentionTrend = getListingRetentionTrend({
+                      sameSellerCount: item.sameSellerCount,
+                      crossSellerCount: item.crossSellerCount,
+                      sameSellerRecentCount: item.sameSellerRecentCount,
+                      crossSellerRecentCount: item.crossSellerRecentCount,
+                      sameSellerPostAdjustmentCount: item.sameSellerPostAdjustmentCount,
+                      crossSellerPostAdjustmentCount: item.crossSellerPostAdjustmentCount,
+                    });
+                    const leakageLabel = getListingLeakageLabel({
+                      localCount: item.crossSellerLocalCount,
+                      searchCount: item.crossSellerSearchCount,
+                      priceCount: item.crossSellerPriceCount,
+                      crossSellerCount: item.crossSellerCount,
+                    });
+                    const leakageTuneAction = getListingLeakageTuneAction({
+                      listing: item.listing,
+                      localCount: item.crossSellerLocalCount,
+                      searchCount: item.crossSellerSearchCount,
+                      priceCount: item.crossSellerPriceCount,
+                    });
+                    const deliveryPressure = listingDeliveryPressureById[item.listing.id] ?? {
+                      failed: 0,
+                      queued: 0,
+                    };
+                          const supportPressure = getListingSupportPressure({
+                            failedDeliveryCount: deliveryPressure.failed,
+                            queuedDeliveryCount: deliveryPressure.queued,
+                            retentionTrendLabel: retentionTrend.label,
+                            hasReviewPressure: hasSellerReviewPressure,
+                          });
+                          const supportPressureAction = getListingSupportPressureAction(
+                            item.listing.id,
+                            deliveryPressure,
+                            supportPressure?.label ?? null,
+                          );
+                          const isPressureEasing = pressureEasingListingIds.includes(item.listing.id);
+                          const recoveryDelta = listingRecoveryDeltaById[item.listing.id] ?? 0;
+
+                    return (
+                      <div
+                        key={item.listing.id}
+                        className="rounded-[1.2rem] border border-border bg-background/35 px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">
+                              {item.listing.title}
+                            </p>
+                            <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                              {item.listing.type} · {item.totalFollowOnCount} follow-on conversion
+                              {item.totalFollowOnCount === 1 ? "" : "s"}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-800">
+                              Same seller · {item.sameSellerCount}
+                            </span>
+                            <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700">
+                              Cross seller · {item.crossSellerCount}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                          <div className="space-y-2">
+                            <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${retentionTone.toneClass}`}>
+                              {retentionTone.label}
+                            </p>
+                            <p className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${retentionTrend.toneClass}`}>
+                              {retentionTrend.label}
+                            </p>
+                            {item.listing.last_operating_adjustment_summary ? (
+                              <p className="text-[11px] text-foreground/58">
+                                {item.listing.last_operating_adjustment_summary}
+                              </p>
+                            ) : null}
+                            <DeliveryNetActionButton
+                              recoveryDelta={recoveryDelta}
+                              onClick={() =>
+                                openListingRecentDeliveryNetLane(
+                                  item.listing,
+                                  recoveryDelta >= 0 ? "sent" : "failed",
+                                )
+                              }
+                              tone="compact"
+                            />
+                            {isPressureEasing ? (
+                              <PressureEasingActionBlock
+                                description="Recent sends recovered without active failed or queued alerts."
+                                onClick={() => openListingPressureEasingLane(item.listing)}
+                                tone="compact"
+                              />
+                            ) : null}
+                            {supportPressure ? (
+                              <SupportPressureActionBlock
+                                action={supportPressureAction}
+                                detail={supportPressure.detail}
+                                label={supportPressure.label}
+                                onActionClick={() =>
+                                  openListingSupportPressureAction(item.listing, supportPressureAction)
+                                }
+                                toneClass={supportPressure.toneClass}
+                                tone="compact"
+                              />
+                            ) : null}
+                            {item.crossSellerCount > 0 ? (
+                              <LeakageActionRow
+                                crossSellerLocalCount={item.crossSellerLocalCount}
+                                crossSellerPriceCount={item.crossSellerPriceCount}
+                                crossSellerSearchCount={item.crossSellerSearchCount}
+                                label={leakageLabel}
+                                onTuneClick={
+                                  leakageTuneAction
+                                    ? () =>
+                                        focusListingControlTarget(
+                                          item.listing,
+                                          leakageTuneAction.target,
+                                        )
+                                    : null
+                                }
+                                tuneLabel={leakageTuneAction?.label}
+                              />
+                            ) : null}
+                          </div>
+                          <RetentionLaneActions
+                            crossSellerCount={item.crossSellerCount}
+                            crossSellerRecentCount={item.crossSellerRecentCount}
+                            onOpenBranchedLane={() =>
+                              openListingRetentionLane(item.listing, "cross-seller")
+                            }
+                            onOpenRetainedLane={() =>
+                              openListingRetentionLane(item.listing, "same-seller")
+                            }
+                            sameSellerCount={item.sameSellerCount}
+                            sameSellerRecentCount={item.sameSellerRecentCount}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-foreground/68">
+                    No listings match the current adjustment filter yet.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -2122,34 +5781,48 @@ export function SellerWorkspace() {
                   ["default", "Default"],
                   ["needs-action", `Needs Action · ${unreadNotificationCount}`],
                   ["recent-failures", `Recent Failures · ${failedDeliveryCount}`],
+                  ["pressure-queue", `Pressure Queue · ${supportWatchListingsCount}`],
+                  ["delivery-drag", `Delivery Drag · ${deliveryDragListingsCount}`],
+                  ["delivery-pressure", `Delivery Pressure · ${deliveryPressureListingsCount}`],
+                  ["trust-watch", `Trust Watch · ${trustWatchListingsCount}`],
+                  ["recovery-lane", `Recovery Lane · ${recoveryLaneListingsCount}`],
+                  ["recovered-recently", `Recovered Recently · ${pressureEasingListingsCount}`],
                   ["focused-work", `Focused Work · ${focusedItemCount}`],
                 ].map(([preset, label]) => (
-                  <button
+                  <SelectChip
                     key={preset}
-                    className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
-                      workspacePreset === preset
-                        ? "border-accent bg-accent text-white"
-                        : preset === "needs-action" && unreadNotificationCount > 0
-                          ? "border-amber-300 bg-amber-50 text-amber-900 hover:border-accent hover:text-accent"
-                          : preset === "recent-failures" && failedDeliveryCount > 0
-                            ? "border-red-300 bg-red-50 text-red-700 hover:border-accent hover:text-accent"
-                            : preset === "focused-work" && focusedItemCount > 0
-                              ? "border-sky-300 bg-sky-50 text-sky-800 hover:border-accent hover:text-accent"
-                        : "border-border text-foreground hover:border-accent hover:text-accent"
-                    }`}
+                    active={workspacePreset === preset}
+                    className={getWorkspacePresetChipClass(
+                      preset as
+                        | "default"
+                        | "needs-action"
+                        | "recent-failures"
+                        | "pressure-queue"
+                        | "delivery-drag"
+                        | "delivery-pressure"
+                        | "trust-watch"
+                        | "recovery-lane"
+                        | "recovered-recently"
+                        | "focused-work",
+                    )}
                     onClick={() =>
                       applySellerPreset(
                         preset as
                           | "default"
                           | "needs-action"
                           | "recent-failures"
+                          | "pressure-queue"
+                          | "delivery-drag"
+                          | "delivery-pressure"
+                          | "trust-watch"
+                          | "recovery-lane"
+                          | "recovered-recently"
                           | "focused-work",
                       )
                     }
-                    type="button"
                   >
                     {label}
-                  </button>
+                  </SelectChip>
                 ))}
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -2402,56 +6075,36 @@ export function SellerWorkspace() {
                   ["sent", "Sent"],
                   ["failed", "Failed"],
                 ].map(([status, label]) => (
-                  <button
+                  <SelectChip
                     key={status}
-                    className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
-                      deliveryStatusFilter === status
-                        ? "border-accent bg-accent text-white"
-                        : "border-border text-foreground hover:border-accent hover:text-accent"
-                    }`}
+                    active={deliveryStatusFilter === status}
                     onClick={() =>
                       setDeliveryStatusFilter(
                         status as "all" | "queued" | "sent" | "failed",
                       )
                     }
-                    type="button"
                   >
                     {label}
-                  </button>
+                  </SelectChip>
                 ))}
-                <button
-                  className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
-                    deliveryRecencyFilter === "today"
-                      ? "border-accent bg-accent text-white"
-                      : "border-border text-foreground hover:border-accent hover:text-accent"
-                  }`}
+                <SelectChip
+                  active={deliveryRecencyFilter === "today"}
                   onClick={() => setDeliveryRecencyFilter("today")}
-                  type="button"
                 >
                   Today
-                </button>
-                <button
-                  className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
-                    deliveryRecencyFilter === "7d"
-                      ? "border-accent bg-accent text-white"
-                      : "border-border text-foreground hover:border-accent hover:text-accent"
-                  }`}
+                </SelectChip>
+                <SelectChip
+                  active={deliveryRecencyFilter === "7d"}
                   onClick={() => setDeliveryRecencyFilter("7d")}
-                  type="button"
                 >
                   7 Days
-                </button>
-                <button
-                  className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
-                    deliveryRecencyFilter === "all"
-                      ? "border-accent bg-accent text-white"
-                      : "border-border text-foreground hover:border-accent hover:text-accent"
-                  }`}
+                </SelectChip>
+                <SelectChip
+                  active={deliveryRecencyFilter === "all"}
                   onClick={() => setDeliveryRecencyFilter("all")}
-                  type="button"
                 >
                   All Time
-                </button>
+                </SelectChip>
               </div>
 
               <div className="mt-4 space-y-3">
@@ -2605,27 +6258,125 @@ export function SellerWorkspace() {
                   </div>
                 ) : null}
 
+                <div className="mt-4 rounded-2xl border border-border bg-background/40 px-4 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        AI listing assistant
+                      </p>
+                      <p className="text-sm text-foreground/64">
+                        Ask the assistant to polish your title and description before creating the listing.
+                      </p>
+                    </div>
+                    <button
+                      className="rounded-full border border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:border-border/50 disabled:text-foreground/50"
+                      disabled={listingCreateAiState?.loading}
+                      onClick={requestCreateListingAiAssist}
+                      type="button"
+                    >
+                      {listingCreateAiState?.loading ? "Generating..." : "Generate suggestion"}
+                    </button>
+                  </div>
+                  {listingCreateAiState?.error ? (
+                    <p className="mt-3 text-xs text-rose-600">{listingCreateAiState.error}</p>
+                  ) : null}
+                  {listingCreateAiState?.suggestion ? (
+                    <div className="mt-3 space-y-2 text-sm text-foreground/70">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Suggested title
+                      </p>
+                      <p className="text-base font-semibold text-foreground">
+                        {listingCreateAiState.suggestion.suggested_title}
+                      </p>
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Suggested description
+                      </p>
+                      <p className="text-sm text-foreground/72">
+                        {listingCreateAiState.suggestion.suggested_description}
+                      </p>
+                      <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/48">
+                        {listingCreateAiState.suggestion.suggested_tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-full border border-foreground/40 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-foreground/80 hover:bg-foreground/5"
+                          onClick={() => applyCreateListingSuggestion(listingCreateAiState.suggestion)}
+                          type="button"
+                        >
+                          Use suggestion
+                        </button>
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/60">
+                          {listingCreateAiState.suggestion.summary}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs text-foreground/58">
+                      Tap the button after entering your current title and description to reveal AI guidance.
+                    </p>
+                  )}
+                </div>
+
                 <div className="space-y-3 pt-2">
                   <div className="flex items-center justify-between gap-3">
                     <h4 className="text-base font-semibold tracking-[-0.03em]">
                       Listing Control Tower
                     </h4>
                     <span className="text-xs uppercase tracking-[0.18em] text-foreground/50">
-                      {workspace.listings.length} total
+                      {filteredWorkspaceListings.length} shown · {workspace.listings.length} total
                     </span>
                   </div>
 
-                  {workspace.listings.length === 0 ? (
+                  {filteredWorkspaceListings.length === 0 ? (
                     <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4 text-sm text-foreground/68">
-                      No listings yet. Create one above and then publish it here.
+                      No listings match the current adjustment filter.
                     </div>
                   ) : null}
 
-                  {workspace.listings.map((listing) => (
-                    <div
-                      key={listing.id}
-                      className="rounded-[1.3rem] border border-border bg-white px-4 py-4"
-                    >
+                  {filteredWorkspaceListings.map((listing) => {
+                    const listingRetention = listingFollowOnBreakdownById[listing.id];
+                    const listingTrend = listingRetention
+                      ? getListingRetentionTrend({
+                          sameSellerCount: listingRetention.sameSellerCount,
+                          crossSellerCount: listingRetention.crossSellerCount,
+                          sameSellerRecentCount: listingRetention.sameSellerRecentCount,
+                          crossSellerRecentCount: listingRetention.crossSellerRecentCount,
+                          sameSellerPostAdjustmentCount: listingRetention.sameSellerPostAdjustmentCount,
+                          crossSellerPostAdjustmentCount: listingRetention.crossSellerPostAdjustmentCount,
+                        })
+                      : null;
+                    const deliveryPressure = listingDeliveryPressureById[listing.id] ?? {
+                      failed: 0,
+                      queued: 0,
+                    };
+                    const supportPressure = getListingSupportPressure({
+                      failedDeliveryCount: deliveryPressure.failed,
+                      queuedDeliveryCount: deliveryPressure.queued,
+                      retentionTrendLabel: listingTrend?.label ?? null,
+                      hasReviewPressure: hasSellerReviewPressure,
+                    });
+                    const supportPressureAction = getListingSupportPressureAction(
+                      listing.id,
+                      deliveryPressure,
+                      supportPressure?.label ?? null,
+                    );
+                    const isPressureEasing = pressureEasingListingIds.includes(listing.id);
+                    const recoveryDelta = listingRecoveryDeltaById[listing.id] ?? 0;
+                    const aiState = listingAiState[listing.id];
+                    const priceInsightState = listingPriceInsights[listing.id];
+
+                    return (
+                      <div
+                        key={listing.id}
+                        className="rounded-[1.3rem] border border-border bg-white px-4 py-4"
+                      >
                       {listingDrafts[listing.id] ? (
                         <>
                       <div className="flex items-start justify-between gap-4">
@@ -2661,20 +6412,75 @@ export function SellerWorkspace() {
                             >
                               {getListingOperatingRole(listing)}
                             </span>
+                            {listingTrend ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                                  listingTrend.toneClass === "text-olive"
+                                    ? "border-olive/20 bg-olive/10 text-olive"
+                                    : listingTrend.toneClass === "text-rose-700"
+                                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                                      : listingTrend.toneClass === "text-sky-700"
+                                        ? "border-sky-200 bg-sky-50 text-sky-700"
+                                        : "border-border bg-background/40 text-foreground/68"
+                                }`}
+                              >
+                                {listingTrend.label}
+                              </span>
+                            ) : null}
+                            {supportPressure ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${supportPressure.toneClass}`}
+                              >
+                                {supportPressure.label}
+                              </span>
+                            ) : null}
+                            {isPressureEasing ? (
+                              <PressureEasingActionBlock
+                                onClick={() => openListingPressureEasingLane(listing)}
+                              />
+                            ) : null}
                           </div>
                           <p className="text-sm text-foreground/68">
                             {listing.description ?? "No seller description yet."}
                           </p>
+                          {listingRetention ? (
+                            <p className="text-xs leading-5 text-foreground/56">
+                              {listing.last_operating_adjustment_summary
+                                ? `Since last change: ${listingRetention.sameSellerPostAdjustmentCount} retained · ${listingRetention.crossSellerPostAdjustmentCount} branched.`
+                                : `Recent retention: ${listingRetention.sameSellerRecentCount} retained · ${listingRetention.crossSellerRecentCount} branched in the last 7 days.`}
+                            </p>
+                          ) : null}
+                          <DeliveryNetActionButton
+                            recoveryDelta={recoveryDelta}
+                            onClick={() =>
+                              openListingRecentDeliveryNetLane(
+                                listing,
+                                recoveryDelta >= 0 ? "sent" : "failed",
+                              )
+                            }
+                          />
+                          {supportPressure ? (
+                            <SupportPressureActionBlock
+                              action={supportPressureAction}
+                              detail={supportPressure.detail}
+                              label={supportPressure.label}
+                              onActionClick={() =>
+                                openListingSupportPressureAction(listing, supportPressureAction)
+                              }
+                              toneClass={supportPressure.toneClass}
+                            />
+                          ) : null}
+                          {isPressureEasing ? (
+                            <PressureEasingActionBlock
+                              description="Recent sends recovered for this listing without active failed or queued alerts."
+                              onClick={() => openListingPressureEasingLane(listing)}
+                              tone="detail"
+                            />
+                          ) : null}
                           <p className="text-xs leading-5 text-foreground/56">
                             {getListingOperatingGuidance(listing)}
                           </p>
-                          <button
-                            className="w-fit rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
-                            onClick={() => focusListingRoleControls(listing)}
-                            type="button"
-                          >
-                            Tune Role
-                          </button>
+                          <TuneRoleActionButton onClick={() => focusListingRoleControls(listing)} />
                           <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-foreground/58">
                             <span>{formatCurrency(listing.price_cents, listing.currency)}</span>
                             <span>Slug: {listing.slug}</span>
@@ -2698,21 +6504,32 @@ export function SellerWorkspace() {
                       </div>
 
                       <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        <label className="block">
-                          <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                            Price Cents
-                          </span>
-                          <input
-                            className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
-                            value={listingDrafts[listing.id].price_cents}
-                            onChange={(event) =>
-                              updateListingDraft(listing.id, (current) => ({
-                                ...current,
-                                price_cents: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
+                        <div
+                          className={`rounded-2xl border px-4 py-3 transition ${
+                            highlightedListingControlKey === `${listing.id}:pricing`
+                              ? "border-accent bg-accent/8 ring-2 ring-accent/30"
+                              : "border-border bg-background/40"
+                          }`}
+                          ref={(node) => {
+                            listingControlRefs.current[`${listing.id}:pricing`] = node;
+                          }}
+                        >
+                          <label className="block">
+                            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              Price Cents
+                            </span>
+                            <input
+                              className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                              value={listingDrafts[listing.id].price_cents}
+                              onChange={(event) =>
+                                updateListingDraft(listing.id, (current) => ({
+                                  ...current,
+                                  price_cents: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                        </div>
                         <label className="block">
                           <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
                             Duration Minutes
@@ -2783,6 +6600,90 @@ export function SellerWorkspace() {
                             Local only
                           </label>
                         </div>
+                      </div>
+
+                      <div
+                        className="mt-4 rounded-2xl border border-border bg-background/40 px-4 py-4"
+                        ref={(node) => {
+                          listingControlRefs.current[`${listing.id}:pricing-insight`] = node;
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              Pricing insights
+                            </p>
+                            <p className="text-sm text-foreground/64">
+                              {priceInsightState?.insight?.summary ??
+                                (priceInsightState?.loading
+                                  ? "Analyzing similar listings..."
+                                  : "Tap refresh to compare pricing for this checklist.")}
+                            </p>
+                          </div>
+                          <button
+                            className="rounded-full border border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:border-border/50 disabled:text-foreground/50"
+                            disabled={priceInsightState?.loading}
+                            onClick={() => requestListingPriceInsight(listing)}
+                            type="button"
+                          >
+                            {priceInsightState?.loading ? "Refreshing..." : "Refresh insights"}
+                          </button>
+                        </div>
+                        {priceInsightState?.error ? (
+                          <p className="mt-3 text-xs text-rose-600">{priceInsightState.error}</p>
+                        ) : null}
+                        {priceInsightState?.insight ? (
+                          <div className="mt-3 space-y-2 text-sm text-foreground/70">
+                            <div className="flex flex-wrap gap-3">
+                              <span className="text-[11px] uppercase tracking-[0.14em] text-foreground/56">
+                                Sample {priceInsightState.insight.sample_size}
+                              </span>
+                              <span className="text-[11px] uppercase tracking-[0.14em] text-foreground/56">
+                                Suggested {formatCurrency(
+                                  priceInsightState.insight.suggested_price_cents,
+                                  priceInsightState.insight.currency,
+                                )}
+                              </span>
+                              <span className="text-[11px] uppercase tracking-[0.14em] text-foreground/56">
+                                Median {formatCurrency(
+                                  priceInsightState.insight.median_price_cents,
+                                  priceInsightState.insight.currency,
+                                )}
+                              </span>
+                            </div>
+                            <p className="flex flex-wrap gap-2 text-[11px] text-foreground/60">
+                              <span>
+                                Range
+                                {" "}
+                                {formatCurrency(
+                                  priceInsightState.insight.min_price_cents,
+                                  priceInsightState.insight.currency,
+                                )}
+                                {" "}
+                                –
+                                {" "}
+                                {formatCurrency(
+                                  priceInsightState.insight.max_price_cents,
+                                  priceInsightState.insight.currency,
+                                )}
+                              </span>
+                              <span>
+                                Avg
+                                {" "}
+                                {formatCurrency(
+                                  priceInsightState.insight.avg_price_cents,
+                                  priceInsightState.insight.currency,
+                                )}
+                              </span>
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs text-foreground/58">
+                            {priceInsightState?.loading
+                              ? "Working through recent price data..."
+                              : "No insight loaded yet, so refresh to measure your price curve."}
+                          </p>
+                        )}
                       </div>
 
                       <div
@@ -2936,6 +6837,65 @@ export function SellerWorkspace() {
                         </p>
                       </div>
 
+                      <div className="mt-4 rounded-2xl border border-border bg-background/40 px-4 py-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              AI listing assistant
+                            </p>
+                            <p className="text-sm text-foreground/64">
+                              Generate a confident title, description, and tags from your current listing data.
+                            </p>
+                          </div>
+                          <button
+                            className="rounded-full border border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:border-border/50 disabled:text-foreground/50"
+                            disabled={aiState?.loading}
+                            onClick={() => requestListingAiAssist(listing)}
+                            type="button"
+                          >
+                            {aiState?.loading ? "Generating..." : "Refresh suggestions"}
+                          </button>
+                        </div>
+                        {aiState?.error ? (
+                          <p className="mt-3 text-xs text-rose-600">{aiState.error}</p>
+                        ) : null}
+                        {aiState?.suggestion ? (
+                          <div className="mt-3 space-y-2 text-sm text-foreground/70">
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              Suggested title
+                            </p>
+                            <p className="text-base font-semibold text-foreground">
+                              {aiState.suggestion.suggested_title}
+                            </p>
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              Suggested description
+                            </p>
+                            <p className="text-sm text-foreground/72">
+                              {aiState.suggestion.suggested_description}
+                            </p>
+                            <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/48">
+                              {aiState.suggestion.suggested_tags.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                            <p className="text-[11px] text-foreground/60">
+                              {aiState.suggestion.summary}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs text-foreground/58">
+                            {aiState?.loading
+                              ? "Generating an update from your listing signals..."
+                              : "Tap the button to let AI propose a fresh title, description, and tags."}
+                          </p>
+                        )}
+                      </div>
+
                       <div className="mt-4 flex flex-wrap gap-2">
                         {[
                           ["draft", "Move To Draft"],
@@ -2972,7 +6932,8 @@ export function SellerWorkspace() {
                         </>
                       ) : null}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -3184,7 +7145,13 @@ export function SellerWorkspace() {
                         value={activityDiscoveryFilter}
                         onChange={(event) =>
                           setActivityDiscoveryFilter(
-                            event.target.value as "all" | "local" | "search" | "price",
+                            event.target.value as
+                              | "all"
+                              | "local"
+                              | "search"
+                              | "price"
+                              | "same-seller"
+                              | "cross-seller",
                           )
                         }
                       >
@@ -3192,6 +7159,8 @@ export function SellerWorkspace() {
                         <option value="local">Local match</option>
                         <option value="search">Search-led</option>
                         <option value="price">Price-led</option>
+                        <option value="same-seller">Same-seller follow-on</option>
+                        <option value="cross-seller">Cross-seller follow-on</option>
                       </select>
                     </label>
                     <label className="min-w-40 flex-1">
@@ -3227,6 +7196,29 @@ export function SellerWorkspace() {
                         <option value="focused">Focused item</option>
                       </select>
                     </label>
+                    <label className="min-w-40 flex-1">
+                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Queue Order
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                        value={activitySortMode}
+                        onChange={(event) =>
+                          setActivitySortMode(
+                            event.target.value as
+                              | "default"
+                              | "pressured"
+                              | "drag"
+                              | "recovery",
+                          )
+                        }
+                      >
+                        <option value="default">Default Order</option>
+                        <option value="pressured">Pressured First</option>
+                        <option value="drag">Drag First</option>
+                        <option value="recovery">Recovery First</option>
+                      </select>
+                    </label>
                   </div>
                 </div>
                 <div className="space-y-3">
@@ -3238,58 +7230,46 @@ export function SellerWorkspace() {
                           : "border-accent bg-accent/8"
                       }`}
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
-                            Focused Order
-                          </p>
-                          <h4 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-foreground">
-                            {focusedOrder.status.replaceAll("_", " ")}
-                          </h4>
-                          <p className="mt-2 text-sm text-foreground/72">
-                            {focusedOrder.notes ?? "No buyer notes"}
-                          </p>
-                          {formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context) ? (
-                            <div className="mt-3 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
-                              {formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context)}
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-semibold text-foreground">
-                            {formatCurrency(focusedOrder.total_cents, focusedOrder.currency)}
-                          </p>
-                          <button
-                            className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
-                            onClick={clearFocusedActivity}
-                            type="button"
-                          >
-                            Clear Focus
-                          </button>
-                        </div>
-                      </div>
+                      <FocusedTransactionHeader
+                        browseContextLabel={
+                          formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context) ?? null
+                        }
+                        clearLabel="Clear Focus"
+                        pressureToneClass={focusedOrderSupportPressure?.toneClass ?? null}
+                        pressureLabel={focusedOrderSupportPressure?.label ?? null}
+                        subtitle={focusedOrder.notes ?? "No buyer notes"}
+                        title="Focused Order"
+                        valueLabel={formatCurrency(focusedOrder.total_cents, focusedOrder.currency)}
+                        statusLabel={focusedOrder.status.replaceAll("_", " ")}
+                        onClear={clearFocusedActivity}
+                      />
 
                       <div className="mt-4 grid gap-4 text-sm text-foreground/72 sm:grid-cols-2">
-                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                            Order Snapshot
-                          </p>
-                          <div className="mt-3 space-y-2">
-                            <p>Order ID: {focusedOrder.id}</p>
-                            <p>Fulfillment: {focusedOrder.fulfillment}</p>
-                            <p>Items: {(focusedOrder.items ?? []).length}</p>
-                            <p>
-                              Buyer discovery:{" "}
-                              {formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context) ??
-                                "No browse context"}
-                            </p>
-                            <p>Seller note: {focusedOrder.seller_response_note ?? "No seller note yet"}</p>
-                          </div>
-                        </div>
-                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                            Requested Items
-                          </p>
+                        <FocusedTransactionSnapshotCard
+                          browseContextLabel={
+                            formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context) ??
+                            "No browse context"
+                          }
+                          listing={focusedOrderListing}
+                          pressureDetail={focusedOrderSupportPressure?.detail ?? null}
+                          pressureLaneCount={focusedOrderSupportPressureLaneCount}
+                          pressureLaneMode={focusedOrderSupportPressureLaneMode}
+                          sellerNote={focusedOrder.seller_response_note ?? "No seller note yet"}
+                          summaryLines={[
+                            `Order ID: ${focusedOrder.id}`,
+                            `Fulfillment: ${focusedOrder.fulfillment}`,
+                            `Items: ${(focusedOrder.items ?? []).length}`,
+                          ]}
+                          title="Order Snapshot"
+                          onOpenSupportLane={() => {
+                            if (!focusedOrderListing || !focusedOrderSupportPressureLaneMode) return;
+                            openListingSupportPressureLane(
+                              focusedOrderListing,
+                              focusedOrderSupportPressureLaneMode,
+                            );
+                          }}
+                        />
+                        <FocusedTransactionDetailCard title="Requested Items">
                           <div className="mt-3 space-y-2">
                             {(focusedOrder.items ?? []).length > 0 ? (
                               (focusedOrder.items ?? []).map((item) => (
@@ -3303,33 +7283,14 @@ export function SellerWorkspace() {
                               <p>No item detail is available for this order yet.</p>
                             )}
                           </div>
-                        </div>
+                        </FocusedTransactionDetailCard>
                       </div>
 
-                      <div className="mt-4 rounded-2xl border border-border bg-white/70 px-4 py-4">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                          Full Timeline
-                        </p>
-                        <div className="mt-3 space-y-3 text-sm text-foreground/72">
-                          {(focusedOrder.status_history ?? []).length > 0 ? (
-                            (focusedOrder.status_history ?? []).map((event) => (
-                              <div key={event.id} className="border-t border-border pt-3 first:border-t-0 first:pt-0">
-                                <p className="font-medium text-foreground">
-                                  {event.status.replaceAll("_", " ")}
-                                  {" · "}
-                                  {event.actor_role}
-                                </p>
-                                <p className="text-xs text-foreground/52">
-                                  {new Date(event.created_at).toLocaleString()}
-                                </p>
-                                {event.note ? <p className="mt-1">{event.note}</p> : null}
-                              </div>
-                            ))
-                          ) : (
-                            <p>No timeline events yet.</p>
-                          )}
-                        </div>
-                      </div>
+                      <FocusedTransactionDetailCard className="mt-4" title="Full Timeline">
+                        <TransactionTimelineCard
+                          events={focusedOrder.status_history ?? []}
+                        />
+                      </FocusedTransactionDetailCard>
                     </div>
                   ) : null}
 
@@ -3341,89 +7302,58 @@ export function SellerWorkspace() {
                           : "border-accent bg-accent/8"
                       }`}
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
-                            Focused Booking
-                          </p>
-                          <h4 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-foreground">
-                            {focusedBooking.status.replaceAll("_", " ")}
-                          </h4>
-                          <p className="mt-2 text-sm text-foreground/72">
-                            {focusedBooking.listing_title ?? focusedBooking.listing_id}
-                          </p>
-                          {formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context) ? (
-                            <div className="mt-3 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
-                              {formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context)}
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-semibold text-foreground">
-                            {formatCurrency(focusedBooking.total_cents, focusedBooking.currency)}
-                          </p>
-                          <button
-                            className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
-                            onClick={clearFocusedActivity}
-                            type="button"
-                          >
-                            Clear Focus
-                          </button>
-                        </div>
-                      </div>
+                      <FocusedTransactionHeader
+                        browseContextLabel={
+                          formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context) ?? null
+                        }
+                        clearLabel="Clear Focus"
+                        pressureToneClass={focusedBookingSupportPressure?.toneClass ?? null}
+                        pressureLabel={focusedBookingSupportPressure?.label ?? null}
+                        subtitle={focusedBooking.listing_title ?? focusedBooking.listing_id}
+                        title="Focused Booking"
+                        valueLabel={formatCurrency(focusedBooking.total_cents, focusedBooking.currency)}
+                        statusLabel={focusedBooking.status.replaceAll("_", " ")}
+                        onClear={clearFocusedActivity}
+                      />
 
                       <div className="mt-4 grid gap-4 text-sm text-foreground/72 sm:grid-cols-2">
-                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                            Booking Snapshot
-                          </p>
-                          <div className="mt-3 space-y-2">
-                            <p>Booking ID: {focusedBooking.id}</p>
-                            <p>Type: {focusedBooking.listing_type ?? "Not specified"}</p>
-                            <p>Starts: {new Date(focusedBooking.scheduled_start).toLocaleString()}</p>
-                            <p>Ends: {new Date(focusedBooking.scheduled_end).toLocaleString()}</p>
-                            <p>
-                              Buyer discovery:{" "}
-                              {formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context) ??
-                                "No browse context"}
-                            </p>
-                            <p>Seller note: {focusedBooking.seller_response_note ?? "No seller note yet"}</p>
-                          </div>
-                        </div>
-                        <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                            Buyer Context
-                          </p>
+                        <FocusedTransactionSnapshotCard
+                          browseContextLabel={
+                            formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context) ??
+                            "No browse context"
+                          }
+                          listing={focusedBookingListing}
+                          pressureDetail={focusedBookingSupportPressure?.detail ?? null}
+                          pressureLaneCount={focusedBookingSupportPressureLaneCount}
+                          pressureLaneMode={focusedBookingSupportPressureLaneMode}
+                          sellerNote={focusedBooking.seller_response_note ?? "No seller note yet"}
+                          summaryLines={[
+                            `Booking ID: ${focusedBooking.id}`,
+                            `Type: ${focusedBooking.listing_type ?? "Not specified"}`,
+                            `Starts: ${new Date(focusedBooking.scheduled_start).toLocaleString()}`,
+                            `Ends: ${new Date(focusedBooking.scheduled_end).toLocaleString()}`,
+                          ]}
+                          title="Booking Snapshot"
+                          onOpenSupportLane={() => {
+                            if (!focusedBookingListing || !focusedBookingSupportPressureLaneMode) return;
+                            openListingSupportPressureLane(
+                              focusedBookingListing,
+                              focusedBookingSupportPressureLaneMode,
+                            );
+                          }}
+                        />
+                        <FocusedTransactionDetailCard title="Buyer Context">
                           <div className="mt-3 space-y-2">
                             <p>{focusedBooking.notes ?? "No buyer notes"}</p>
                           </div>
-                        </div>
+                        </FocusedTransactionDetailCard>
                       </div>
 
-                      <div className="mt-4 rounded-2xl border border-border bg-white/70 px-4 py-4">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                          Full Timeline
-                        </p>
-                        <div className="mt-3 space-y-3 text-sm text-foreground/72">
-                          {(focusedBooking.status_history ?? []).length > 0 ? (
-                            (focusedBooking.status_history ?? []).map((event) => (
-                              <div key={event.id} className="border-t border-border pt-3 first:border-t-0 first:pt-0">
-                                <p className="font-medium text-foreground">
-                                  {event.status.replaceAll("_", " ")}
-                                  {" · "}
-                                  {event.actor_role}
-                                </p>
-                                <p className="text-xs text-foreground/52">
-                                  {new Date(event.created_at).toLocaleString()}
-                                </p>
-                                {event.note ? <p className="mt-1">{event.note}</p> : null}
-                              </div>
-                            ))
-                          ) : (
-                            <p>No timeline events yet.</p>
-                          )}
-                        </div>
-                      </div>
+                      <FocusedTransactionDetailCard className="mt-4" title="Full Timeline">
+                        <TransactionTimelineCard
+                          events={focusedBooking.status_history ?? []}
+                        />
+                      </FocusedTransactionDetailCard>
                     </div>
                   ) : null}
 
@@ -3437,6 +7367,13 @@ export function SellerWorkspace() {
                   {filteredOrders.map((order) => (
                     (() => {
                       const orderItems = order.items ?? [];
+                      const orderContext = getTransactionListingContext(order);
+                      const orderListing = orderContext.listing;
+                      const orderSupportPressure = orderContext.supportPressure;
+                      const orderPressureLaneMode = orderContext.pressureLaneMode;
+                      const orderPressureLaneCount = orderContext.pressureLaneCount;
+                      const isOrderPressureEasing = orderContext.isPressureEasing;
+                      const orderRecoveryDelta = orderContext.recoveryDelta;
                       return (
                     <div
                       key={order.id}
@@ -3450,107 +7387,74 @@ export function SellerWorkspace() {
                       }`}
                       onClick={() => setActivityFocus(`order:${order.id}`)}
                     >
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
-                            Order
-                          </p>
-                          <p className="mt-2 text-base font-semibold capitalize text-foreground">
-                            {order.status.replaceAll("_", " ")}
-                          </p>
-                          <p className="mt-1 text-sm text-foreground/68">
-                            {order.notes ?? "No buyer notes"}
-                          </p>
-                          {formatBuyerBrowseContextLabel(order.buyer_browse_context) ? (
-                            <div className="mt-2 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
-                              {formatBuyerBrowseContextLabel(order.buyer_browse_context)}
-                            </div>
-                          ) : null}
-                          {order.seller_response_note ? (
-                            <p className="mt-2 text-sm text-olive">
-                              Seller note: {order.seller_response_note}
-                            </p>
-                          ) : null}
-                          {(order.status_history ?? []).length > 0 ? (
-                            <div className="mt-3 rounded-2xl border border-border bg-background/35 px-3 py-3">
-                              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                                Timeline
+                      <QueueTransactionCardHeader
+                        browseContextLabel={formatBuyerBrowseContextLabel(order.buyer_browse_context) ?? null}
+                        kindLabel="Order"
+                        listing={orderListing}
+                        pressureLaneCount={orderPressureLaneCount}
+                        pressureLaneMode={orderPressureLaneMode}
+                        primaryLine={null}
+                        recoveryDelta={orderRecoveryDelta}
+                        rightPrimary={formatCurrency(order.total_cents, order.currency)}
+                        rightSecondary={null}
+                        secondaryLine={order.notes ?? "No buyer notes"}
+                        sellerNote={order.seller_response_note ?? null}
+                        statusLabel={order.status.replaceAll("_", " ")}
+                        supportPressure={orderSupportPressure}
+                        isPressureEasing={isOrderPressureEasing}
+                        onOpenDeliveryNet={() => {
+                          if (!orderListing) return;
+                          openListingRecentDeliveryNetLane(
+                            orderListing,
+                            orderRecoveryDelta >= 0 ? "sent" : "failed",
+                          );
+                        }}
+                        onOpenPressureEasing={() => {
+                          if (!orderListing) return;
+                          openListingPressureEasingLane(orderListing);
+                        }}
+                        onOpenSupportLane={() => {
+                          if (!orderListing || !orderPressureLaneMode) return;
+                          openListingSupportPressureLane(orderListing, orderPressureLaneMode);
+                        }}
+                      >
+                        <TransactionTimelinePreview events={(order.status_history ?? []).slice(0, 3)} />
+                        {orderItems.length > 0 ? (
+                          <QueueTransactionDetailList>
+                            {orderItems.map((item) => (
+                              <p key={item.id}>
+                                {item.quantity}x {item.listing_title ?? item.listing_id}
+                                {" "}
+                                <span className="text-foreground/52">
+                                  {formatCurrency(item.total_price_cents, order.currency)}
+                                </span>
                               </p>
-                              <div className="mt-2 space-y-2 text-sm text-foreground/70">
-                                {(order.status_history ?? []).slice(0, 3).map((event) => (
-                                  <div key={event.id}>
-                                    <p className="font-medium text-foreground">
-                                      {event.status.replaceAll("_", " ")}
-                                      {" · "}
-                                      {event.actor_role}
-                                    </p>
-                                    <p className="text-xs text-foreground/52">
-                                      {new Date(event.created_at).toLocaleString()}
-                                    </p>
-                                    {event.note ? <p>{event.note}</p> : null}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-                          {orderItems.length > 0 ? (
-                            <div className="mt-3 space-y-1 text-sm text-foreground/70">
-                              {orderItems.map((item) => (
-                                <p key={item.id}>
-                                  {item.quantity}x {item.listing_title ?? item.listing_id}
-                                  {" "}
-                                  <span className="text-foreground/52">
-                                    {formatCurrency(item.total_price_cents, order.currency)}
-                                  </span>
-                                </p>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                        <span className="font-semibold">
-                          {formatCurrency(order.total_cents, order.currency)}
-                        </span>
-                      </div>
-                      <label className="mt-4 block">
-                        <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                          Seller Response Note
-                        </span>
-                        <textarea
-                          className="min-h-24 w-full rounded-2xl border border-border bg-background/35 px-4 py-3 text-sm outline-none transition focus:border-accent"
-                          value={responseNotes[order.id] ?? ""}
-                          onChange={(event) =>
-                            setResponseNotes((current) => ({
-                              ...current,
-                              [order.id]: event.target.value,
-                            }))
-                          }
-                          placeholder="Add a seller note for this order update"
-                        />
-                      </label>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {[
-                          ["confirmed", "Confirm"],
-                          ["preparing", "Prep"],
-                          ["ready", "Ready"],
-                          ["completed", "Complete"],
-                        ].map(([status, label]) => (
-                          <button
-                            key={status}
-                            className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
-                            disabled={queueLoading === order.id}
-                            onClick={() => updateOrderStatus(order.id, status)}
-                            type="button"
-                          >
-                            {queueLoading === order.id ? "..." : label}
-                          </button>
-                        ))}
-                      </div>
+                            ))}
+                          </QueueTransactionDetailList>
+                        ) : null}
+                      </QueueTransactionCardHeader>
+                      <QueueTransactionControls
+                        note={responseNotes[order.id] ?? ""}
+                        onNoteChange={(value) => updateResponseNote(order.id, value)}
+                        notePlaceholder="Add a seller note for this order update"
+                        loading={queueLoading === order.id}
+                        actions={getOrderQueueActions(order.id)}
+                      />
                     </div>
                       );
                     })()
                   ))}
 
                   {filteredBookings.map((booking) => (
+                    (() => {
+                      const bookingContext = getTransactionListingContext(booking);
+                      const bookingListing = bookingContext.listing;
+                      const bookingSupportPressure = bookingContext.supportPressure;
+                      const bookingPressureLaneMode = bookingContext.pressureLaneMode;
+                      const bookingPressureLaneCount = bookingContext.pressureLaneCount;
+                      const isBookingPressureEasing = bookingContext.isPressureEasing;
+                      const bookingRecoveryDelta = bookingContext.recoveryDelta;
+                      return (
                     <div
                       key={booking.id}
                       ref={(node) => {
@@ -3563,98 +7467,51 @@ export function SellerWorkspace() {
                       }`}
                       onClick={() => setActivityFocus(`booking:${booking.id}`)}
                     >
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
-                            Booking
-                          </p>
-                          <p className="mt-2 text-base font-semibold capitalize text-foreground">
-                            {booking.status.replaceAll("_", " ")}
-                          </p>
-                          <p className="mt-1 text-sm font-medium text-foreground/76">
-                            {booking.listing_title ?? booking.listing_id}
-                            {booking.listing_type ? ` · ${booking.listing_type}` : ""}
-                          </p>
-                          <p className="mt-1 text-sm text-foreground/68">
-                            {booking.notes ?? "No buyer notes"}
-                          </p>
-                          {formatBuyerBrowseContextLabel(booking.buyer_browse_context) ? (
-                            <div className="mt-2 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
-                              {formatBuyerBrowseContextLabel(booking.buyer_browse_context)}
-                            </div>
-                          ) : null}
-                          {booking.seller_response_note ? (
-                            <p className="mt-2 text-sm text-olive">
-                              Seller note: {booking.seller_response_note}
-                            </p>
-                          ) : null}
-                          {(booking.status_history ?? []).length > 0 ? (
-                            <div className="mt-3 rounded-2xl border border-border bg-background/35 px-3 py-3">
-                              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                                Timeline
-                              </p>
-                              <div className="mt-2 space-y-2 text-sm text-foreground/70">
-                                {(booking.status_history ?? []).slice(0, 3).map((event) => (
-                                  <div key={event.id}>
-                                    <p className="font-medium text-foreground">
-                                      {event.status.replaceAll("_", " ")}
-                                      {" · "}
-                                      {event.actor_role}
-                                    </p>
-                                    <p className="text-xs text-foreground/52">
-                                      {new Date(event.created_at).toLocaleString()}
-                                    </p>
-                                    {event.note ? <p>{event.note}</p> : null}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="text-right">
-                          <span className="text-sm text-foreground/72">
-                            {new Date(booking.scheduled_start).toLocaleString()}
-                          </span>
-                          <p className="mt-1 text-xs text-foreground/56">
-                            {formatCurrency(booking.total_cents, booking.currency)}
-                          </p>
-                        </div>
-                      </div>
-                      <label className="mt-4 block">
-                        <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
-                          Seller Response Note
-                        </span>
-                        <textarea
-                          className="min-h-24 w-full rounded-2xl border border-border bg-background/35 px-4 py-3 text-sm outline-none transition focus:border-accent"
-                          value={responseNotes[booking.id] ?? ""}
-                          onChange={(event) =>
-                            setResponseNotes((current) => ({
-                              ...current,
-                              [booking.id]: event.target.value,
-                            }))
-                          }
-                          placeholder="Add a seller note for this booking update"
-                        />
-                      </label>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {[
-                          ["confirmed", "Confirm"],
-                          ["in_progress", "Start"],
-                          ["completed", "Complete"],
-                          ["declined", "Decline"],
-                        ].map(([status, label]) => (
-                          <button
-                            key={status}
-                            className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
-                            disabled={queueLoading === booking.id}
-                            onClick={() => updateBookingStatus(booking.id, status)}
-                            type="button"
-                          >
-                            {queueLoading === booking.id ? "..." : label}
-                          </button>
-                        ))}
-                      </div>
+                      <QueueTransactionCardHeader
+                        browseContextLabel={formatBuyerBrowseContextLabel(booking.buyer_browse_context) ?? null}
+                        kindLabel="Booking"
+                        listing={bookingListing}
+                        pressureLaneCount={bookingPressureLaneCount}
+                        pressureLaneMode={bookingPressureLaneMode}
+                        primaryLine={`${booking.listing_title ?? booking.listing_id}${
+                          booking.listing_type ? ` · ${booking.listing_type}` : ""
+                        }`}
+                        recoveryDelta={bookingRecoveryDelta}
+                        rightPrimary={new Date(booking.scheduled_start).toLocaleString()}
+                        rightSecondary={formatCurrency(booking.total_cents, booking.currency)}
+                        secondaryLine={booking.notes ?? "No buyer notes"}
+                        sellerNote={booking.seller_response_note ?? null}
+                        statusLabel={booking.status.replaceAll("_", " ")}
+                        supportPressure={bookingSupportPressure}
+                        isPressureEasing={isBookingPressureEasing}
+                        onOpenDeliveryNet={() => {
+                          if (!bookingListing) return;
+                          openListingRecentDeliveryNetLane(
+                            bookingListing,
+                            bookingRecoveryDelta >= 0 ? "sent" : "failed",
+                          );
+                        }}
+                        onOpenPressureEasing={() => {
+                          if (!bookingListing) return;
+                          openListingPressureEasingLane(bookingListing);
+                        }}
+                        onOpenSupportLane={() => {
+                          if (!bookingListing || !bookingPressureLaneMode) return;
+                          openListingSupportPressureLane(bookingListing, bookingPressureLaneMode);
+                        }}
+                      >
+                        <TransactionTimelinePreview events={(booking.status_history ?? []).slice(0, 3)} />
+                      </QueueTransactionCardHeader>
+                      <QueueTransactionControls
+                        note={responseNotes[booking.id] ?? ""}
+                        onNoteChange={(value) => updateResponseNote(booking.id, value)}
+                        notePlaceholder="Add a seller note for this booking update"
+                        loading={queueLoading === booking.id}
+                        actions={getBookingQueueActions(booking.id)}
+                      />
                     </div>
+                      );
+                    })()
                   ))}
                 </div>
               </div>
@@ -3761,6 +7618,804 @@ function MiniStat({
     >
       {content}
     </button>
+  );
+}
+
+function SelectChip({
+  children,
+  active,
+  onClick,
+  className,
+}: {
+  children: React.ReactNode;
+  active?: boolean;
+  onClick: () => void;
+  className?: string;
+}) {
+  const resolvedClassName =
+    className ??
+    (active
+      ? "border-accent bg-accent text-white"
+      : "border-border text-foreground hover:border-accent hover:text-accent");
+
+  return (
+    <button
+      className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${resolvedClassName}`}
+      onClick={onClick}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
+function SellerStatusActionChip({
+  children,
+  loading,
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode;
+  loading?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+      disabled={disabled}
+      onClick={onClick}
+      type="button"
+    >
+      {loading ? "..." : children}
+    </button>
+  );
+}
+
+function TransactionListingPressureInline({
+  listing,
+  supportPressure,
+  isPressureEasing,
+  recoveryDelta,
+  pressureLaneMode,
+  pressureLaneCount,
+  onOpenPressureEasing,
+  onOpenDeliveryNet,
+  onOpenSupportLane,
+}: {
+  listing: Listing | null;
+  supportPressure:
+    | {
+        label: string;
+        detail: string;
+        toneClass: string;
+      }
+    | null;
+  isPressureEasing: boolean;
+  recoveryDelta: number;
+  pressureLaneMode: "failed" | "queued" | "trust" | null;
+  pressureLaneCount: number;
+  onOpenPressureEasing: () => void;
+  onOpenDeliveryNet: () => void;
+  onOpenSupportLane: () => void;
+}) {
+  return (
+    <>
+      {supportPressure ? (
+        <div
+          className={`mt-2 inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${supportPressure.toneClass}`}
+        >
+          {supportPressure.label}
+        </div>
+      ) : null}
+      {isPressureEasing && listing ? (
+        <button
+          className="mt-2 inline-flex rounded-full border border-lime-200 bg-lime-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-lime-800 transition hover:border-accent hover:text-accent"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenPressureEasing();
+          }}
+          type="button"
+        >
+          Pressure easing
+        </button>
+      ) : null}
+      {listing ? (
+        <button
+          className={`mt-2 inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition hover:border-accent hover:text-accent ${
+            recoveryDelta > 0
+              ? "border-lime-200 bg-lime-50 text-lime-800"
+              : recoveryDelta < 0
+                ? "border-rose-200 bg-rose-50 text-rose-700"
+                : "border-border bg-background/40 text-foreground/60"
+          }`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenDeliveryNet();
+          }}
+          type="button"
+        >
+          Delivery net 7d · {recoveryDelta > 0 ? `+${recoveryDelta}` : recoveryDelta}
+        </button>
+      ) : null}
+      {listing && pressureLaneMode ? (
+        <div className="mt-2 space-y-1">
+          <button
+            className="block rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenSupportLane();
+            }}
+            type="button"
+          >
+            {getListingSupportPressureLaneLabel(pressureLaneMode)}
+            {" · "}
+            {getListingSupportPressureLaneCountLabel(pressureLaneMode, pressureLaneCount)}
+          </button>
+          <p className="text-xs text-foreground/54">
+            {listing.title} · {getListingSupportPressureDriverLabel(pressureLaneMode)}
+          </p>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function FocusedTransactionSnapshotCard({
+  title,
+  summaryLines,
+  browseContextLabel,
+  pressureDetail,
+  listing,
+  pressureLaneMode,
+  pressureLaneCount,
+  sellerNote,
+  onOpenSupportLane,
+}: {
+  title: string;
+  summaryLines: string[];
+  browseContextLabel: string;
+  pressureDetail: string | null;
+  listing: Listing | null;
+  pressureLaneMode: "failed" | "queued" | "trust" | null;
+  pressureLaneCount: number;
+  sellerNote: string;
+  onOpenSupportLane: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-white/70 px-4 py-4">
+      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+        {title}
+      </p>
+      <div className="mt-3 space-y-2">
+        {summaryLines.map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+        <p>Buyer discovery: {browseContextLabel}</p>
+        {pressureDetail ? <p>Listing pressure: {pressureDetail}</p> : null}
+        {listing && pressureLaneMode ? (
+          <button
+            className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+            onClick={onOpenSupportLane}
+            type="button"
+          >
+            {getListingSupportPressureLaneLabel(pressureLaneMode)}
+            {" · "}
+            {getListingSupportPressureLaneCountLabel(pressureLaneMode, pressureLaneCount)}
+          </button>
+        ) : null}
+        <p>Seller note: {sellerNote}</p>
+      </div>
+    </div>
+  );
+}
+
+function FocusedTransactionHeader({
+  title,
+  statusLabel,
+  subtitle,
+  browseContextLabel,
+  pressureLabel,
+  pressureToneClass,
+  valueLabel,
+  clearLabel,
+  onClear,
+}: {
+  title: string;
+  statusLabel: string;
+  subtitle: string;
+  browseContextLabel: string | null;
+  pressureLabel: string | null;
+  pressureToneClass: string | null;
+  valueLabel: string;
+  clearLabel: string;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
+          {title}
+        </p>
+        <h4 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-foreground">
+          {statusLabel}
+        </h4>
+        <p className="mt-2 text-sm text-foreground/72">{subtitle}</p>
+        {browseContextLabel ? (
+          <div className="mt-3 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
+            {browseContextLabel}
+          </div>
+        ) : null}
+        {pressureLabel && pressureToneClass ? (
+          <div
+            className={`mt-3 inline-flex rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${pressureToneClass}`}
+          >
+            {pressureLabel}
+          </div>
+        ) : null}
+      </div>
+      <div className="text-right">
+        <p className="text-sm font-semibold text-foreground">{valueLabel}</p>
+        <button
+          className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+          onClick={onClear}
+          type="button"
+        >
+          {clearLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FocusedTransactionDetailCard({
+  title,
+  children,
+  className = "",
+}: {
+  title: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`${className} rounded-2xl border border-border bg-white/70 px-4 py-4`}>
+      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+        {title}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function QueueTransactionCardHeader({
+  kindLabel,
+  statusLabel,
+  primaryLine,
+  secondaryLine,
+  browseContextLabel,
+  supportPressure,
+  listing,
+  isPressureEasing,
+  recoveryDelta,
+  pressureLaneMode,
+  pressureLaneCount,
+  sellerNote,
+  rightPrimary,
+  rightSecondary,
+  onOpenPressureEasing,
+  onOpenDeliveryNet,
+  onOpenSupportLane,
+  children,
+}: {
+  kindLabel: string;
+  statusLabel: string;
+  primaryLine: string | null;
+  secondaryLine: string;
+  browseContextLabel: string | null;
+  supportPressure:
+    | {
+        label: string;
+        detail: string;
+        toneClass: string;
+      }
+    | null;
+  listing: Listing | null;
+  isPressureEasing: boolean;
+  recoveryDelta: number;
+  pressureLaneMode: "failed" | "queued" | "trust" | null;
+  pressureLaneCount: number;
+  sellerNote: string | null;
+  rightPrimary: string;
+  rightSecondary: string | null;
+  onOpenPressureEasing: () => void;
+  onOpenDeliveryNet: () => void;
+  onOpenSupportLane: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
+          {kindLabel}
+        </p>
+        <p className="mt-2 text-base font-semibold capitalize text-foreground">{statusLabel}</p>
+        {primaryLine ? (
+          <p className="mt-1 text-sm font-medium text-foreground/76">{primaryLine}</p>
+        ) : null}
+        <p className="mt-1 text-sm text-foreground/68">{secondaryLine}</p>
+        {browseContextLabel ? (
+          <div className="mt-2 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
+            {browseContextLabel}
+          </div>
+        ) : null}
+        <TransactionListingPressureInline
+          isPressureEasing={isPressureEasing}
+          listing={listing}
+          pressureLaneCount={pressureLaneCount}
+          pressureLaneMode={pressureLaneMode}
+          recoveryDelta={recoveryDelta}
+          supportPressure={supportPressure}
+          onOpenDeliveryNet={onOpenDeliveryNet}
+          onOpenPressureEasing={onOpenPressureEasing}
+          onOpenSupportLane={onOpenSupportLane}
+        />
+        {sellerNote ? <p className="mt-2 text-sm text-olive">Seller note: {sellerNote}</p> : null}
+        {children}
+      </div>
+      <div className="text-right">
+        <span className="text-sm text-foreground/72">{rightPrimary}</span>
+        {rightSecondary ? <p className="mt-1 text-xs text-foreground/56">{rightSecondary}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function QueueTransactionDetailList({ children }: { children: React.ReactNode }) {
+  return <div className="mt-3 space-y-1 text-sm text-foreground/70">{children}</div>;
+}
+
+function QueueTransactionControls({
+  note,
+  onNoteChange,
+  notePlaceholder,
+  loading,
+  actions,
+}: {
+  note: string;
+  onNoteChange: (value: string) => void;
+  notePlaceholder: string;
+  loading: boolean;
+  actions: Array<{ key: string; label: string; onClick: () => void }>;
+}) {
+  return (
+    <>
+      <SellerResponseNoteEditor
+        note={note}
+        onChange={onNoteChange}
+        placeholder={notePlaceholder}
+      />
+      <div className="mt-4 flex flex-wrap gap-2">
+        {actions.map((action) => (
+          <SellerStatusActionChip
+            key={action.key}
+            disabled={loading}
+            onClick={action.onClick}
+            loading={loading}
+          >
+            {action.label}
+          </SellerStatusActionChip>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function TransactionTimelineCard({
+  events,
+}: {
+  events: Array<{
+    id: string;
+    status: string;
+    actor_role: string;
+    created_at: string;
+    note?: string | null;
+  }>;
+}) {
+  return (
+    <>
+      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+        Full Timeline
+      </p>
+      <div className="mt-3 space-y-3 text-sm text-foreground/72">
+        {events.length > 0 ? (
+          events.map((event) => (
+            <div key={event.id} className="border-t border-border pt-3 first:border-t-0 first:pt-0">
+              <p className="font-medium text-foreground">
+                {event.status.replaceAll("_", " ")}
+                {" · "}
+                {event.actor_role}
+              </p>
+              <p className="text-xs text-foreground/52">
+                {new Date(event.created_at).toLocaleString()}
+              </p>
+              {event.note ? <p className="mt-1">{event.note}</p> : null}
+            </div>
+          ))
+        ) : (
+          <p>No timeline events yet.</p>
+        )}
+      </div>
+    </>
+  );
+}
+
+function TransactionTimelinePreview({
+  events,
+}: {
+  events: Array<{
+    id: string;
+    status: string;
+    actor_role: string;
+    created_at: string;
+    note?: string | null;
+  }>;
+}) {
+  if (events.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 rounded-2xl border border-border bg-background/35 px-3 py-3">
+      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+        Timeline
+      </p>
+      <div className="mt-2 space-y-2 text-sm text-foreground/70">
+        {events.map((event) => (
+          <div key={event.id}>
+            <p className="font-medium text-foreground">
+              {event.status.replaceAll("_", " ")}
+              {" · "}
+              {event.actor_role}
+            </p>
+            <p className="text-xs text-foreground/52">
+              {new Date(event.created_at).toLocaleString()}
+            </p>
+            {event.note ? <p>{event.note}</p> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SellerResponseNoteEditor({
+  note,
+  onChange,
+  placeholder,
+}: {
+  note: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <label className="mt-4 block">
+      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+        Seller Response Note
+      </span>
+      <textarea
+        className="min-h-24 w-full rounded-2xl border border-border bg-background/35 px-4 py-3 text-sm outline-none transition focus:border-accent"
+        value={note}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+      />
+    </label>
+  );
+}
+
+function PressurePreviewRow({
+  lane,
+  laneClassName,
+  onLaneClick,
+  primaryClassName,
+  primaryLabel,
+  onPrimaryClick,
+  trendLabel,
+  tuneLabel,
+  onTuneClick,
+}: {
+  lane: string;
+  laneClassName: string;
+  onLaneClick: () => void;
+  primaryClassName: string;
+  primaryLabel: string;
+  onPrimaryClick: () => void;
+  trendLabel?: string | null;
+  tuneLabel?: string | null;
+  onTuneClick?: (() => void) | null;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${laneClassName}`}
+        onClick={onLaneClick}
+        type="button"
+      >
+        {lane}
+      </button>
+      <button
+        className={primaryClassName}
+        onClick={onPrimaryClick}
+        type="button"
+      >
+        {primaryLabel}
+      </button>
+      {trendLabel ? (
+        <span
+          className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${getListingPreviewRetentionTrendToneClass(
+            trendLabel,
+          )}`}
+        >
+          {trendLabel}
+        </span>
+      ) : null}
+      {tuneLabel && onTuneClick ? (
+        <button
+          className="rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-accent hover:text-accent"
+          onClick={onTuneClick}
+          type="button"
+        >
+          {tuneLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function DeliveryNetActionButton({
+  recoveryDelta,
+  onClick,
+  tone = "detail",
+}: {
+  recoveryDelta: number;
+  onClick: () => void;
+  tone?: "compact" | "detail";
+}) {
+  const className =
+    tone === "compact"
+      ? `text-[11px] font-semibold uppercase tracking-[0.14em] transition hover:text-accent ${
+          recoveryDelta > 0
+            ? "text-lime-800"
+            : recoveryDelta < 0
+              ? "text-rose-700"
+              : "text-foreground/52"
+        }`
+      : `text-left text-xs leading-5 transition hover:text-accent ${
+          recoveryDelta > 0
+            ? "text-lime-800/90"
+            : recoveryDelta < 0
+              ? "text-rose-700/90"
+              : "text-foreground/56"
+        }`;
+
+  return (
+    <button
+      className={className}
+      onClick={onClick}
+      type="button"
+    >
+      Delivery net 7d: {recoveryDelta > 0 ? `+${recoveryDelta}` : recoveryDelta}
+    </button>
+  );
+}
+
+function PressureEasingActionBlock({
+  onClick,
+  description,
+  tone = "badge",
+}: {
+  onClick: () => void;
+  description?: string;
+  tone?: "badge" | "compact" | "detail";
+}) {
+  if (tone === "compact") {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          className="rounded-full border border-lime-200 bg-lime-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-lime-800 transition hover:border-accent hover:text-accent"
+          onClick={onClick}
+          type="button"
+        >
+          Pressure easing
+        </button>
+        {description ? (
+          <button
+            className="text-[11px] text-foreground/58 transition hover:text-accent"
+            onClick={onClick}
+            type="button"
+          >
+            {description}
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (tone === "detail") {
+    return (
+      <button
+        className="text-left text-xs leading-5 text-lime-800/90 transition hover:text-accent"
+        onClick={onClick}
+        type="button"
+      >
+        {description ?? "Recent sends recovered without active failed or queued alerts."}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      className="rounded-full border border-lime-200 bg-lime-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-lime-800 transition hover:border-accent hover:text-accent"
+      onClick={onClick}
+      type="button"
+    >
+      Pressure easing
+    </button>
+  );
+}
+
+function SupportPressureActionBlock({
+  label,
+  detail,
+  toneClass,
+  action,
+  onActionClick,
+  tone = "detail",
+}: {
+  label: string;
+  detail: string;
+  toneClass: string;
+  action: { mode: "failed" | "queued" | "trust"; count: number } | null;
+  onActionClick: () => void;
+  tone?: "compact" | "detail";
+}) {
+  const wrapperClass =
+    tone === "compact"
+      ? "flex flex-wrap items-center gap-2"
+      : "flex flex-wrap items-center gap-2 text-xs leading-5 text-foreground/56";
+  const detailClass = tone === "compact" ? "text-[11px] text-foreground/58" : undefined;
+
+  return (
+    <div className={wrapperClass}>
+      {tone === "compact" ? (
+        <span
+          className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${toneClass}`}
+        >
+          {label}
+        </span>
+      ) : null}
+      <span className={detailClass}>{detail}</span>
+      {action ? (
+        <button
+          className={`rounded-full border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition hover:border-accent hover:text-accent ${
+            action.mode === "failed"
+              ? "border-red-200 text-red-700"
+              : action.mode === "queued"
+                ? "border-amber-200 text-amber-800"
+                : "border-rose-200 text-rose-700"
+          }`}
+          onClick={onActionClick}
+          type="button"
+        >
+          {getListingSupportPressureLaneLabel(action.mode)}
+          {" · "}
+          {getListingSupportPressureLaneCountLabel(action.mode, action.count)}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function TuneRoleActionButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      className="w-fit rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+      onClick={onClick}
+      type="button"
+    >
+      Tune Role
+    </button>
+  );
+}
+
+function LeakageActionRow({
+  label,
+  crossSellerPriceCount,
+  crossSellerSearchCount,
+  crossSellerLocalCount,
+  tuneLabel,
+  onTuneClick,
+}: {
+  label: string | null;
+  crossSellerPriceCount: number;
+  crossSellerSearchCount: number;
+  crossSellerLocalCount: number;
+  tuneLabel?: string | null;
+  onTuneClick?: (() => void) | null;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {label ? (
+        <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700">
+          {label}
+        </span>
+      ) : null}
+      {crossSellerPriceCount > 0 ? (
+        <span className="rounded-full border border-border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/68">
+          Price-led · {crossSellerPriceCount}
+        </span>
+      ) : null}
+      {crossSellerSearchCount > 0 ? (
+        <span className="rounded-full border border-border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/68">
+          Search-led · {crossSellerSearchCount}
+        </span>
+      ) : null}
+      {crossSellerLocalCount > 0 ? (
+        <span className="rounded-full border border-border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/68">
+          Local-fit · {crossSellerLocalCount}
+        </span>
+      ) : null}
+      {tuneLabel && onTuneClick ? (
+        <button
+          className="rounded-full border border-border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+          onClick={onTuneClick}
+          type="button"
+        >
+          {tuneLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function RetentionLaneActions({
+  sameSellerRecentCount,
+  crossSellerRecentCount,
+  sameSellerCount,
+  crossSellerCount,
+  onOpenRetainedLane,
+  onOpenBranchedLane,
+}: {
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerCount: number;
+  crossSellerCount: number;
+  onOpenRetainedLane: () => void;
+  onOpenBranchedLane: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <p className="text-xs text-foreground/58">
+        Last 7d: {sameSellerRecentCount} retained · {crossSellerRecentCount} branched
+      </p>
+      {sameSellerCount > 0 ? (
+        <button
+          className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-800 transition hover:border-accent hover:text-accent"
+          onClick={onOpenRetainedLane}
+          type="button"
+        >
+          Open Retained Lane
+        </button>
+      ) : null}
+      {crossSellerCount > 0 ? (
+        <button
+          className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 transition hover:border-accent hover:text-accent"
+          onClick={onOpenBranchedLane}
+          type="button"
+        >
+          Open Branched Lane
+        </button>
+      ) : null}
+    </div>
   );
 }
 

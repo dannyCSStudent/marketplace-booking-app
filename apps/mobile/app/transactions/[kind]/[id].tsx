@@ -1,9 +1,13 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { formatCurrency, loadBuyerBooking, loadBuyerOrder, type Booking, type Order } from '@/lib/api';
-import { getBuyerDeliveryRetryMode, setBuyerDeliveryRetryMode } from '@/lib/session-storage';
+import {
+  getBuyerDeliveryRetryMode,
+  setBuyerBrowseFilters,
+  setBuyerDeliveryRetryMode,
+} from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
 function formatRetryMode(mode: 'best_effort' | 'atomic') {
@@ -14,10 +18,189 @@ function toggleRetryMode(mode: 'best_effort' | 'atomic') {
   return mode === 'atomic' ? 'best_effort' : 'atomic';
 }
 
+function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }) {
+  return listing.images?.[0]?.image_url ?? null;
+}
+
+function getSuggestionSecondarySignal(listing: {
+  duration_minutes?: number | null;
+  price_cents: number;
+  currency: string;
+}) {
+  if (listing.duration_minutes) {
+    return `${listing.duration_minutes} min`;
+  }
+
+  return formatCurrency(listing.price_cents, listing.currency);
+}
+
+function getSuggestionActionMode(listing: {
+  requires_booking?: boolean | null;
+  type: 'product' | 'service' | 'hybrid';
+}) {
+  return listing.requires_booking || listing.type === 'service' ? 'Booking ready' : 'Order ready';
+}
+
+function getSuggestionSellerLabel(listing: { seller_id: string }, currentSellerId: string | null) {
+  if (!currentSellerId) {
+    return 'Marketplace seller';
+  }
+
+  return listing.seller_id === currentSellerId ? 'Same seller' : 'Another seller';
+}
+
+function getSuggestionSellerPriority(listing: { seller_id: string }, currentSellerId: string | null) {
+  if (!currentSellerId) {
+    return 0;
+  }
+
+  return listing.seller_id === currentSellerId ? 1 : 0;
+}
+
+function getSuggestionFollowOn(listing: { seller_id: string }, currentSellerId: string | null) {
+  return currentSellerId && listing.seller_id === currentSellerId ? 'same-seller' : 'cross-seller';
+}
+
+function getRecommendedBrowsePreset(input: {
+  listings: {
+    id: string;
+    type: 'product' | 'service' | 'hybrid';
+    is_local_only?: boolean | null;
+  }[];
+  orders: {
+    items?: { listing_id: string }[] | null;
+  }[];
+  bookings: {
+    listing_id: string;
+    listing_type?: string | null;
+  }[];
+}) {
+  const productScore = input.orders.reduce((count, order) => {
+    const matchingListings = (order.items ?? [])
+      .map((item) => input.listings.find((listing) => listing.id === item.listing_id))
+      .filter((listing): listing is (typeof input.listings)[number] => Boolean(listing));
+
+    return (
+      count +
+      matchingListings.filter(
+        (listing) => listing.type === 'product' || listing.type === 'hybrid',
+      ).length
+    );
+  }, 0);
+
+  const serviceScore = input.bookings.filter(
+    (booking) => booking.listing_type === 'service' || booking.listing_type === 'hybrid',
+  ).length;
+
+  const localScore =
+    input.orders.reduce((count, order) => {
+      const hasLocalMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (itemListing) => itemListing.id === item.listing_id && itemListing.is_local_only,
+        ),
+      );
+      return count + (hasLocalMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) =>
+      input.listings.some(
+        (itemListing) => itemListing.id === booking.listing_id && itemListing.is_local_only,
+      ),
+    ).length;
+
+  const hybridScore =
+    input.orders.reduce((count, order) => {
+      const hasHybridMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (itemListing) => itemListing.id === item.listing_id && itemListing.type === 'hybrid',
+        ),
+      );
+      return count + (hasHybridMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) => booking.listing_type === 'hybrid').length;
+
+  if (localScore >= Math.max(productScore, serviceScore, hybridScore) && localScore > 0) {
+    return { label: 'Local-First' as const };
+  }
+
+  if (serviceScore >= Math.max(productScore, hybridScore) && serviceScore > 0) {
+    return { label: 'Services' as const };
+  }
+
+  if (hybridScore >= Math.max(productScore, serviceScore) && hybridScore > 0) {
+    return { label: 'Hybrid' as const };
+  }
+
+  if (productScore > 0) {
+    return { label: 'Products' as const };
+  }
+
+  return null;
+}
+
+function getRecommendationScore(
+  listing: {
+    type: 'product' | 'service' | 'hybrid';
+    is_local_only?: boolean | null;
+  },
+  preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
+) {
+  if (!preset) {
+    return 0;
+  }
+
+  if (preset.label === 'Local-First' && listing.is_local_only) {
+    return 3;
+  }
+
+  if (
+    preset.label === 'Services' &&
+    (listing.type === 'service' || listing.type === 'hybrid')
+  ) {
+    return listing.type === 'service' ? 3 : 2;
+  }
+
+  if (preset.label === 'Products' && (listing.type === 'product' || listing.type === 'hybrid')) {
+    return listing.type === 'product' ? 3 : 2;
+  }
+
+  if (preset.label === 'Hybrid' && listing.type === 'hybrid') {
+    return 3;
+  }
+
+  return 0;
+}
+
+function getRecommendationMatch(
+  listing: {
+    type: 'product' | 'service' | 'hybrid';
+    is_local_only?: boolean | null;
+  },
+  preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
+) {
+  const score = getRecommendationScore(listing, preset);
+  if (score === 0 || !preset) {
+    return null;
+  }
+
+  if (preset.label === 'Local-First') {
+    return { score, label: 'Local match' };
+  }
+
+  if (preset.label === 'Services') {
+    return { score, label: 'Service fit' };
+  }
+
+  if (preset.label === 'Products') {
+    return { score, label: 'Product fit' };
+  }
+
+  return { score, label: 'Hybrid fit' };
+}
+
 export default function TransactionReceiptScreen() {
   const { kind, id } = useLocalSearchParams<{ kind: string; id: string }>();
   const router = useRouter();
-  const { session, orders, bookings, notifications, notificationDeliveries, retryNotificationDelivery } = useBuyerSession();
+  const { session, listings, orders, bookings, notifications, notificationDeliveries, retryNotificationDelivery } = useBuyerSession();
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [receiptBooking, setReceiptBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,6 +221,64 @@ export default function TransactionReceiptScreen() {
   );
   const failedRelatedDeliveries = relatedDeliveries.filter(
     (item) => item.delivery_status === 'failed',
+  );
+  const recommendedPreset = useMemo(
+    () => getRecommendedBrowsePreset({ listings, orders, bookings }),
+    [bookings, listings, orders],
+  );
+  const currentListingId = useMemo(() => {
+    if (kind === 'booking') {
+      return booking?.listing_id ?? receiptBooking?.listing_id ?? null;
+    }
+
+    return order?.items?.[0]?.listing_id ?? receiptOrder?.items?.[0]?.listing_id ?? null;
+  }, [booking?.listing_id, kind, order?.items, receiptBooking?.listing_id, receiptOrder?.items]);
+  const currentSellerId = useMemo(() => {
+    if (kind === 'booking') {
+      return booking?.seller_id ?? receiptBooking?.seller_id ?? null;
+    }
+
+    return order?.seller_id ?? receiptOrder?.seller_id ?? null;
+  }, [booking?.seller_id, kind, order?.seller_id, receiptBooking?.seller_id, receiptOrder?.seller_id]);
+  const moreLikeThisListings = useMemo(() => {
+    return listings
+      .filter((item) => item.id !== currentListingId)
+      .map((item) => ({
+        listing: item,
+        match: getRecommendationMatch(item, recommendedPreset),
+      }))
+      .filter((item): item is { listing: (typeof listings)[number]; match: { score: number; label: string } } =>
+        Boolean(item.match),
+      )
+      .sort((left, right) => {
+        const rightSellerPriority = getSuggestionSellerPriority(right.listing, currentSellerId);
+        const leftSellerPriority = getSuggestionSellerPriority(left.listing, currentSellerId);
+        if (rightSellerPriority !== leftSellerPriority) {
+          return rightSellerPriority - leftSellerPriority;
+        }
+
+        if (right.match.score !== left.match.score) {
+          return right.match.score - left.match.score;
+        }
+
+        return new Date(right.listing.created_at).getTime() - new Date(left.listing.created_at).getTime();
+      })
+      .slice(0, 3)
+      .map((item) => ({ ...item.listing, recommendationLabel: item.match.label }));
+  }, [currentListingId, currentSellerId, listings, recommendedPreset]);
+  const sameSellerSuggestions = useMemo(
+    () =>
+      currentSellerId
+        ? moreLikeThisListings.filter((item) => item.seller_id === currentSellerId)
+        : [],
+    [currentSellerId, moreLikeThisListings],
+  );
+  const otherSellerSuggestions = useMemo(
+    () =>
+      currentSellerId
+        ? moreLikeThisListings.filter((item) => item.seller_id !== currentSellerId)
+        : moreLikeThisListings,
+    [currentSellerId, moreLikeThisListings],
   );
 
   useEffect(() => {
@@ -92,6 +333,29 @@ export default function TransactionReceiptScreen() {
         setRetryingRelatedDeliveries(false);
       }
     })();
+  }
+
+  function handleKeepBrowsingLane() {
+    if (!recommendedPreset) {
+      return;
+    }
+
+    void setBuyerBrowseFilters(
+      JSON.stringify({
+        searchQuery: '',
+        typeFilter: recommendedPreset.label === 'Services'
+          ? 'service'
+          : recommendedPreset.label === 'Products'
+            ? 'product'
+            : recommendedPreset.label === 'Hybrid'
+              ? 'hybrid'
+              : 'all',
+        sortMode: 'newest',
+        localOnly: recommendedPreset.label === 'Local-First',
+      }),
+    );
+
+    router.push('/');
   }
 
   useEffect(() => {
@@ -198,7 +462,106 @@ export default function TransactionReceiptScreen() {
           <Text style={styles.subtitle}>
             The seller queue now has this order and can start moving it through the workflow.
           </Text>
+          {recommendedPreset ? (
+            <Pressable style={styles.heroAction} onPress={handleKeepBrowsingLane}>
+              <Text style={styles.heroActionText}>Keep Browsing This Lane</Text>
+            </Pressable>
+          ) : null}
         </View>
+
+        {moreLikeThisListings.length > 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>More Like This</Text>
+            {sameSellerSuggestions.length > 0 ? (
+              <View style={styles.suggestionGroup}>
+                {otherSellerSuggestions.length > 0 ? (
+                  <Text style={styles.suggestionGroupTitle}>More from this seller</Text>
+                ) : null}
+                {sameSellerSuggestions.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/listings/[id]',
+                        params: { id: item.id, followOn: getSuggestionFollowOn(item, currentSellerId) },
+                      })
+                    }
+                    style={styles.linkCard}>
+                    <View style={styles.suggestionRow}>
+                      {getPrimaryImageUrl(item) ? (
+                        <Image source={{ uri: getPrimaryImageUrl(item)! }} style={styles.suggestionImage} />
+                      ) : (
+                        <View style={styles.suggestionImagePlaceholder}>
+                          <Text style={styles.suggestionImagePlaceholderText}>{item.type}</Text>
+                        </View>
+                      )}
+                      <View style={styles.suggestionBody}>
+                        <View style={styles.suggestionHeader}>
+                          <Text style={styles.lineTitle}>{item.title}</Text>
+                          <Text style={styles.suggestionSignal}>{getSuggestionSecondarySignal(item)}</Text>
+                        </View>
+                        <Text style={styles.lineMeta}>
+                          {item.type} · {item.is_local_only ? 'Local Only' : 'Open Reach'}
+                        </Text>
+                        <View style={styles.suggestionBadgeRow}>
+                          <Text style={styles.lineReason}>{item.recommendationLabel}</Text>
+                          <Text style={styles.suggestionMode}>{getSuggestionActionMode(item)}</Text>
+                          <Text style={styles.suggestionSeller}>
+                            {getSuggestionSellerLabel(item, currentSellerId)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            {otherSellerSuggestions.length > 0 ? (
+              <View style={styles.suggestionGroup}>
+                {sameSellerSuggestions.length > 0 ? (
+                  <Text style={styles.suggestionGroupTitle}>Explore similar listings</Text>
+                ) : null}
+                {otherSellerSuggestions.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/listings/[id]',
+                        params: { id: item.id, followOn: getSuggestionFollowOn(item, currentSellerId) },
+                      })
+                    }
+                    style={styles.linkCard}>
+                    <View style={styles.suggestionRow}>
+                      {getPrimaryImageUrl(item) ? (
+                        <Image source={{ uri: getPrimaryImageUrl(item)! }} style={styles.suggestionImage} />
+                      ) : (
+                        <View style={styles.suggestionImagePlaceholder}>
+                          <Text style={styles.suggestionImagePlaceholderText}>{item.type}</Text>
+                        </View>
+                      )}
+                      <View style={styles.suggestionBody}>
+                        <View style={styles.suggestionHeader}>
+                          <Text style={styles.lineTitle}>{item.title}</Text>
+                          <Text style={styles.suggestionSignal}>{getSuggestionSecondarySignal(item)}</Text>
+                        </View>
+                        <Text style={styles.lineMeta}>
+                          {item.type} · {item.is_local_only ? 'Local Only' : 'Open Reach'}
+                        </Text>
+                        <View style={styles.suggestionBadgeRow}>
+                          <Text style={styles.lineReason}>{item.recommendationLabel}</Text>
+                          <Text style={styles.suggestionMode}>{getSuggestionActionMode(item)}</Text>
+                          <Text style={styles.suggestionSeller}>
+                            {getSuggestionSellerLabel(item, currentSellerId)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
         {actionError ? <Text style={styles.feedbackError}>{actionError}</Text> : null}
         {actionMessage ? <Text style={styles.feedbackSuccess}>{actionMessage}</Text> : null}
@@ -369,7 +732,106 @@ export default function TransactionReceiptScreen() {
           <Text style={styles.subtitle}>
             The seller can now confirm, decline, or move this booking into progress from the web workspace.
           </Text>
+          {recommendedPreset ? (
+            <Pressable style={styles.heroAction} onPress={handleKeepBrowsingLane}>
+              <Text style={styles.heroActionText}>Keep Browsing This Lane</Text>
+            </Pressable>
+          ) : null}
         </View>
+
+        {moreLikeThisListings.length > 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>More Like This</Text>
+            {sameSellerSuggestions.length > 0 ? (
+              <View style={styles.suggestionGroup}>
+                {otherSellerSuggestions.length > 0 ? (
+                  <Text style={styles.suggestionGroupTitle}>More from this seller</Text>
+                ) : null}
+                {sameSellerSuggestions.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/listings/[id]',
+                        params: { id: item.id, followOn: getSuggestionFollowOn(item, currentSellerId) },
+                      })
+                    }
+                    style={styles.linkCard}>
+                    <View style={styles.suggestionRow}>
+                      {getPrimaryImageUrl(item) ? (
+                        <Image source={{ uri: getPrimaryImageUrl(item)! }} style={styles.suggestionImage} />
+                      ) : (
+                        <View style={styles.suggestionImagePlaceholder}>
+                          <Text style={styles.suggestionImagePlaceholderText}>{item.type}</Text>
+                        </View>
+                      )}
+                      <View style={styles.suggestionBody}>
+                        <View style={styles.suggestionHeader}>
+                          <Text style={styles.lineTitle}>{item.title}</Text>
+                          <Text style={styles.suggestionSignal}>{getSuggestionSecondarySignal(item)}</Text>
+                        </View>
+                        <Text style={styles.lineMeta}>
+                          {item.type} · {item.is_local_only ? 'Local Only' : 'Open Reach'}
+                        </Text>
+                        <View style={styles.suggestionBadgeRow}>
+                          <Text style={styles.lineReason}>{item.recommendationLabel}</Text>
+                          <Text style={styles.suggestionMode}>{getSuggestionActionMode(item)}</Text>
+                          <Text style={styles.suggestionSeller}>
+                            {getSuggestionSellerLabel(item, currentSellerId)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            {otherSellerSuggestions.length > 0 ? (
+              <View style={styles.suggestionGroup}>
+                {sameSellerSuggestions.length > 0 ? (
+                  <Text style={styles.suggestionGroupTitle}>Explore similar listings</Text>
+                ) : null}
+                {otherSellerSuggestions.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/listings/[id]',
+                        params: { id: item.id, followOn: getSuggestionFollowOn(item, currentSellerId) },
+                      })
+                    }
+                    style={styles.linkCard}>
+                    <View style={styles.suggestionRow}>
+                      {getPrimaryImageUrl(item) ? (
+                        <Image source={{ uri: getPrimaryImageUrl(item)! }} style={styles.suggestionImage} />
+                      ) : (
+                        <View style={styles.suggestionImagePlaceholder}>
+                          <Text style={styles.suggestionImagePlaceholderText}>{item.type}</Text>
+                        </View>
+                      )}
+                      <View style={styles.suggestionBody}>
+                        <View style={styles.suggestionHeader}>
+                          <Text style={styles.lineTitle}>{item.title}</Text>
+                          <Text style={styles.suggestionSignal}>{getSuggestionSecondarySignal(item)}</Text>
+                        </View>
+                        <Text style={styles.lineMeta}>
+                          {item.type} · {item.is_local_only ? 'Local Only' : 'Open Reach'}
+                        </Text>
+                        <View style={styles.suggestionBadgeRow}>
+                          <Text style={styles.lineReason}>{item.recommendationLabel}</Text>
+                          <Text style={styles.suggestionMode}>{getSuggestionActionMode(item)}</Text>
+                          <Text style={styles.suggestionSeller}>
+                            {getSuggestionSellerLabel(item, currentSellerId)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
         {actionError ? <Text style={styles.feedbackError}>{actionError}</Text> : null}
         {actionMessage ? <Text style={styles.feedbackSuccess}>{actionMessage}</Text> : null}
@@ -551,6 +1013,20 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 10,
   },
+  heroAction: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#2a472a',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  heroActionText: {
+    color: '#fff0d2',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
   eyebrow: {
     color: '#f6d999',
     fontSize: 11,
@@ -664,14 +1140,92 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     gap: 4,
   },
+  suggestionRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  suggestionImage: {
+    width: 72,
+    height: 72,
+    borderRadius: 14,
+    backgroundColor: '#e8dcc9',
+  },
+  suggestionImagePlaceholder: {
+    width: 72,
+    height: 72,
+    borderRadius: 14,
+    backgroundColor: '#d9c7a8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  suggestionImagePlaceholderText: {
+    color: '#4d4338',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  suggestionBody: {
+    flex: 1,
+    gap: 4,
+  },
+  suggestionGroup: {
+    gap: 8,
+  },
+  suggestionGroupTitle: {
+    color: '#5f5548',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  suggestionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    alignItems: 'center',
+  },
   lineTitle: {
     color: '#1f2319',
     fontSize: 15,
     fontWeight: '700',
+    flex: 1,
   },
   lineMeta: {
     color: '#6f6556',
     fontSize: 13,
+  },
+  suggestionSignal: {
+    color: '#1f2319',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  suggestionBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
+  suggestionMode: {
+    color: '#7c3a10',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  suggestionSeller: {
+    color: '#5d5a7a',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  lineReason: {
+    color: '#0f5f62',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   emptyText: {
     color: '#6f6556',

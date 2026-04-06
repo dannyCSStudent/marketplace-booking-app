@@ -50,6 +50,14 @@ export default async function ListingDetailPage({
 
   const canOrder = listing.type !== "service";
   const canBook = Boolean(listing.requires_booking || listing.type !== "product");
+  const transactionCount = listing.recent_transaction_count ?? 0;
+  const isPopularNearYou = transactionCount >= 3;
+  const listingLocationLabel = getLocationLabel([listing.city, listing.state, listing.country]);
+  const tractionValue = transactionCount > 0
+    ? `${transactionCount} recent requests${transactionCount >= 3 ? ' · Popular near you' : ''}`
+    : listing.is_new_listing
+      ? 'New entry · waiting on the first buyers'
+      : 'Activity heating up';
   const primaryAction = canBook && !canOrder ? "booking" : "order";
 
   return (
@@ -101,6 +109,21 @@ export default async function ListingDetailPage({
                       Local Only
                     </span>
                   ) : null}
+                  {listing.available_today ? (
+                    <span className="rounded-full bg-[#e8f7ed] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0f6a4a]">
+                      Available today
+                    </span>
+                  ) : null}
+                  {isPopularNearYou ? (
+                    <span className="rounded-full bg-[#e7f3ff] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0f4a87]">
+                      Popular near you
+                    </span>
+                  ) : null}
+                  {listing.is_new_listing ? (
+                    <span className="rounded-full bg-[#fff5e6] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7c4310]">
+                      New listing
+                    </span>
+                  ) : null}
                 </div>
                 <h1 className="text-4xl font-semibold tracking-[-0.05em] text-foreground sm:text-5xl">
                   {listing.title}
@@ -109,7 +132,7 @@ export default async function ListingDetailPage({
                   {listing.description}
                 </p>
                 <div className="flex flex-wrap items-center gap-4 text-sm text-foreground/68">
-                  <span>{getLocationLabel([listing.city, listing.state, listing.country])}</span>
+                  <span>{listingLocationLabel}</span>
                   <span>Status: {listing.status.replaceAll("_", " ")}</span>
                   {seller ? (
                     <span>{formatSellerRating(seller.average_rating, seller.review_count)}</span>
@@ -168,6 +191,7 @@ export default async function ListingDetailPage({
                     : "Ready without extra lead time"
                 }
               />
+              <InfoCard label="Recent traction" value={tractionValue} />
               <InfoCard
                 label="Seller Trust"
                 value={

@@ -9,6 +9,7 @@ import {
   createApiClient,
   type AdminUser,
   type BookingAdminSupportUpdateInput,
+  type Listing,
   type NotificationDelivery,
   type OrderAdminSupportUpdateInput,
   type ReviewModerationItem,
@@ -21,8 +22,25 @@ type DeliveryKindFilter = "all" | "order" | "booking";
 type DeliveryRecencyFilter = "all" | "today" | "week";
 type DeliveryTrustFilter = "all" | "trust_driven";
 type DeliveryOwnershipFilter = "all" | "mine" | "unassigned" | "assigned";
+type DeliveryListingHealthFilter = "all" | "softening" | "recent_pricing" | "trust_flagged";
 type DeliveryPreset = "needs_attention" | "failed_only" | "queued_only" | "push_failures" | "trust_driven";
 type ExecutionMode = "best_effort" | "atomic";
+type ListingAdjustmentType = "pricing" | "local-fit" | "booking" | "fulfillment" | "other";
+type ListingRetentionTrendKey = "improving" | "softening" | "stable" | "no-signal";
+type ListingOpsContext = {
+  listing: Listing;
+  adjustmentType: ListingAdjustmentType;
+  adjustmentSummary: string | null;
+  adjustmentAt: string | null;
+  retentionTrendLabel: string;
+  retentionTrendKey: ListingRetentionTrendKey;
+  sameSellerCount: number;
+  crossSellerCount: number;
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerPostAdjustmentCount: number;
+  crossSellerPostAdjustmentCount: number;
+};
 const TRUST_ESCALATION_MARKER = "Trust escalation trigger:";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -85,6 +103,161 @@ function titleCaseFilterLabel(value: string) {
     .join(" ");
 }
 
+function formatBuyerBrowseContextLabel(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isLocalDrivenBrowseContext(value: string | null | undefined) {
+  return formatBuyerBrowseContextLabel(value)?.toLowerCase().includes("local only") ?? false;
+}
+
+function isSearchDrivenBrowseContext(value: string | null | undefined) {
+  return formatBuyerBrowseContextLabel(value)?.toLowerCase().includes('search: "') ?? false;
+}
+
+function isPriceDrivenBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return normalized?.includes("lowest price") || normalized?.includes("highest price") || false;
+}
+
+function isSameSellerFollowOnBrowseContext(value: string | null | undefined) {
+  return formatBuyerBrowseContextLabel(value)?.toLowerCase().includes("same seller follow-on") ?? false;
+}
+
+function isCrossSellerFollowOnBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return (
+    normalized?.includes("cross-seller follow-on") ||
+    normalized?.includes("cross seller follow-on") ||
+    false
+  );
+}
+
+function getListingAdjustmentTimestamp(listing: Listing) {
+  if (!listing.last_operating_adjustment_at) {
+    return null;
+  }
+
+  const parsed = new Date(listing.last_operating_adjustment_at).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function getListingAdjustmentType(summary: string | null | undefined): ListingAdjustmentType {
+  const normalized = summary?.toLowerCase() ?? "";
+  if (!normalized) {
+    return "other";
+  }
+  if (normalized.includes("pricing")) {
+    return "pricing";
+  }
+  if (normalized.includes("local fit")) {
+    return "local-fit";
+  }
+  if (
+    normalized.includes("booking mode") ||
+    normalized.includes("duration") ||
+    normalized.includes("lead time")
+  ) {
+    return "booking";
+  }
+  if (
+    normalized.includes("pickup") ||
+    normalized.includes("meetup") ||
+    normalized.includes("delivery") ||
+    normalized.includes("shipping")
+  ) {
+    return "fulfillment";
+  }
+  return "other";
+}
+
+function getListingRetentionTrend(input: {
+  sameSellerCount: number;
+  crossSellerCount: number;
+  sameSellerRecentCount: number;
+  crossSellerRecentCount: number;
+  sameSellerPostAdjustmentCount: number;
+  crossSellerPostAdjustmentCount: number;
+}) {
+  const totalPostAdjustment = input.sameSellerPostAdjustmentCount + input.crossSellerPostAdjustmentCount;
+  if (totalPostAdjustment > 0) {
+    const totalAllTime = input.sameSellerCount + input.crossSellerCount;
+    const overallRetentionRate = totalAllTime > 0 ? input.sameSellerCount / totalAllTime : 0;
+    const postAdjustmentRetentionRate = input.sameSellerPostAdjustmentCount / totalPostAdjustment;
+    if (postAdjustmentRetentionRate - overallRetentionRate >= 0.15) {
+      return { label: "Improving since change", key: "improving" as const };
+    }
+    if (overallRetentionRate - postAdjustmentRetentionRate >= 0.15) {
+      return { label: "Softening since change", key: "softening" as const };
+    }
+    return { label: "Stable since change", key: "stable" as const };
+  }
+
+  const totalAllTime = input.sameSellerCount + input.crossSellerCount;
+  const totalRecent = input.sameSellerRecentCount + input.crossSellerRecentCount;
+  if (totalRecent === 0) {
+    return { label: "No recent signal", key: "no-signal" as const };
+  }
+  if (totalAllTime === 0) {
+    return { label: "Recent signal only", key: "stable" as const };
+  }
+
+  const overallRetentionRate = input.sameSellerCount / totalAllTime;
+  const recentRetentionRate = input.sameSellerRecentCount / totalRecent;
+  if (recentRetentionRate - overallRetentionRate >= 0.15) {
+    return { label: "Improving recently", key: "improving" as const };
+  }
+  if (overallRetentionRate - recentRetentionRate >= 0.15) {
+    return { label: "Softening recently", key: "softening" as const };
+  }
+  return { label: "Stable recently", key: "stable" as const };
+}
+
+function getListingTrendToneClass(key: ListingRetentionTrendKey) {
+  if (key === "improving") {
+    return "text-olive";
+  }
+  if (key === "softening") {
+    return "text-danger";
+  }
+  if (key === "stable") {
+    return "text-foreground/68";
+  }
+  return "text-foreground/52";
+}
+
+function matchesDeliveryListingHealthFilter(args: {
+  listingHealthFilter: DeliveryListingHealthFilter;
+  listingOpsContext: ListingOpsContext | null;
+  sellerTrustCount: number;
+}) {
+  if (args.listingHealthFilter === "all") {
+    return true;
+  }
+
+  if (!args.listingOpsContext) {
+    return false;
+  }
+
+  if (args.listingHealthFilter === "softening") {
+    return args.listingOpsContext.retentionTrendKey === "softening";
+  }
+
+  if (args.listingHealthFilter === "recent_pricing") {
+    return (
+      args.listingOpsContext.adjustmentType === "pricing" &&
+      isRecentWithinDays(args.listingOpsContext.adjustmentAt, 7)
+    );
+  }
+
+  return args.sellerTrustCount > 0;
+}
+
 function formatAdminLabel(admin: AdminUser) {
   const primary = admin.full_name?.trim() || admin.username?.trim() || admin.email?.trim() || truncateId(admin.id);
   const secondary = admin.full_name?.trim()
@@ -119,8 +292,11 @@ export function DeliveryOpsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
   const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [listings, setListings] = useState<Listing[]>([]);
   const [reviewReports, setReviewReports] = useState<ReviewModerationItem[]>([]);
   const [transactionSellerByKey, setTransactionSellerByKey] = useState<Record<string, string>>({});
+  const [transactionListingByKey, setTransactionListingByKey] = useState<Record<string, string>>({});
+  const [transactionBrowseContextByKey, setTransactionBrowseContextByKey] = useState<Record<string, string | null>>({});
   const [transactionSupportByKey, setTransactionSupportByKey] = useState<
     Record<string, { trustDriven: boolean; assigned: boolean; escalated: boolean; assigneeUserId: string | null }>
   >({});
@@ -131,6 +307,7 @@ export function DeliveryOpsPanel() {
   const [recencyFilter, setRecencyFilter] = useState<DeliveryRecencyFilter>("week");
   const [trustFilter, setTrustFilter] = useState<DeliveryTrustFilter>("all");
   const [ownershipFilter, setOwnershipFilter] = useState<DeliveryOwnershipFilter>("all");
+  const [listingHealthFilter, setListingHealthFilter] = useState<DeliveryListingHealthFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("best_effort");
   const [retryingId, setRetryingId] = useState<string | null>(null);
@@ -150,6 +327,7 @@ export function DeliveryOpsPanel() {
     const nextRecency = searchParams.get("recency");
     const nextTrust = searchParams.get("trust");
     const nextOwnership = searchParams.get("owner");
+    const nextListingHealth = searchParams.get("listingHealth");
     const nextQuery = searchParams.get("q");
     const nextMode = searchParams.get("mode");
 
@@ -188,6 +366,13 @@ export function DeliveryOpsPanel() {
         ? nextOwnership
         : "all",
     );
+    setListingHealthFilter(
+      nextListingHealth === "softening" ||
+        nextListingHealth === "recent_pricing" ||
+        nextListingHealth === "trust_flagged"
+        ? nextListingHealth
+        : "all",
+    );
     setSearchQuery(nextQuery ?? "");
     setExecutionMode(nextMode === "atomic" ? "atomic" : "best_effort");
   }, [searchParams]);
@@ -215,6 +400,9 @@ export function DeliveryOpsPanel() {
     if (ownershipFilter !== "all") {
       params.set("owner", ownershipFilter);
     }
+    if (listingHealthFilter !== "all") {
+      params.set("listingHealth", listingHealthFilter);
+    }
     if (searchQuery.trim()) {
       params.set("q", searchQuery.trim());
     }
@@ -227,7 +415,7 @@ export function DeliveryOpsPanel() {
     if (nextQuery !== currentQuery) {
       router.replace(nextQuery ? `?${nextQuery}` : "/admin/deliveries", { scroll: false });
     }
-  }, [channelFilter, executionMode, kindFilter, ownershipFilter, preset, recencyFilter, router, searchParams, searchQuery, statusFilter, trustFilter]);
+  }, [channelFilter, executionMode, kindFilter, listingHealthFilter, ownershipFilter, preset, recencyFilter, router, searchParams, searchQuery, statusFilter, trustFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -249,12 +437,29 @@ export function DeliveryOpsPanel() {
         if (!cancelled) {
           setAdmins(data.admins);
           setDeliveries(data.deliveries);
+          setListings(transactions.listings);
           setTransactionSellerByKey({
             ...Object.fromEntries(
               transactions.orders.map((order) => [`order:${order.id}`, order.seller_id]),
             ),
             ...Object.fromEntries(
               transactions.bookings.map((booking) => [`booking:${booking.id}`, booking.seller_id]),
+            ),
+          });
+          setTransactionListingByKey({
+            ...Object.fromEntries(
+              transactions.orders.map((order) => [`order:${order.id}`, order.items?.[0]?.listing_id ?? ""]),
+            ),
+            ...Object.fromEntries(
+              transactions.bookings.map((booking) => [`booking:${booking.id}`, booking.listing_id ?? ""]),
+            ),
+          });
+          setTransactionBrowseContextByKey({
+            ...Object.fromEntries(
+              transactions.orders.map((order) => [`order:${order.id}`, order.buyer_browse_context ?? null]),
+            ),
+            ...Object.fromEntries(
+              transactions.bookings.map((booking) => [`booking:${booking.id}`, booking.buyer_browse_context ?? null]),
             ),
           });
           setTransactionSupportByKey({
@@ -307,6 +512,7 @@ export function DeliveryOpsPanel() {
 
   function applyPreset(nextPreset: DeliveryPreset) {
     setPreset(nextPreset);
+    setListingHealthFilter("all");
     if (nextPreset === "failed_only") {
       setStatusFilter("failed");
       setChannelFilter("all");
@@ -341,6 +547,7 @@ export function DeliveryOpsPanel() {
     recency?: DeliveryRecencyFilter;
     trust?: DeliveryTrustFilter;
     ownership?: DeliveryOwnershipFilter;
+    listingHealth?: DeliveryListingHealthFilter;
   }) {
     setPreset(next.preset ?? "needs_attention");
     setStatusFilter(next.status ?? "all");
@@ -349,6 +556,7 @@ export function DeliveryOpsPanel() {
     setRecencyFilter(next.recency ?? "week");
     setTrustFilter(next.trust ?? "all");
     setOwnershipFilter(next.ownership ?? "all");
+    setListingHealthFilter(next.listingHealth ?? "all");
   }
 
   const counts = useMemo(
@@ -401,11 +609,208 @@ export function DeliveryOpsPanel() {
     [currentAdminUserId, deliveries, transactionSupportByKey],
   );
 
+  const listingsById = useMemo(
+    () => new Map(listings.map((listing) => [listing.id, listing])),
+    [listings],
+  );
+
+  const listingOpsContextByTransactionKey = useMemo(() => {
+    const transactionKeysByListingId = new Map<string, string[]>();
+    for (const [transactionKey, listingId] of Object.entries(transactionListingByKey)) {
+      if (!listingId) {
+        continue;
+      }
+      const bucket = transactionKeysByListingId.get(listingId);
+      if (bucket) {
+        bucket.push(transactionKey);
+      } else {
+        transactionKeysByListingId.set(listingId, [transactionKey]);
+      }
+    }
+
+    const contextByTransactionKey = new Map<string, ListingOpsContext>();
+    for (const [listingId, transactionKeys] of transactionKeysByListingId) {
+      const listing = listingsById.get(listingId);
+      if (!listing) {
+        continue;
+      }
+
+      let sameSellerCount = 0;
+      let crossSellerCount = 0;
+      let sameSellerRecentCount = 0;
+      let crossSellerRecentCount = 0;
+      let sameSellerPostAdjustmentCount = 0;
+      let crossSellerPostAdjustmentCount = 0;
+      const adjustmentTimestamp = getListingAdjustmentTimestamp(listing);
+
+      for (const transactionKey of transactionKeys) {
+        const browseContext = transactionBrowseContextByKey[transactionKey];
+        const delivery = deliveries.find(
+          (entry) => `${entry.transaction_kind}:${entry.transaction_id}` === transactionKey,
+        );
+        const createdAt = delivery?.created_at ?? null;
+        const createdTimestamp = createdAt ? new Date(createdAt).getTime() : NaN;
+        const isRecent = isRecentWithinDays(createdAt, 7);
+        const isPostAdjustment =
+          adjustmentTimestamp !== null &&
+          !Number.isNaN(createdTimestamp) &&
+          createdTimestamp >= adjustmentTimestamp;
+
+        if (isSameSellerFollowOnBrowseContext(browseContext)) {
+          sameSellerCount += 1;
+          if (isRecent) {
+            sameSellerRecentCount += 1;
+          }
+          if (isPostAdjustment) {
+            sameSellerPostAdjustmentCount += 1;
+          }
+        }
+        if (isCrossSellerFollowOnBrowseContext(browseContext)) {
+          crossSellerCount += 1;
+          if (isRecent) {
+            crossSellerRecentCount += 1;
+          }
+          if (isPostAdjustment) {
+            crossSellerPostAdjustmentCount += 1;
+          }
+        }
+      }
+
+      const trend = getListingRetentionTrend({
+        sameSellerCount,
+        crossSellerCount,
+        sameSellerRecentCount,
+        crossSellerRecentCount,
+        sameSellerPostAdjustmentCount,
+        crossSellerPostAdjustmentCount,
+      });
+
+      const context: ListingOpsContext = {
+        listing,
+        adjustmentType: getListingAdjustmentType(listing.last_operating_adjustment_summary),
+        adjustmentSummary: listing.last_operating_adjustment_summary ?? null,
+        adjustmentAt: listing.last_operating_adjustment_at ?? null,
+        retentionTrendLabel: trend.label,
+        retentionTrendKey: trend.key,
+        sameSellerCount,
+        crossSellerCount,
+        sameSellerRecentCount,
+        crossSellerRecentCount,
+        sameSellerPostAdjustmentCount,
+        crossSellerPostAdjustmentCount,
+      };
+
+      for (const transactionKey of transactionKeys) {
+        contextByTransactionKey.set(transactionKey, context);
+      }
+    }
+
+    return contextByTransactionKey;
+  }, [deliveries, listingsById, transactionBrowseContextByKey, transactionListingByKey]);
+
+  const getSellerTrustSummary = useMemo(
+    () => (sellerId: string | null | undefined) => {
+      if (!sellerId) {
+        return { total: 0, open: 0, escalated: 0, hidden: 0 };
+      }
+      const sellerReports = reviewReports.filter((report) => report.seller_id === sellerId);
+      return {
+        total: sellerReports.length,
+        open: sellerReports.filter((report) => report.status === "open").length,
+        escalated: sellerReports.filter((report) => report.is_escalated).length,
+        hidden: sellerReports.filter((report) => report.review.is_hidden).length,
+      };
+    },
+    [reviewReports],
+  );
+
+  const listingHealthCounts = useMemo(() => {
+    const seen = new Set<string>();
+    let softening = 0;
+    let recentPricing = 0;
+    let trustFlagged = 0;
+
+    for (const delivery of deliveries) {
+      const transactionKey = `${delivery.transaction_kind}:${delivery.transaction_id}`;
+      const context = listingOpsContextByTransactionKey.get(transactionKey);
+      const sellerId = transactionSellerByKey[transactionKey];
+      if (!context || seen.has(context.listing.id)) {
+        continue;
+      }
+      seen.add(context.listing.id);
+
+      if (context.retentionTrendKey === "softening") {
+        softening += 1;
+      }
+      if (
+        context.adjustmentType === "pricing" &&
+        isRecentWithinDays(context.adjustmentAt, 7)
+      ) {
+        recentPricing += 1;
+      }
+      if (getSellerTrustSummary(sellerId).total > 0) {
+        trustFlagged += 1;
+      }
+    }
+
+    return {
+      softening,
+      recentPricing,
+      trustFlagged,
+    };
+  }, [deliveries, getSellerTrustSummary, listingOpsContextByTransactionKey, transactionSellerByKey]);
+
+  const listingHealthDiagnosticCounts = useMemo(() => {
+    const baseDeliveries = deliveries.filter((delivery) => {
+      const transactionKey = `${delivery.transaction_kind}:${delivery.transaction_id}`;
+      const listingOpsContext = listingOpsContextByTransactionKey.get(transactionKey) ?? null;
+      const sellerTrustCount = getSellerTrustSummary(transactionSellerByKey[transactionKey]).total;
+
+      if (listingHealthFilter !== "all") {
+        return matchesDeliveryListingHealthFilter({
+          listingHealthFilter,
+          listingOpsContext,
+          sellerTrustCount,
+        });
+      }
+
+      return (
+        matchesDeliveryListingHealthFilter({
+          listingHealthFilter: "softening",
+          listingOpsContext,
+          sellerTrustCount,
+        }) ||
+        matchesDeliveryListingHealthFilter({
+          listingHealthFilter: "recent_pricing",
+          listingOpsContext,
+          sellerTrustCount,
+        }) ||
+        matchesDeliveryListingHealthFilter({
+          listingHealthFilter: "trust_flagged",
+          listingOpsContext,
+          sellerTrustCount,
+        })
+      );
+    });
+
+    return {
+      failed: baseDeliveries.filter((delivery) => delivery.delivery_status === "failed").length,
+      queued: baseDeliveries.filter((delivery) => delivery.delivery_status === "queued").length,
+      trustDriven: baseDeliveries.filter(
+        (delivery) =>
+          transactionSupportByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`]?.trustDriven,
+      ).length,
+    };
+  }, [deliveries, getSellerTrustSummary, listingHealthFilter, listingOpsContextByTransactionKey, transactionSellerByKey, transactionSupportByKey]);
+
   const filteredDeliveries = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
     return deliveries.filter((delivery) => {
+      const transactionKey = `${delivery.transaction_kind}:${delivery.transaction_id}`;
       const supportState = transactionSupportByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`];
+      const listingOpsContext = listingOpsContextByTransactionKey.get(transactionKey) ?? null;
+      const sellerId = transactionSellerByKey[transactionKey];
 
       if (preset === "needs_attention" && !["failed", "queued"].includes(delivery.delivery_status)) {
         return false;
@@ -448,6 +853,18 @@ export function DeliveryOpsPanel() {
         return false;
       }
 
+      if (listingHealthFilter !== "all") {
+        if (
+          !matchesDeliveryListingHealthFilter({
+            listingHealthFilter,
+            listingOpsContext,
+            sellerTrustCount: getSellerTrustSummary(sellerId).total,
+          })
+        ) {
+          return false;
+        }
+      }
+
       if (!normalizedQuery) {
         return true;
       }
@@ -462,6 +879,10 @@ export function DeliveryOpsPanel() {
         delivery.delivery_status,
         delivery.failure_reason,
         JSON.stringify(delivery.payload),
+        listingOpsContext?.listing.title,
+        listingOpsContext?.adjustmentSummary,
+        listingOpsContext?.adjustmentType,
+        listingOpsContext?.retentionTrendLabel,
       ]
         .filter(Boolean)
         .join(" ")
@@ -469,7 +890,7 @@ export function DeliveryOpsPanel() {
 
       return haystack.includes(normalizedQuery);
     });
-  }, [channelFilter, currentAdminUserId, deliveries, kindFilter, ownershipFilter, preset, recencyFilter, searchQuery, statusFilter, transactionSupportByKey, trustFilter]);
+  }, [channelFilter, currentAdminUserId, deliveries, getSellerTrustSummary, kindFilter, listingHealthFilter, listingOpsContextByTransactionKey, ownershipFilter, preset, recencyFilter, searchQuery, statusFilter, transactionSellerByKey, transactionSupportByKey, trustFilter]);
 
   const retryableDeliveriesInView = useMemo(
     () =>
@@ -485,22 +906,6 @@ export function DeliveryOpsPanel() {
   const trustAdmin = useMemo(
     () => admins.find((admin) => admin.role?.toLowerCase() === "trust") ?? null,
     [admins],
-  );
-
-  const getSellerTrustSummary = useMemo(
-    () => (sellerId: string | null | undefined) => {
-      if (!sellerId) {
-        return { total: 0, open: 0, escalated: 0, hidden: 0 };
-      }
-      const sellerReports = reviewReports.filter((report) => report.seller_id === sellerId);
-      return {
-        total: sellerReports.length,
-        open: sellerReports.filter((report) => report.status === "open").length,
-        escalated: sellerReports.filter((report) => report.is_escalated).length,
-        hidden: sellerReports.filter((report) => report.review.is_hidden).length,
-      };
-    },
-    [reviewReports],
   );
 
   const trustAgingSummary = useMemo(() => {
@@ -551,12 +956,15 @@ export function DeliveryOpsPanel() {
     if (ownershipFilter !== "all") {
       parts.push(`Owner: ${titleCaseFilterLabel(ownershipFilter)}`);
     }
+    if (listingHealthFilter !== "all") {
+      parts.push(`Listing Health: ${titleCaseFilterLabel(listingHealthFilter)}`);
+    }
     if (searchQuery.trim()) {
       parts.push(`Search: "${searchQuery.trim()}"`);
     }
 
     return parts.length > 0 ? parts.join(" · ") : "Needs attention in the last 7 days";
-  }, [channelFilter, kindFilter, ownershipFilter, preset, recencyFilter, searchQuery, statusFilter, trustFilter]);
+  }, [channelFilter, kindFilter, listingHealthFilter, ownershipFilter, preset, recencyFilter, searchQuery, statusFilter, trustFilter]);
   const isDefaultSlice =
     preset === "needs_attention" &&
     statusFilter === "all" &&
@@ -565,6 +973,7 @@ export function DeliveryOpsPanel() {
     recencyFilter === "week" &&
     trustFilter === "all" &&
     ownershipFilter === "all" &&
+    listingHealthFilter === "all" &&
     !searchQuery.trim();
 
   async function copyCurrentSliceLink() {
@@ -956,6 +1365,161 @@ export function DeliveryOpsPanel() {
         ))}
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {[
+          {
+            label: "Softening Listings",
+            value: listingHealthCounts.softening.toString(),
+            detail: "Linked listings whose retention is currently softening",
+            tone: listingHealthCounts.softening > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset: "needs_attention",
+                status: "all",
+                channel: "all",
+                kind: "all",
+                recency: "week",
+                trust: "all",
+                ownership: "all",
+                listingHealth: "softening",
+              }),
+          },
+          {
+            label: "Recent Pricing Changes",
+            value: listingHealthCounts.recentPricing.toString(),
+            detail: "Listings repriced in the last 7 days",
+            tone: listingHealthCounts.recentPricing > 0 ? "warning" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset: "needs_attention",
+                status: "all",
+                channel: "all",
+                kind: "all",
+                recency: "week",
+                trust: "all",
+                ownership: "all",
+                listingHealth: "recent_pricing",
+              }),
+          },
+          {
+            label: "Trust-Flagged Listings",
+            value: listingHealthCounts.trustFlagged.toString(),
+            detail: "Listings tied to sellers with active moderation pressure",
+            tone: listingHealthCounts.trustFlagged > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset: "needs_attention",
+                status: "all",
+                channel: "all",
+                kind: "all",
+                recency: "week",
+                trust: "all",
+                ownership: "all",
+                listingHealth: "trust_flagged",
+              }),
+          },
+        ].map((card) => (
+          <button
+            key={card.label}
+            type="button"
+            onClick={card.onClick}
+            className={`card-shadow rounded-[1.5rem] border p-4 ${
+              card.tone === "danger"
+                ? "border-danger/30 bg-danger/8"
+                : card.tone === "warning"
+                  ? "border-amber-500/30 bg-amber-500/10"
+                  : "border-border bg-surface"
+            } text-left transition hover:border-foreground/28`}
+          >
+            <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">{card.label}</p>
+            <p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-foreground">{card.value}</p>
+            <p className="mt-2 text-sm text-foreground/64">{card.detail}</p>
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {[
+          {
+            label:
+              listingHealthFilter === "all"
+                ? "Listing Risk + Failed"
+                : `${titleCaseFilterLabel(listingHealthFilter)} + Failed`,
+            value: listingHealthDiagnosticCounts.failed.toString(),
+            detail: "Deliveries in this listing-risk lane that are currently failed",
+            tone: listingHealthDiagnosticCounts.failed > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset,
+                status: "failed",
+                channel: channelFilter,
+                kind: kindFilter,
+                recency: recencyFilter,
+                trust: trustFilter,
+                ownership: ownershipFilter,
+                listingHealth: listingHealthFilter,
+              }),
+          },
+          {
+            label:
+              listingHealthFilter === "all"
+                ? "Listing Risk + Queued"
+                : `${titleCaseFilterLabel(listingHealthFilter)} + Queued`,
+            value: listingHealthDiagnosticCounts.queued.toString(),
+            detail: "Deliveries in this listing-risk lane that are still queued",
+            tone: listingHealthDiagnosticCounts.queued > 0 ? "warning" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset,
+                status: "queued",
+                channel: channelFilter,
+                kind: kindFilter,
+                recency: recencyFilter,
+                trust: trustFilter,
+                ownership: ownershipFilter,
+                listingHealth: listingHealthFilter,
+              }),
+          },
+          {
+            label:
+              listingHealthFilter === "all"
+                ? "Listing Risk + Trust-Driven"
+                : `${titleCaseFilterLabel(listingHealthFilter)} + Trust-Driven`,
+            value: listingHealthDiagnosticCounts.trustDriven.toString(),
+            detail: "Deliveries in this listing-risk lane tied to trust-routed support work",
+            tone: listingHealthDiagnosticCounts.trustDriven > 0 ? "danger" : "neutral",
+            onClick: () =>
+              applyQueueState({
+                preset,
+                status: statusFilter,
+                channel: channelFilter,
+                kind: kindFilter,
+                recency: recencyFilter,
+                trust: "trust_driven",
+                ownership: ownershipFilter,
+                listingHealth: listingHealthFilter,
+              }),
+          },
+        ].map((card) => (
+          <button
+            key={card.label}
+            type="button"
+            onClick={card.onClick}
+            className={`card-shadow rounded-[1.5rem] border p-4 ${
+              card.tone === "danger"
+                ? "border-danger/30 bg-danger/8"
+                : card.tone === "warning"
+                  ? "border-amber-500/30 bg-amber-500/10"
+                  : "border-border bg-surface"
+            } text-left transition hover:border-foreground/28`}
+          >
+            <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">{card.label}</p>
+            <p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-foreground">{card.value}</p>
+            <p className="mt-2 text-sm text-foreground/64">{card.detail}</p>
+          </button>
+        ))}
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
         {[
           {
@@ -1061,6 +1625,7 @@ export function DeliveryOpsPanel() {
                       recency: "week",
                       trust: "all",
                       ownership: "all",
+                      listingHealth: "all",
                     })
                   }
                   className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-foreground/72 transition hover:border-foreground/28"
@@ -1193,6 +1758,31 @@ export function DeliveryOpsPanel() {
                   onClick={() => setTrustFilter(option.value as DeliveryTrustFilter)}
                   className={`rounded-full border px-4 py-2 text-sm transition ${
                     trustFilter === option.value
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-background text-foreground/72 hover:border-foreground/28"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 text-sm text-foreground/72">
+            <span>Listing Health</span>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { value: "all", label: "All" },
+                { value: "softening", label: `Softening (${listingHealthCounts.softening})` },
+                { value: "recent_pricing", label: `Recent Pricing (${listingHealthCounts.recentPricing})` },
+                { value: "trust_flagged", label: `Trust-Flagged (${listingHealthCounts.trustFlagged})` },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setListingHealthFilter(option.value as DeliveryListingHealthFilter)}
+                  className={`rounded-full border px-4 py-2 text-sm transition ${
+                    listingHealthFilter === option.value
                       ? "border-foreground bg-foreground text-background"
                       : "border-border bg-background text-foreground/72 hover:border-foreground/28"
                   }`}
@@ -1384,6 +1974,12 @@ export function DeliveryOpsPanel() {
             const trustEscalationActionKey = `${delivery.transaction_kind}:${delivery.transaction_id}:Trust escalation`;
             const saveNoteActionKey = `${delivery.transaction_kind}:${delivery.transaction_id}:Support Note`;
             const transactionKey = getTransactionKey(delivery);
+            const listingOpsContext = listingOpsContextByTransactionKey.get(transactionKey) ?? null;
+            const listingId = transactionListingByKey[transactionKey];
+            const listingLaneHref = listingId
+              ? `/admin/transactions?listing=${listingId}&focus=${delivery.transaction_kind}:${delivery.transaction_id}&delivery=${delivery.delivery_status === "failed" ? "failed" : delivery.delivery_status === "queued" ? "queued" : "all"}`
+              : null;
+            const browseContext = transactionBrowseContextByKey[transactionKey];
             const trustSummary = getSellerTrustSummary(
               transactionSellerByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`],
             );
@@ -1461,6 +2057,76 @@ export function DeliveryOpsPanel() {
                       </div>
                     ) : null}
 
+                    {listingOpsContext ? (
+                      <div className="rounded-[1.25rem] border border-border bg-background/75 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.2em] text-foreground/46">
+                              Listing Ops Context
+                            </p>
+                            <p className="mt-1 text-sm font-medium text-foreground">
+                              {listingOpsContext.listing.title}
+                            </p>
+                            <p className="mt-1 text-sm text-foreground/64">
+                              {titleCaseFilterLabel(listingOpsContext.adjustmentType)} ·{" "}
+                              <span className={getListingTrendToneClass(listingOpsContext.retentionTrendKey)}>
+                                {listingOpsContext.retentionTrendLabel}
+                              </span>
+                            </p>
+                          </div>
+                          <div className="text-right text-xs text-foreground/50">
+                            <p>
+                              {listingOpsContext.adjustmentAt
+                                ? `Adjusted ${formatAgeLabel(listingOpsContext.adjustmentAt)} ago`
+                                : "No adjustment timestamp"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-4">
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                              Last Change
+                            </p>
+                            <p className="mt-1 text-foreground">
+                              {listingOpsContext.adjustmentSummary?.trim() || "No operating adjustment recorded"}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                              Since Change
+                            </p>
+                            <p className="mt-1 text-foreground">
+                              {listingOpsContext.sameSellerPostAdjustmentCount} retained ·{" "}
+                              {listingOpsContext.crossSellerPostAdjustmentCount} branched
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                              Follow-On Mix
+                            </p>
+                            <p className="mt-1 text-foreground">
+                              {listingOpsContext.sameSellerCount} same-seller · {listingOpsContext.crossSellerCount} cross-seller
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">
+                              Browse Pressure
+                            </p>
+                            <p className="mt-1 text-foreground">
+                              {(() => {
+                                const browseSignals = [
+                                  isPriceDrivenBrowseContext(browseContext) ? "Price-led" : null,
+                                  isSearchDrivenBrowseContext(browseContext) ? "Search-led" : null,
+                                  isLocalDrivenBrowseContext(browseContext) ? "Local-fit" : null,
+                                ].filter(Boolean);
+                                return browseSignals.length > 0 ? browseSignals.join(" · ") : "No browse signal";
+                              })()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
                     {delivery.failure_reason ? (
                       <p className="rounded-2xl border border-danger/20 bg-background/70 px-3 py-3 text-sm leading-6 text-danger">
                         {delivery.failure_reason}
@@ -1504,6 +2170,14 @@ export function DeliveryOpsPanel() {
                     >
                       Open Transaction
                     </Link>
+                    {listingLaneHref ? (
+                      <Link
+                        href={listingLaneHref}
+                        className="rounded-full border border-border bg-surface px-4 py-2 text-center text-sm text-foreground/72 transition hover:border-foreground/28"
+                      >
+                        Open Listing Lane
+                      </Link>
+                    ) : null}
                     {currentAdminUserId ? (
                       <button
                         type="button"

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { formatBuyerActionError, formatCurrency, formatLocation } from '@/lib/api';
+import { setBuyerBrowseFilters } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
 function getFulfillmentOptions(listing: {
@@ -38,10 +39,240 @@ function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }
   return listing.images?.[0]?.image_url ?? null;
 }
 
+function getSuggestionSecondarySignal(listing: {
+  duration_minutes?: number | null;
+  price_cents: number;
+  currency: string;
+}) {
+  if (listing.duration_minutes) {
+    return `${listing.duration_minutes} min`;
+  }
+
+  return formatCurrency(listing.price_cents, listing.currency);
+}
+
+function getSuggestionActionMode(listing: {
+  requires_booking?: boolean | null;
+  type: 'product' | 'service' | 'hybrid';
+}) {
+  return listing.requires_booking || listing.type === 'service' ? 'Booking ready' : 'Order ready';
+}
+
+function getSuggestionSellerLabel(listing: { seller_id: string }, currentSellerId: string) {
+  return listing.seller_id === currentSellerId ? 'Same seller' : 'Another seller';
+}
+
+function getSuggestionSellerPriority(listing: { seller_id: string }, currentSellerId: string) {
+  return listing.seller_id === currentSellerId ? 1 : 0;
+}
+
+function normalizeFollowOnContext(
+  value: string | string[] | undefined,
+): 'same-seller' | 'cross-seller' | null {
+  const normalized = Array.isArray(value) ? value[0] : value;
+  if (normalized === 'same-seller' || normalized === 'cross-seller') {
+    return normalized;
+  }
+
+  return null;
+}
+
+function buildMobileBrowseContext(input: {
+  preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null;
+  followOn: 'same-seller' | 'cross-seller' | null;
+}) {
+  const parts: string[] = ['Mobile browse'];
+
+  if (input.preset?.label === 'Local-First') {
+    parts.push('Local Only');
+  } else if (input.preset?.label) {
+    parts.push(input.preset.label);
+  }
+
+  if (input.followOn === 'same-seller') {
+    parts.push('Same seller follow-on');
+  }
+
+  if (input.followOn === 'cross-seller') {
+    parts.push('Cross-seller follow-on');
+  }
+
+  return parts.join(' · ');
+}
+
+function getRecommendedBrowsePreset(input: {
+  listings: {
+    id: string;
+    type: 'product' | 'service' | 'hybrid';
+    is_local_only?: boolean | null;
+  }[];
+  orders: {
+    items?: { listing_id: string }[] | null;
+  }[];
+  bookings: {
+    listing_id: string;
+    listing_type?: string | null;
+  }[];
+}) {
+  const productScore = input.orders.reduce((count, order) => {
+    const matchingListings = (order.items ?? [])
+      .map((item) => input.listings.find((listing) => listing.id === item.listing_id))
+      .filter((listing): listing is (typeof input.listings)[number] => Boolean(listing));
+
+    return (
+      count +
+      matchingListings.filter(
+        (listing) => listing.type === 'product' || listing.type === 'hybrid',
+      ).length
+    );
+  }, 0);
+
+  const serviceScore = input.bookings.filter(
+    (booking) => booking.listing_type === 'service' || booking.listing_type === 'hybrid',
+  ).length;
+
+  const localScore =
+    input.orders.reduce((count, order) => {
+      const hasLocalMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (itemListing) => itemListing.id === item.listing_id && itemListing.is_local_only,
+        ),
+      );
+      return count + (hasLocalMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) =>
+      input.listings.some(
+        (itemListing) => itemListing.id === booking.listing_id && itemListing.is_local_only,
+      ),
+    ).length;
+
+  const hybridScore =
+    input.orders.reduce((count, order) => {
+      const hasHybridMatch = (order.items ?? []).some((item) =>
+        input.listings.some(
+          (itemListing) => itemListing.id === item.listing_id && itemListing.type === 'hybrid',
+        ),
+      );
+      return count + (hasHybridMatch ? 1 : 0);
+    }, 0) +
+    input.bookings.filter((booking) => booking.listing_type === 'hybrid').length;
+
+  if (localScore >= Math.max(productScore, serviceScore, hybridScore) && localScore > 0) {
+    return { label: 'Local-First' as const };
+  }
+
+  if (serviceScore >= Math.max(productScore, hybridScore) && serviceScore > 0) {
+    return { label: 'Services' as const };
+  }
+
+  if (hybridScore >= Math.max(productScore, serviceScore) && hybridScore > 0) {
+    return { label: 'Hybrid' as const };
+  }
+
+  if (productScore > 0) {
+    return { label: 'Products' as const };
+  }
+
+  return null;
+}
+
+function getRecommendationReason(
+  listing: {
+    type: 'product' | 'service' | 'hybrid';
+    is_local_only?: boolean | null;
+  },
+  preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
+) {
+  if (!preset) {
+    return null;
+  }
+
+  if (preset.label === 'Local-First' && listing.is_local_only) {
+    return 'You have been engaging more with local-first listings, and this one is configured for local demand.';
+  }
+
+  if (
+    preset.label === 'Services' &&
+    (listing.type === 'service' || listing.type === 'hybrid')
+  ) {
+    return 'Your recent buyer activity leans toward service-based offers, so this listing matches that pattern.';
+  }
+
+  if (preset.label === 'Products' && (listing.type === 'product' || listing.type === 'hybrid')) {
+    return 'Your recent buyer activity leans toward product purchases, so this listing matches that pattern.';
+  }
+
+  if (preset.label === 'Hybrid' && listing.type === 'hybrid') {
+    return 'You have been interacting with hybrid listings, and this offer fits that mixed product-plus-service pattern.';
+  }
+
+  return null;
+}
+
+function getRecommendationScore(
+  listing: {
+    type: 'product' | 'service' | 'hybrid';
+    is_local_only?: boolean | null;
+  },
+  preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
+) {
+  if (!preset) {
+    return 0;
+  }
+
+  if (preset.label === 'Local-First' && listing.is_local_only) {
+    return 3;
+  }
+
+  if (
+    preset.label === 'Services' &&
+    (listing.type === 'service' || listing.type === 'hybrid')
+  ) {
+    return listing.type === 'service' ? 3 : 2;
+  }
+
+  if (preset.label === 'Products' && (listing.type === 'product' || listing.type === 'hybrid')) {
+    return listing.type === 'product' ? 3 : 2;
+  }
+
+  if (preset.label === 'Hybrid' && listing.type === 'hybrid') {
+    return 3;
+  }
+
+  return 0;
+}
+
+function getRecommendationMatch(
+  listing: {
+    type: 'product' | 'service' | 'hybrid';
+    is_local_only?: boolean | null;
+  },
+  preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
+) {
+  const score = getRecommendationScore(listing, preset);
+  if (score === 0 || !preset) {
+    return null;
+  }
+
+  if (preset.label === 'Local-First') {
+    return { score, label: 'Local match' };
+  }
+
+  if (preset.label === 'Services') {
+    return { score, label: 'Service fit' };
+  }
+
+  if (preset.label === 'Products') {
+    return { score, label: 'Product fit' };
+  }
+
+  return { score, label: 'Hybrid fit' };
+}
+
 export default function ListingDetailScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const { listings, createOrder, createBooking, session } = useBuyerSession();
+  const { id, followOn } = useLocalSearchParams<{ id: string; followOn?: string }>();
+  const { listings, orders, bookings, createOrder, createBooking, session } = useBuyerSession();
   const [quantity, setQuantity] = useState('2');
   const [notes, setNotes] = useState('Buyer flow test from mobile.');
   const [selectedFulfillment, setSelectedFulfillment] = useState<string>('');
@@ -57,6 +288,61 @@ export default function ListingDetailScreen() {
   const canBook = Boolean(listing && (listing.requires_booking || listing.type !== 'product'));
   const primaryAction = canBook && !canOrder ? 'booking' : 'order';
   const primaryImageUrl = useMemo(() => (listing ? getPrimaryImageUrl(listing) : null), [listing]);
+  const recommendationReason = useMemo(() => {
+    if (!listing) {
+      return null;
+    }
+
+    const preset = getRecommendedBrowsePreset({ listings, orders, bookings });
+    return getRecommendationReason(listing, preset);
+  }, [bookings, listing, listings, orders]);
+  const recommendedPreset = useMemo(
+    () => getRecommendedBrowsePreset({ listings, orders, bookings }),
+    [bookings, listings, orders],
+  );
+  const followOnContext = useMemo(() => normalizeFollowOnContext(followOn), [followOn]);
+  const buyerBrowseContext = useMemo(
+    () => buildMobileBrowseContext({ preset: recommendedPreset, followOn: followOnContext }),
+    [followOnContext, recommendedPreset],
+  );
+  const moreLikeThisListings = useMemo(() => {
+    if (!listing) {
+      return [];
+    }
+
+    return listings
+      .filter((item) => item.id !== listing.id)
+      .map((item) => ({
+        listing: item,
+        match: getRecommendationMatch(item, recommendedPreset),
+      }))
+      .filter((item): item is { listing: (typeof listings)[number]; match: { score: number; label: string } } =>
+        Boolean(item.match),
+      )
+      .sort((left, right) => {
+        const rightSellerPriority = getSuggestionSellerPriority(right.listing, listing.seller_id);
+        const leftSellerPriority = getSuggestionSellerPriority(left.listing, listing.seller_id);
+        if (rightSellerPriority !== leftSellerPriority) {
+          return rightSellerPriority - leftSellerPriority;
+        }
+
+        if (right.match.score !== left.match.score) {
+          return right.match.score - left.match.score;
+        }
+
+        return new Date(right.listing.created_at).getTime() - new Date(left.listing.created_at).getTime();
+      })
+      .slice(0, 3)
+      .map((item) => ({ ...item.listing, recommendationLabel: item.match.label }));
+  }, [listing, listings, recommendedPreset]);
+  const sameSellerSuggestions = useMemo(
+    () => moreLikeThisListings.filter((item) => item.seller_id === listing?.seller_id),
+    [listing?.seller_id, moreLikeThisListings],
+  );
+  const otherSellerSuggestions = useMemo(
+    () => moreLikeThisListings.filter((item) => item.seller_id !== listing?.seller_id),
+    [listing?.seller_id, moreLikeThisListings],
+  );
   const bookingWindow = useMemo(() => {
     if (!listing) {
       return null;
@@ -89,6 +375,14 @@ export default function ListingDetailScreen() {
     );
   }
 
+  const transactionCount = listing.recent_transaction_count ?? 0;
+  const isPopularNearYou = transactionCount >= 3;
+  const tractionValue = transactionCount > 0
+    ? `${transactionCount} recent requests${isPopularNearYou ? ' · Popular near you' : ''}`
+    : listing.is_new_listing
+      ? 'New entry · waiting on the first buyers'
+      : 'Activity warming up';
+
   async function handleOrder() {
     setError(null);
     setMessage(null);
@@ -100,6 +394,7 @@ export default function ListingDetailScreen() {
         quantity: Number(quantity),
         fulfillment: selectedFulfillment,
         notes,
+        buyerBrowseContext,
       });
       router.push({ pathname: '/transactions/[kind]/[id]', params: { kind: 'order', id: order.id } });
     } catch (err) {
@@ -122,11 +417,35 @@ export default function ListingDetailScreen() {
         scheduledStart: bookingWindow.start.toISOString(),
         scheduledEnd: bookingWindow.end.toISOString(),
         notes,
+        buyerBrowseContext,
       });
       router.push({ pathname: '/transactions/[kind]/[id]', params: { kind: 'booking', id: booking.id } });
     } catch (err) {
       setError(formatBuyerActionError(err));
     }
+  }
+
+  function handleKeepBrowsingLane() {
+    if (!recommendedPreset) {
+      return;
+    }
+
+    void setBuyerBrowseFilters(
+      JSON.stringify({
+        searchQuery: '',
+        typeFilter: recommendedPreset.label === 'Services'
+          ? 'service'
+          : recommendedPreset.label === 'Products'
+            ? 'product'
+            : recommendedPreset.label === 'Hybrid'
+              ? 'hybrid'
+              : 'all',
+        sortMode: 'newest',
+        localOnly: recommendedPreset.label === 'Local-First',
+      }),
+    );
+
+    router.push('/');
   }
 
   return (
@@ -155,11 +474,26 @@ export default function ListingDetailScreen() {
               <Text style={[styles.heroBadgeText, styles.heroBadgeLocalText]}>Local Only</Text>
             </View>
           ) : null}
+          {listing.available_today ? (
+            <View style={[styles.heroBadge, styles.heroBadgeAvailable]}>
+              <Text style={[styles.heroBadgeText, styles.heroBadgeAvailableText]}>Available today</Text>
+            </View>
+          ) : null}
+          {isPopularNearYou ? (
+            <View style={[styles.heroBadge, styles.heroBadgePopular]}>
+              <Text style={[styles.heroBadgeText, styles.heroBadgePopularText]}>Popular near you</Text>
+            </View>
+          ) : null}
           <View style={[styles.heroBadge, styles.heroBadgeStatus]}>
-            <Text style={[styles.heroBadgeText, styles.heroBadgeStatusText]}>
+            <Text style={[styles.heroBadgeText, styles.heroBadgeStatusText]}> 
               {listing.status.replaceAll('_', ' ')}
             </Text>
           </View>
+          {listing.is_new_listing ? (
+            <View style={[styles.heroBadge, styles.heroBadgeNew]}>
+              <Text style={[styles.heroBadgeText, styles.heroBadgeNewText]}>New listing</Text>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -189,6 +523,135 @@ export default function ListingDetailScreen() {
           </Text>
         </View>
       </View>
+
+      {recommendationReason ? (
+        <View style={styles.recommendationPanel}>
+          <Text style={styles.recommendationLabel}>Why recommended</Text>
+          <Text style={styles.recommendationText}>{recommendationReason}</Text>
+          {recommendedPreset ? (
+            <Pressable style={styles.recommendationAction} onPress={handleKeepBrowsingLane}>
+              <Text style={styles.recommendationActionText}>Keep Browsing This Lane</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
+      {moreLikeThisListings.length > 0 ? (
+        <View style={styles.moreLikeThisPanel}>
+          <Text style={styles.moreLikeThisTitle}>More Like This</Text>
+          <Text style={styles.moreLikeThisSubtitle}>
+            Keep exploring listings that match the same buyer lane.
+          </Text>
+          {sameSellerSuggestions.length > 0 ? (
+            <View style={styles.moreLikeThisGroup}>
+              {otherSellerSuggestions.length > 0 ? (
+                <Text style={styles.moreLikeThisGroupTitle}>More from this seller</Text>
+              ) : null}
+              <View style={styles.moreLikeThisRow}>
+                {sameSellerSuggestions.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    style={styles.moreLikeThisCard}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/listings/[id]',
+                        params: {
+                          id: item.id,
+                          followOn: item.seller_id === listing.seller_id ? 'same-seller' : 'cross-seller',
+                        },
+                      })
+                    }>
+                    <View style={styles.moreLikeThisCardRow}>
+                      {getPrimaryImageUrl(item) ? (
+                        <Image source={{ uri: getPrimaryImageUrl(item)! }} style={styles.moreLikeThisImage} />
+                      ) : (
+                        <View style={styles.moreLikeThisImagePlaceholder}>
+                          <Text style={styles.moreLikeThisImagePlaceholderText}>{item.type}</Text>
+                        </View>
+                      )}
+                      <View style={styles.moreLikeThisCardBody}>
+                        <View style={styles.moreLikeThisCardHeader}>
+                          <Text style={styles.moreLikeThisCardType}>{item.type}</Text>
+                          <Text style={styles.moreLikeThisCardSignal}>
+                            {getSuggestionSecondarySignal(item)}
+                          </Text>
+                        </View>
+                        <Text numberOfLines={2} style={styles.moreLikeThisCardTitle}>
+                          {item.title}
+                        </Text>
+                        <Text style={styles.moreLikeThisCardMeta}>
+                          {item.is_local_only ? 'Local Only' : formatLocation(item) || 'Open Reach'}
+                        </Text>
+                        <View style={styles.moreLikeThisBadgeRow}>
+                          <Text style={styles.moreLikeThisCardReason}>{item.recommendationLabel}</Text>
+                          <Text style={styles.moreLikeThisCardMode}>{getSuggestionActionMode(item)}</Text>
+                          <Text style={styles.moreLikeThisCardSeller}>
+                            {getSuggestionSellerLabel(item, listing.seller_id)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
+          {otherSellerSuggestions.length > 0 ? (
+            <View style={styles.moreLikeThisGroup}>
+              {sameSellerSuggestions.length > 0 ? (
+                <Text style={styles.moreLikeThisGroupTitle}>Explore similar listings</Text>
+              ) : null}
+              <View style={styles.moreLikeThisRow}>
+                {otherSellerSuggestions.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    style={styles.moreLikeThisCard}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/listings/[id]',
+                        params: {
+                          id: item.id,
+                          followOn: item.seller_id === listing.seller_id ? 'same-seller' : 'cross-seller',
+                        },
+                      })
+                    }>
+                    <View style={styles.moreLikeThisCardRow}>
+                      {getPrimaryImageUrl(item) ? (
+                        <Image source={{ uri: getPrimaryImageUrl(item)! }} style={styles.moreLikeThisImage} />
+                      ) : (
+                        <View style={styles.moreLikeThisImagePlaceholder}>
+                          <Text style={styles.moreLikeThisImagePlaceholderText}>{item.type}</Text>
+                        </View>
+                      )}
+                      <View style={styles.moreLikeThisCardBody}>
+                        <View style={styles.moreLikeThisCardHeader}>
+                          <Text style={styles.moreLikeThisCardType}>{item.type}</Text>
+                          <Text style={styles.moreLikeThisCardSignal}>
+                            {getSuggestionSecondarySignal(item)}
+                          </Text>
+                        </View>
+                        <Text numberOfLines={2} style={styles.moreLikeThisCardTitle}>
+                          {item.title}
+                        </Text>
+                        <Text style={styles.moreLikeThisCardMeta}>
+                          {item.is_local_only ? 'Local Only' : formatLocation(item) || 'Open Reach'}
+                        </Text>
+                        <View style={styles.moreLikeThisBadgeRow}>
+                          <Text style={styles.moreLikeThisCardReason}>{item.recommendationLabel}</Text>
+                          <Text style={styles.moreLikeThisCardMode}>{getSuggestionActionMode(item)}</Text>
+                          <Text style={styles.moreLikeThisCardSeller}>
+                            {getSuggestionSellerLabel(item, listing.seller_id)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
 
       <View style={styles.infoCard}>
         <Text style={styles.infoTitle}>How This Listing Works</Text>
@@ -221,6 +684,14 @@ export default function ListingDetailScreen() {
           <Text style={styles.infoValue}>
             {listing.lead_time_hours ? `${listing.lead_time_hours} hours` : 'Ready without extra lead time'}
           </Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Available today</Text>
+          <Text style={styles.infoValue}>{listing.available_today ? 'Yes' : 'Not today'}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Recent traction</Text>
+          <Text style={styles.infoValue}>{tractionValue}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Local Only</Text>
@@ -454,8 +925,17 @@ const styles = StyleSheet.create({
   heroBadgeLocal: {
     backgroundColor: '#f3e1bd',
   },
+  heroBadgeAvailable: {
+    backgroundColor: '#e8f7ed',
+  },
+  heroBadgePopular: {
+    backgroundColor: '#e7f3ff',
+  },
   heroBadgeStatus: {
     backgroundColor: '#ece7dc',
+  },
+  heroBadgeNew: {
+    backgroundColor: '#fff5e6',
   },
   heroBadgeText: {
     fontSize: 11,
@@ -469,8 +949,17 @@ const styles = StyleSheet.create({
   heroBadgeLocalText: {
     color: '#7c3a10',
   },
+  heroBadgeAvailableText: {
+    color: '#0f6a4a',
+  },
+  heroBadgePopularText: {
+    color: '#0f4a87',
+  },
   heroBadgeStatusText: {
     color: '#4d4338',
+  },
+  heroBadgeNewText: {
+    color: '#7c4310',
   },
   quickGrid: {
     flexDirection: 'row',
@@ -496,6 +985,162 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     lineHeight: 21,
+  },
+  recommendationPanel: {
+    backgroundColor: '#edf8f2',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#b9d9c5',
+    padding: 18,
+    gap: 8,
+  },
+  recommendationLabel: {
+    color: '#0f5f62',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  recommendationText: {
+    color: '#24493f',
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  recommendationAction: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#0f5f62',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  recommendationActionText: {
+    color: '#fff8ee',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  moreLikeThisPanel: {
+    backgroundColor: '#fff8ee',
+    borderRadius: 22,
+    padding: 18,
+    gap: 10,
+  },
+  moreLikeThisTitle: {
+    color: '#1f2319',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  moreLikeThisSubtitle: {
+    color: '#6f6556',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  moreLikeThisRow: {
+    gap: 10,
+  },
+  moreLikeThisGroup: {
+    gap: 10,
+  },
+  moreLikeThisGroupTitle: {
+    color: '#5f5548',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  moreLikeThisCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e4d6be',
+    backgroundColor: '#f8eedc',
+    padding: 14,
+    gap: 6,
+  },
+  moreLikeThisCardRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  moreLikeThisCardBody: {
+    flex: 1,
+    gap: 6,
+  },
+  moreLikeThisCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    alignItems: 'center',
+  },
+  moreLikeThisImage: {
+    width: 76,
+    height: 76,
+    borderRadius: 14,
+    backgroundColor: '#e8dcc9',
+  },
+  moreLikeThisImagePlaceholder: {
+    width: 76,
+    height: 76,
+    borderRadius: 14,
+    backgroundColor: '#d9c7a8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  moreLikeThisImagePlaceholderText: {
+    color: '#4d4338',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  moreLikeThisCardType: {
+    color: '#7c3a10',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.9,
+  },
+  moreLikeThisCardTitle: {
+    color: '#1f2319',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  moreLikeThisCardSignal: {
+    color: '#1f2319',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  moreLikeThisCardMeta: {
+    color: '#6f6556',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  moreLikeThisCardReason: {
+    color: '#0f5f62',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  moreLikeThisBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
+  moreLikeThisCardMode: {
+    color: '#7c3a10',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  moreLikeThisCardSeller: {
+    color: '#5d5a7a',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
   },
   panel: {
     backgroundColor: '#1f351f',
