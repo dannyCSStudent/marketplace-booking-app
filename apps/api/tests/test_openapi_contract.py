@@ -15,7 +15,10 @@ class OpenAPIContractTests(unittest.TestCase):
             "/sellers/{slug}",
             "/listings",
             "/listings/me",
+            "/listings/ai-assist",
+            "/listings/admin",
             "/listings/{listing_id}",
+            "/listings/{listing_id}/price-insights",
             "/orders",
             "/orders/me",
             "/orders/seller",
@@ -71,6 +74,7 @@ class OpenAPIContractTests(unittest.TestCase):
         paths = schema["paths"]
 
         self.assertIn("get", paths["/listings"])
+        self.assertIn("get", paths["/listings/admin"])
         self.assertIn("post", paths["/listings"])
         self.assertIn("patch", paths["/orders/{order_id}"])
         self.assertIn("post", paths["/orders/bulk-status"])
@@ -100,10 +104,14 @@ class OpenAPIContractTests(unittest.TestCase):
             "meetup_enabled",
             "delivery_enabled",
             "shipping_enabled",
-            "lead_time_hours",
-            "created_at",
-            "updated_at",
-        ]:
+        "lead_time_hours",
+        "created_at",
+        "updated_at",
+        "last_operating_adjustment_at",
+        "last_operating_adjustment_summary",
+        "recent_transaction_count",
+        "is_new_listing",
+      ]:
             self.assertIn(field_name, listing_read)
 
         for field_name in [

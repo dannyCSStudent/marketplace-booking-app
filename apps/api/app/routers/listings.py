@@ -1,12 +1,16 @@
 from fastapi import APIRouter, Depends, Query, status
 
 from app.dependencies.auth import get_current_user
+from app.dependencies.admin import require_admin_user
 from app.schemas.listings import (
+    ListingAiAssistRequest,
+    ListingAiAssistResponse,
     ListingCreate,
     ListingImageCreate,
     ListingImageRead,
     ListingImageUploadCreate,
     ListingListResponse,
+    ListingPriceInsight,
     ListingQueryParams,
     ListingRead,
     ListingUpdate,
@@ -15,7 +19,10 @@ from app.services.listings import (
     add_listing_image,
     create_listing,
     delete_listing_image,
+    generate_listing_ai_assist,
+    get_admin_listings,
     get_listing_by_id,
+    get_listing_price_insight,
     get_my_listings,
     list_public_listings,
     upload_listing_image,
@@ -36,6 +43,21 @@ def list_listings(
 @router.get("/me", response_model=list[ListingRead])
 def read_my_listings(current_user=Depends(get_current_user)) -> list[ListingRead]:
     return get_my_listings(current_user)
+
+@router.get("/admin", response_model=list[ListingRead])
+def read_admin_listings(current_user=Depends(require_admin_user)) -> list[ListingRead]:
+    return get_admin_listings()
+
+@router.post("/ai-assist", response_model=ListingAiAssistResponse)
+def request_ai_listing_suggestion(
+    payload: ListingAiAssistRequest,
+    current_user=Depends(get_current_user),
+) -> ListingAiAssistResponse:
+    return generate_listing_ai_assist(current_user, payload)
+
+@router.get("/{listing_id}/price-insights", response_model=ListingPriceInsight)
+def read_listing_price_insight(listing_id: str, current_user=Depends(get_current_user)) -> ListingPriceInsight:
+    return get_listing_price_insight(current_user, listing_id)
 
 @router.get("/{listing_id}", response_model=ListingRead)
 def read_listing(listing_id: str) -> ListingRead:

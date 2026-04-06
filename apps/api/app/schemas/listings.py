@@ -95,7 +95,49 @@ class ListingRead(BaseModel):
     images: list[ListingImageRead] = []
     created_at: str
     updated_at: str
+    last_operating_adjustment_at: str | None = None
+    last_operating_adjustment_summary: str | None = None
+    available_today: bool = False
+    is_new_listing: bool = False
+    recent_transaction_count: int = 0
 
 class ListingListResponse(BaseModel):
     items: list[ListingRead]
     total: int
+
+
+class ListingAiAssistRequest(BaseModel):
+    listing_id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    type: str | None = None
+    category_id: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    highlights: str | None = None
+    tone: str | None = None
+
+
+class ListingAiAssistSuggestion(BaseModel):
+    suggested_title: str
+    suggested_description: str
+    suggested_tags: list[str]
+    suggested_category_id: str | None = None
+    summary: str
+
+
+class ListingAiAssistResponse(BaseModel):
+    listing_id: str | None = None
+    suggestion: ListingAiAssistSuggestion
+
+class ListingPriceInsight(BaseModel):
+    listing_id: str
+    currency: str
+    sample_size: int
+    min_price_cents: int | None = None
+    max_price_cents: int | None = None
+    avg_price_cents: int | None = None
+    median_price_cents: int | None = None
+    suggested_price_cents: int | None = None
+    summary: str
