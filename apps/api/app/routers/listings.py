@@ -4,6 +4,8 @@ from app.dependencies.auth import get_current_user
 from app.schemas.listings import (
     ListingCreate,
     ListingImageCreate,
+    ListingImageRead,
+    ListingImageUploadCreate,
     ListingListResponse,
     ListingQueryParams,
     ListingRead,
@@ -12,9 +14,11 @@ from app.schemas.listings import (
 from app.services.listings import (
     add_listing_image,
     create_listing,
+    delete_listing_image,
     get_listing_by_id,
     get_my_listings,
     list_public_listings,
+    upload_listing_image,
     update_listing,
 )
 
@@ -52,10 +56,28 @@ def patch_listing(
 ) -> ListingRead:
     return update_listing(current_user, listing_id, payload)
 
-@router.post("/{listing_id}/images", status_code=status.HTTP_201_CREATED)
+@router.post("/{listing_id}/images", response_model=ListingImageRead, status_code=status.HTTP_201_CREATED)
 def create_listing_image(
     listing_id: str,
     payload: ListingImageCreate,
     current_user=Depends(get_current_user),
 ):
     return add_listing_image(current_user, listing_id, payload)
+
+
+@router.post("/{listing_id}/images/upload", response_model=ListingImageRead, status_code=status.HTTP_201_CREATED)
+def upload_my_listing_image(
+    listing_id: str,
+    payload: ListingImageUploadCreate,
+    current_user=Depends(get_current_user),
+) -> ListingImageRead:
+    return upload_listing_image(current_user, listing_id, payload)
+
+
+@router.delete("/{listing_id}/images/{image_id}", response_model=ListingImageRead)
+def remove_listing_image(
+    listing_id: str,
+    image_id: str,
+    current_user=Depends(get_current_user),
+) -> ListingImageRead:
+    return delete_listing_image(current_user, listing_id, image_id)

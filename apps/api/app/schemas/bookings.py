@@ -8,6 +8,7 @@ class BookingCreate(BaseModel):
     scheduled_start: datetime
     scheduled_end: datetime
     notes: str | None = None
+    buyer_browse_context: str | None = None
 
 class BookingStatusUpdate(BaseModel):
     status: str
@@ -31,6 +32,14 @@ class BookingStatusEventRead(BaseModel):
     note: str | None = None
     created_at: datetime
 
+
+class BookingAdminEventRead(BaseModel):
+    id: str
+    actor_user_id: str
+    action: str
+    note: str | None = None
+    created_at: datetime
+
 class BookingRead(BaseModel):
     id: str
     buyer_id: str
@@ -42,10 +51,28 @@ class BookingRead(BaseModel):
     total_cents: int | None = None
     currency: str = "USD"
     notes: str | None = None
+    buyer_browse_context: str | None = None
     seller_response_note: str | None = None
     listing_title: str | None = None
     listing_type: str | None = None
     status_history: list[BookingStatusEventRead] = []
+
+
+class BookingAdminRead(BookingRead):
+    admin_note: str | None = None
+    admin_handoff_note: str | None = None
+    admin_assignee_user_id: str | None = None
+    admin_assigned_at: datetime | None = None
+    admin_is_escalated: bool = False
+    admin_escalated_at: datetime | None = None
+    admin_history: list[BookingAdminEventRead] = []
+
+
+class BookingAdminSupportUpdate(BaseModel):
+    admin_note: str | None = None
+    admin_handoff_note: str | None = None
+    admin_assignee_user_id: str | None = None
+    admin_is_escalated: bool | None = None
 
 
 class BookingBulkActionFailure(BaseModel):

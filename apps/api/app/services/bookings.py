@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 
@@ -6,6 +6,9 @@ from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
 from app.schemas.bookings import (
+    BookingAdminEventRead,
+    BookingAdminRead,
+    BookingAdminSupportUpdate,
     BookingBulkStatusUpdateRequest,
     BookingBulkStatusUpdateResult,
     BookingBulkActionFailure,
@@ -20,11 +23,15 @@ from app.services.notifications import queue_transaction_notification_jobs
 BOOKING_SELECT = (
     "id,buyer_id,seller_id,listing_id,status,scheduled_start,scheduled_end,total_cents,currency,"
     "seller_response_note,"
-    "notes,listings(title,type),booking_status_events(id,status,actor_role,note,created_at)"
+    "notes,buyer_browse_context,listings(title,type),booking_status_events(id,status,actor_role,note,created_at)"
+)
+BOOKING_ADMIN_SELECT = (
+    f"{BOOKING_SELECT},admin_note,admin_handoff_note,admin_assignee_user_id,admin_assigned_at,admin_is_escalated,admin_escalated_at,"
+    "booking_admin_events(id,actor_user_id,action,note,created_at)"
 )
 
 
-def _serialize_booking(row: dict) -> BookingRead:
+def _serialize_booking(row: dict, *, include_admin: bool = False) -> BookingRead | BookingAdminRead:
     listing = row.get("listings") or {}
     status_history = [
         BookingStatusEventRead(
@@ -40,7 +47,7 @@ def _serialize_booking(row: dict) -> BookingRead:
             reverse=True,
         )
     ]
-    return BookingRead(
+    base_payload = dict(
         id=row["id"],
         buyer_id=row["buyer_id"],
         seller_id=row["seller_id"],
@@ -51,11 +58,39 @@ def _serialize_booking(row: dict) -> BookingRead:
         total_cents=row.get("total_cents"),
         currency=row.get("currency") or "USD",
         notes=row.get("notes"),
+        buyer_browse_context=row.get("buyer_browse_context"),
         seller_response_note=row.get("seller_response_note"),
         listing_title=listing.get("title"),
         listing_type=listing.get("type"),
         status_history=status_history,
     )
+    if include_admin:
+        admin_history = [
+            BookingAdminEventRead(
+                id=event["id"],
+                actor_user_id=event["actor_user_id"],
+                action=event["action"],
+                note=event.get("note"),
+                created_at=event["created_at"],
+            )
+            for event in sorted(
+                row.get("booking_admin_events", []),
+                key=lambda event: event.get("created_at") or "",
+                reverse=True,
+            )
+        ]
+        return BookingAdminRead(
+            **base_payload,
+            admin_note=row.get("admin_note"),
+            admin_handoff_note=row.get("admin_handoff_note"),
+            admin_assignee_user_id=row.get("admin_assignee_user_id"),
+            admin_assigned_at=row.get("admin_assigned_at"),
+            admin_is_escalated=bool(row.get("admin_is_escalated", False)),
+            admin_escalated_at=row.get("admin_escalated_at"),
+            admin_history=admin_history,
+        )
+
+    return BookingRead(**base_payload)
 
 
 def _get_booking_by_id(*, booking_id: str, access_token: str) -> BookingRead:
@@ -158,6 +193,132 @@ def get_my_bookings(current_user: CurrentUser) -> list[BookingRead]:
 
     return [_serialize_booking(row) for row in rows]
 
+
+def get_booking_by_id_for_user(current_user: CurrentUser, booking_id: str) -> BookingRead:
+    return _get_booking_by_id(booking_id=booking_id, access_token=current_user.access_token)
+
+
+def get_admin_bookings() -> list[BookingAdminRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "bookings",
+            query={
+                "select": BOOKING_ADMIN_SELECT,
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [_serialize_booking(row, include_admin=True) for row in rows]
+
+
+def _insert_booking_admin_events(
+    *,
+    booking_id: str,
+    actor_user_id: str,
+    events: list[dict[str, str | None]],
+) -> None:
+    if not events:
+        return
+
+    supabase = get_supabase_client()
+    try:
+        supabase.insert(
+            "booking_admin_events",
+            [
+                {
+                    "booking_id": booking_id,
+                    "actor_user_id": actor_user_id,
+                    "action": event["action"],
+                    "note": event.get("note"),
+                }
+                for event in events
+            ],
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def update_admin_booking_support(
+    booking_id: str,
+    payload: BookingAdminSupportUpdate,
+    *,
+    actor_user_id: str,
+) -> BookingAdminRead:
+    supabase = get_supabase_client()
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No admin support changes provided")
+
+    try:
+        current_row = supabase.select(
+            "bookings",
+            query={
+                "select": BOOKING_ADMIN_SELECT,
+                "id": f"eq.{booking_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    admin_events: list[dict[str, str | None]] = []
+    if "admin_note" in updates and updates["admin_note"] != current_row.get("admin_note"):
+        admin_events.append({"action": "admin_note_updated", "note": updates["admin_note"]})
+    if "admin_handoff_note" in updates and updates["admin_handoff_note"] != current_row.get("admin_handoff_note"):
+        admin_events.append({"action": "handoff_note_updated", "note": updates["admin_handoff_note"]})
+
+    if "admin_assignee_user_id" in updates:
+        if updates["admin_assignee_user_id"] != current_row.get("admin_assignee_user_id"):
+            admin_events.append(
+                {
+                    "action": "assignment_set" if updates["admin_assignee_user_id"] else "assignment_cleared",
+                    "note": updates["admin_assignee_user_id"],
+                }
+            )
+        updates["admin_assigned_at"] = (
+            datetime.now(timezone.utc).isoformat() if updates["admin_assignee_user_id"] else None
+        )
+
+    if "admin_is_escalated" in updates:
+        if bool(updates["admin_is_escalated"]) != bool(current_row.get("admin_is_escalated", False)):
+            admin_events.append(
+                {
+                    "action": "escalation_enabled" if updates["admin_is_escalated"] else "escalation_cleared",
+                    "note": None,
+                }
+            )
+        updates["admin_escalated_at"] = (
+            datetime.now(timezone.utc).isoformat() if updates["admin_is_escalated"] else None
+        )
+
+    try:
+        rows = supabase.update(
+            "bookings",
+            updates,
+            query={
+                "id": f"eq.{booking_id}",
+                "select": BOOKING_ADMIN_SELECT,
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    _insert_booking_admin_events(booking_id=booking_id, actor_user_id=actor_user_id, events=admin_events)
+    return _serialize_booking(rows[0], include_admin=True)
+
+
 def get_seller_bookings(current_user: CurrentUser) -> list[BookingRead]:
     supabase = get_supabase_client()
 
@@ -258,6 +419,7 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
                 "total_cents": listing.get("price_cents"),
                 "currency": listing.get("currency") or "USD",
                 "notes": payload.notes,
+                "buyer_browse_context": payload.buyer_browse_context,
             },
             access_token=current_user.access_token,
         )

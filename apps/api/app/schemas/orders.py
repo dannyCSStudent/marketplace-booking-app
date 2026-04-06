@@ -19,6 +19,7 @@ class OrderCreate(BaseModel):
     seller_id: str
     fulfillment: str
     notes: str | None = None
+    buyer_browse_context: str | None = None
     items: list[OrderItemCreate]
 
 class OrderStatusUpdate(BaseModel):
@@ -43,6 +44,14 @@ class OrderStatusEventRead(BaseModel):
     note: str | None = None
     created_at: datetime
 
+
+class OrderAdminEventRead(BaseModel):
+    id: str
+    actor_user_id: str
+    action: str
+    note: str | None = None
+    created_at: datetime
+
 class OrderRead(BaseModel):
     id: str
     buyer_id: str
@@ -53,9 +62,27 @@ class OrderRead(BaseModel):
     total_cents: int
     currency: str = "USD"
     notes: str | None = None
+    buyer_browse_context: str | None = None
     seller_response_note: str | None = None
     items: list[OrderItemRead] = []
     status_history: list[OrderStatusEventRead] = []
+
+
+class OrderAdminRead(OrderRead):
+    admin_note: str | None = None
+    admin_handoff_note: str | None = None
+    admin_assignee_user_id: str | None = None
+    admin_assigned_at: datetime | None = None
+    admin_is_escalated: bool = False
+    admin_escalated_at: datetime | None = None
+    admin_history: list[OrderAdminEventRead] = []
+
+
+class OrderAdminSupportUpdate(BaseModel):
+    admin_note: str | None = None
+    admin_handoff_note: str | None = None
+    admin_assignee_user_id: str | None = None
+    admin_is_escalated: bool | None = None
 
 
 class OrderBulkActionFailure(BaseModel):

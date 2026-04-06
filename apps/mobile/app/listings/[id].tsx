@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { formatBuyerActionError, formatCurrency, formatLocation } from '@/lib/api';
 import { useBuyerSession } from '@/providers/buyer-session';
@@ -34,6 +34,10 @@ function computeBookingWindow(listing: {
   return { start, end, durationMinutes, leadTimeHours };
 }
 
+function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }) {
+  return listing.images?.[0]?.image_url ?? null;
+}
+
 export default function ListingDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -52,6 +56,7 @@ export default function ListingDetailScreen() {
   const canOrder = Boolean(listing && listing.type !== 'service');
   const canBook = Boolean(listing && (listing.requires_booking || listing.type !== 'product'));
   const primaryAction = canBook && !canOrder ? 'booking' : 'order';
+  const primaryImageUrl = useMemo(() => (listing ? getPrimaryImageUrl(listing) : null), [listing]);
   const bookingWindow = useMemo(() => {
     if (!listing) {
       return null;
@@ -127,6 +132,13 @@ export default function ListingDetailScreen() {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.hero}>
+        {primaryImageUrl ? (
+          <Image source={{ uri: primaryImageUrl }} style={styles.heroImage} />
+        ) : (
+          <View style={styles.heroImagePlaceholder}>
+            <Text style={styles.heroImagePlaceholderText}>{listing.type}</Text>
+          </View>
+        )}
         <Text style={styles.typePill}>{listing.type}</Text>
         <Text style={styles.title}>{listing.title}</Text>
         <Text style={styles.location}>{formatLocation(listing) || 'Location pending'}</Text>
@@ -345,6 +357,27 @@ const styles = StyleSheet.create({
     borderRadius: 26,
     padding: 20,
     gap: 10,
+  },
+  heroImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: 20,
+    backgroundColor: '#e8dcc9',
+  },
+  heroImagePlaceholder: {
+    width: '100%',
+    height: 220,
+    borderRadius: 20,
+    backgroundColor: '#d9c7a8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroImagePlaceholderText: {
+    color: '#4d4338',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
   },
   infoCard: {
     backgroundColor: '#f8eedc',

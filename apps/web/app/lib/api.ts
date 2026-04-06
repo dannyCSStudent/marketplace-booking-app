@@ -1,19 +1,34 @@
 import { ApiError, apiRoutes, buildNotifications, createApiClient } from "@repo/api-client";
-import type { Listing, SellerProfile } from "@repo/api-client";
+import type { Listing, ReviewRead, SellerProfile } from "@repo/api-client";
 export { formatCurrency } from "@repo/api-client";
 export { ApiError, apiRoutes, buildNotifications, createApiClient };
 export type {
+  AdminUser,
+  BookingAdmin,
   Booking,
   Listing,
+  ListingImage,
   ListingCreateInput,
+  ListingImageCreateInput,
+  ListingImageUploadCreateInput,
   ListingUpdateInput,
   ListingResponse,
   NotificationItem,
   NotificationDelivery,
+  OrderAdmin,
   Order,
+  OrderAdminSupportUpdateInput,
+  BookingAdminSupportUpdateInput,
   Profile,
   ProfilePayload,
   ProfileUpdateInput,
+  ReviewCreateInput,
+  ReviewLookup,
+  ReviewModerationItem,
+  ReviewReportCreateInput,
+  ReviewReportRead,
+  ReviewRead,
+  ReviewSellerResponseUpdateInput,
   SellerCreateInput,
   SellerProfile,
   SellerWorkspaceData,
@@ -23,6 +38,20 @@ type MarketplaceData = {
   seller: SellerProfile | null;
   listings: Listing[];
   listingsTotal: number;
+  apiBaseUrl: string;
+};
+
+export type SellerStorefrontData = {
+  seller: SellerProfile | null;
+  listings: Listing[];
+  reviews: ReviewRead[];
+  apiBaseUrl: string;
+};
+
+export type ListingDetailData = {
+  listing: Listing | null;
+  seller: SellerProfile | null;
+  reviews: ReviewRead[];
   apiBaseUrl: string;
 };
 
@@ -54,6 +83,75 @@ export async function getMarketplaceData(): Promise<MarketplaceData> {
     seller,
     listings: listings?.items ?? [],
     listingsTotal: listings?.total ?? 0,
+    apiBaseUrl: getApiBaseUrl(),
+  };
+}
+
+export async function getSellerStorefrontData(slug: string): Promise<SellerStorefrontData> {
+  const api = createApiClient(getServerApiBaseUrl());
+  const seller = await api.getSellerBySlug(slug, { cache: "no-store" }).catch(() => null);
+
+  if (!seller) {
+    return {
+      seller: null,
+      listings: [],
+      reviews: [],
+      apiBaseUrl: getApiBaseUrl(),
+    };
+  }
+
+  const [listings, reviews] = await Promise.all([
+    api
+      .get<{ items: Listing[]; total: number }>("/listings", { cache: "no-store" })
+      .then((response) => response.items.filter((listing) => listing.seller_id === seller.id))
+      .catch(() => []),
+    api.getSellerReviewsBySlug(slug, { cache: "no-store" }).catch(() => []),
+  ]);
+
+  return {
+    seller,
+    listings,
+    reviews,
+    apiBaseUrl: getApiBaseUrl(),
+  };
+}
+
+export async function getListingDetailData(listingId: string): Promise<ListingDetailData> {
+  const api = createApiClient(getServerApiBaseUrl());
+  const listing = await api.getListingById(listingId, { cache: "no-store" }).catch(() => null);
+
+  if (!listing) {
+    return {
+      listing: null,
+      seller: null,
+      reviews: [],
+      apiBaseUrl: getApiBaseUrl(),
+    };
+  }
+
+  const seller = (await api
+    .get<{ items: Listing[]; total: number }>("/listings", { cache: "no-store" })
+    .then(async (response) => {
+      const ownerListing = response.items.find((item) => item.id === listing.id);
+      if (!ownerListing) {
+        return null;
+      }
+
+      const storefrontCandidates = await Promise.all([
+        api.getSellerBySlug("south-dallas-tamales", { cache: "no-store" }).catch(() => null),
+      ]);
+      return storefrontCandidates.find((candidate) => candidate?.id === ownerListing.seller_id) ?? null;
+    })
+    .catch(() => null)) as SellerProfile | null;
+
+  const reviews = seller?.slug
+    ? await api.getSellerReviewsBySlug(seller.slug, { cache: "no-store" }).catch(() => [])
+    : [];
+
+  return {
+    listing,
+    seller,
+    reviews,
     apiBaseUrl: getApiBaseUrl(),
   };
 }

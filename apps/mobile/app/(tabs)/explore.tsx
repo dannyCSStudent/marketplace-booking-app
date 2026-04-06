@@ -22,6 +22,7 @@ function toggleRetryMode(mode: 'best_effort' | 'atomic') {
 export default function BuyerScreen() {
   const {
     profile,
+    listings,
     orders,
     bookings,
     notifications,
@@ -54,6 +55,9 @@ export default function BuyerScreen() {
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'queued' | 'sent' | 'failed'>('all');
   const [deliveryRecencyFilter, setDeliveryRecencyFilter] = useState<'today' | '7d' | 'all'>('7d');
   const [activityFilter, setActivityFilter] = useState<'all' | 'order' | 'booking'>('all');
+  const [activityEngagementFilter, setActivityEngagementFilter] = useState<
+    'all' | 'product' | 'service' | 'local' | 'hybrid'
+  >('all');
   const [workspacePreset, setWorkspacePreset] = useState<'default' | 'needs-action' | 'recent-failures'>('default');
   const [deliveryRetryMode, setDeliveryRetryMode] = useState<'best_effort' | 'atomic'>('best_effort');
   const [filtersRestored, setFiltersRestored] = useState(false);
@@ -96,6 +100,110 @@ export default function BuyerScreen() {
     () => notificationDeliveries.filter((delivery) => delivery.delivery_status === 'failed').length,
     [notificationDeliveries],
   );
+  const productActivityCount = useMemo(
+    () =>
+      orders.reduce((count, order) => {
+        const matchingListings = (order.items ?? [])
+          .map((item) => listings.find((listing) => listing.id === item.listing_id))
+          .filter((listing): listing is (typeof listings)[number] => Boolean(listing));
+
+        return (
+          count +
+          matchingListings.filter(
+            (listing) => listing.type === 'product' || listing.type === 'hybrid',
+          ).length
+        );
+      }, 0),
+    [listings, orders],
+  );
+  const serviceActivityCount = useMemo(
+    () =>
+      bookings.filter(
+        (booking) => booking.listing_type === 'service' || booking.listing_type === 'hybrid',
+      ).length,
+    [bookings],
+  );
+  const localActivityCount = useMemo(() => {
+    const orderLocalMatches = orders.reduce((count, order) => {
+      const hasLocalMatch = (order.items ?? []).some((item) =>
+        listings.some((listing) => listing.id === item.listing_id && listing.is_local_only),
+      );
+      return count + (hasLocalMatch ? 1 : 0);
+    }, 0);
+
+    const bookingLocalMatches = bookings.filter((booking) =>
+      listings.some((listing) => listing.id === booking.listing_id && listing.is_local_only),
+    ).length;
+
+    return orderLocalMatches + bookingLocalMatches;
+  }, [bookings, listings, orders]);
+  const hybridActivityCount = useMemo(() => {
+    const orderHybridMatches = orders.reduce((count, order) => {
+      const hasHybridMatch = (order.items ?? []).some((item) =>
+        listings.some((listing) => listing.id === item.listing_id && listing.type === 'hybrid'),
+      );
+      return count + (hasHybridMatch ? 1 : 0);
+    }, 0);
+
+    const bookingHybridMatches = bookings.filter(
+      (booking) => booking.listing_type === 'hybrid',
+    ).length;
+
+    return orderHybridMatches + bookingHybridMatches;
+  }, [bookings, listings, orders]);
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter((order) => {
+        if (activityEngagementFilter === 'all') {
+          return true;
+        }
+
+        const matchingListings = (order.items ?? [])
+          .map((item) => listings.find((listing) => listing.id === item.listing_id))
+          .filter((listing): listing is (typeof listings)[number] => Boolean(listing));
+
+        if (activityEngagementFilter === 'product') {
+          return matchingListings.some(
+            (listing) => listing.type === 'product' || listing.type === 'hybrid',
+          );
+        }
+        if (activityEngagementFilter === 'local') {
+          return matchingListings.some((listing) => listing.is_local_only);
+        }
+        if (activityEngagementFilter === 'hybrid') {
+          return matchingListings.some((listing) => listing.type === 'hybrid');
+        }
+
+        return false;
+      }),
+    [activityEngagementFilter, listings, orders],
+  );
+  const filteredBookings = useMemo(
+    () =>
+      bookings.filter((booking) => {
+        if (activityEngagementFilter === 'all') {
+          return true;
+        }
+
+        const matchingListing = listings.find((listing) => listing.id === booking.listing_id);
+
+        if (activityEngagementFilter === 'service') {
+          return booking.listing_type === 'service' || booking.listing_type === 'hybrid';
+        }
+        if (activityEngagementFilter === 'local') {
+          return Boolean(matchingListing?.is_local_only);
+        }
+        if (activityEngagementFilter === 'hybrid') {
+          return booking.listing_type === 'hybrid';
+        }
+        if (activityEngagementFilter === 'product') {
+          return false;
+        }
+
+        return true;
+      }),
+    [activityEngagementFilter, bookings, listings],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -111,6 +219,7 @@ export default function BuyerScreen() {
           deliveryFilter?: 'all' | 'queued' | 'sent' | 'failed';
           deliveryRecencyFilter?: 'today' | '7d' | 'all';
           activityFilter?: 'all' | 'order' | 'booking';
+          activityEngagementFilter?: 'all' | 'product' | 'service' | 'local' | 'hybrid';
           workspacePreset?: 'default' | 'needs-action' | 'recent-failures';
         };
         const storedRetryMode = await getBuyerDeliveryRetryMode();
@@ -119,6 +228,7 @@ export default function BuyerScreen() {
         setDeliveryFilter(storedFilters.deliveryFilter ?? 'all');
         setDeliveryRecencyFilter(storedFilters.deliveryRecencyFilter ?? '7d');
         setActivityFilter(storedFilters.activityFilter ?? 'all');
+        setActivityEngagementFilter(storedFilters.activityEngagementFilter ?? 'all');
         setWorkspacePreset(storedFilters.workspacePreset ?? 'default');
         setDeliveryRetryMode(
           storedRetryMode === 'atomic' ? 'atomic' : 'best_effort',
@@ -142,12 +252,14 @@ export default function BuyerScreen() {
         deliveryFilter,
         deliveryRecencyFilter,
         activityFilter,
+        activityEngagementFilter,
         workspacePreset,
       }),
     );
     void setBuyerDeliveryRetryMode(deliveryRetryMode);
   }, [
     activityFilter,
+    activityEngagementFilter,
     deliveryRetryMode,
     deliveryFilter,
     deliveryRecencyFilter,
@@ -164,6 +276,7 @@ export default function BuyerScreen() {
       setDeliveryFilter('all');
       setDeliveryRecencyFilter('7d');
       setActivityFilter('all');
+      setActivityEngagementFilter('all');
       return;
     }
 
@@ -172,6 +285,7 @@ export default function BuyerScreen() {
       setDeliveryFilter('queued');
       setDeliveryRecencyFilter('today');
       setActivityFilter('all');
+      setActivityEngagementFilter('all');
       return;
     }
 
@@ -179,6 +293,7 @@ export default function BuyerScreen() {
     setDeliveryFilter('failed');
     setDeliveryRecencyFilter('7d');
     setActivityFilter('all');
+    setActivityEngagementFilter('all');
   }
 
   function handleAuth() {
@@ -383,6 +498,66 @@ export default function BuyerScreen() {
         ) : (
           <Text style={styles.emptyText}>Sign in to see live buyer activity.</Text>
         )}
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>Activity Mix</Text>
+        <Text style={styles.helperText}>
+          A quick read on the kinds of listings you are engaging with most.
+        </Text>
+        <View style={styles.snapshotGrid}>
+          <SnapshotCard
+            label="Product Activity"
+            value={String(productActivityCount)}
+            active={activityEngagementFilter === 'product'}
+            onPress={() => setActivityEngagementFilter('product')}
+          />
+          <SnapshotCard
+            label="Service Activity"
+            value={String(serviceActivityCount)}
+            active={activityEngagementFilter === 'service'}
+            onPress={() => setActivityEngagementFilter('service')}
+          />
+          <SnapshotCard
+            label="Local-First"
+            value={String(localActivityCount)}
+            active={activityEngagementFilter === 'local'}
+            onPress={() => setActivityEngagementFilter('local')}
+          />
+          <SnapshotCard
+            label="Hybrid Mix"
+            value={String(hybridActivityCount)}
+            active={activityEngagementFilter === 'hybrid'}
+            onPress={() => setActivityEngagementFilter('hybrid')}
+          />
+        </View>
+        <View style={styles.filterRow}>
+          <FilterChip
+            label="All Engagement"
+            active={activityEngagementFilter === 'all'}
+            onPress={() => setActivityEngagementFilter('all')}
+          />
+          <FilterChip
+            label="Product"
+            active={activityEngagementFilter === 'product'}
+            onPress={() => setActivityEngagementFilter('product')}
+          />
+          <FilterChip
+            label="Service"
+            active={activityEngagementFilter === 'service'}
+            onPress={() => setActivityEngagementFilter('service')}
+          />
+          <FilterChip
+            label="Local-First"
+            active={activityEngagementFilter === 'local'}
+            onPress={() => setActivityEngagementFilter('local')}
+          />
+          <FilterChip
+            label="Hybrid"
+            active={activityEngagementFilter === 'hybrid'}
+            onPress={() => setActivityEngagementFilter('hybrid')}
+          />
+        </View>
       </View>
 
       {profile ? (
@@ -668,10 +843,15 @@ export default function BuyerScreen() {
       <View style={styles.panel}>
         <View style={styles.notificationsHeader}>
           <Text style={styles.panelTitle}>
-            Recent Activity · {(showOrders ? orders.length : 0) + (showBookings ? bookings.length : 0)}
+            Recent Activity · {(showOrders ? filteredOrders.length : 0) + (showBookings ? filteredBookings.length : 0)}
           </Text>
-          {activityFilter !== 'all' ? (
-            <Pressable style={styles.markSeenButton} onPress={() => setActivityFilter('all')}>
+          {activityFilter !== 'all' || activityEngagementFilter !== 'all' ? (
+            <Pressable
+              style={styles.markSeenButton}
+              onPress={() => {
+                setActivityFilter('all');
+                setActivityEngagementFilter('all');
+              }}>
               <Text style={styles.markSeenButtonText}>Clear Filter</Text>
             </Pressable>
           ) : null}
@@ -693,8 +873,8 @@ export default function BuyerScreen() {
             onPress={() => setActivityFilter('booking')}
           />
         </View>
-        {showOrders && orders.length > 0 ? (
-          orders.map((order) => (
+        {showOrders && filteredOrders.length > 0 ? (
+          filteredOrders.map((order) => (
             <Pressable
               key={order.id}
               onPress={() =>
@@ -715,8 +895,8 @@ export default function BuyerScreen() {
             </Pressable>
           ))
         ) : null}
-        {showBookings && bookings.length > 0 ? (
-          bookings.map((booking) => (
+        {showBookings && filteredBookings.length > 0 ? (
+          filteredBookings.map((booking) => (
             <Pressable
               key={booking.id}
               onPress={() =>
@@ -737,15 +917,17 @@ export default function BuyerScreen() {
             </Pressable>
           ))
         ) : null}
-        {((showOrders && orders.length === 0) || (showBookings && bookings.length === 0)) &&
-        (!showOrders || orders.length === 0) &&
-        (!showBookings || bookings.length === 0) ? (
+        {((showOrders && filteredOrders.length === 0) || (showBookings && filteredBookings.length === 0)) &&
+        (!showOrders || filteredOrders.length === 0) &&
+        (!showBookings || filteredBookings.length === 0) ? (
           <Text style={styles.emptyText}>
             {activityFilter === 'order'
               ? 'No orders yet. Open a listing and place one.'
               : activityFilter === 'booking'
                 ? 'No bookings yet. Use a service or hybrid listing.'
-                : 'No buyer activity yet.'}
+                : activityEngagementFilter !== 'all'
+                  ? 'No buyer activity matches this engagement filter yet.'
+                  : 'No buyer activity yet.'}
           </Text>
         ) : null}
       </View>
@@ -778,13 +960,29 @@ function FilterChip({
   );
 }
 
-function SnapshotCard({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.snapshotCard}>
+function SnapshotCard({
+  label,
+  value,
+  active = false,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  active?: boolean;
+  onPress?: () => void;
+}) {
+  const content = (
+    <View style={[styles.snapshotCard, active && styles.snapshotCardActive]}>
       <Text style={styles.snapshotLabel}>{label}</Text>
       <Text style={styles.snapshotValue}>{value}</Text>
     </View>
   );
+
+  if (!onPress) {
+    return content;
+  }
+
+  return <Pressable onPress={onPress}>{content}</Pressable>;
 }
 
 function PreferenceRow({
@@ -1206,6 +1404,11 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 14,
     gap: 8,
+  },
+  snapshotCardActive: {
+    backgroundColor: '#dfe8ca',
+    borderWidth: 1,
+    borderColor: '#8aa05b',
   },
   snapshotLabel: {
     color: '#6f6556',

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -12,6 +13,7 @@ import { ApiError, buildNotifications, createApiClient, formatCurrency } from "@
 import type {
   Booking,
   Listing,
+  ListingImage,
   ListingCreateInput,
   ListingUpdateInput,
   NotificationDelivery,
@@ -20,6 +22,7 @@ import type {
   Profile,
   ProfileUpdateInput,
   ProfilePayload,
+  ReviewRead,
   SellerCreateInput,
   SellerProfile,
   SellerWorkspaceData,
@@ -30,6 +33,7 @@ type WorkspaceState = {
   listings: Listing[];
   orders: Order[];
   bookings: Booking[];
+  reviews: ReviewRead[];
 };
 
 type ListingDraft = {
@@ -42,6 +46,11 @@ type ListingDraft = {
   meetup_enabled: boolean;
   delivery_enabled: boolean;
   shipping_enabled: boolean;
+};
+
+type ListingImageDraft = {
+  image_url: string;
+  alt_text: string;
 };
 
 type ActionFeedback = {
@@ -117,6 +126,81 @@ function getListingOperatingGuidance(listing: Listing) {
   return "Driven by order flow and fulfillment methods. Tune pickup, meetup, delivery, or shipping first.";
 }
 
+function formatSellerRating(rating?: number, reviewCount?: number) {
+  const safeRating = rating ?? 0;
+  const safeReviewCount = reviewCount ?? 0;
+
+  if (safeReviewCount <= 0) {
+    return "No reviews yet";
+  }
+
+  return `${safeRating.toFixed(1)} stars · ${safeReviewCount} review${safeReviewCount === 1 ? "" : "s"}`;
+}
+
+function titleCaseWorkspaceLabel(value: string) {
+  return value
+    .split("-")
+    .flatMap((part) => part.split("_"))
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatBuyerBrowseContextLabel(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isLocalDrivenBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return normalized?.includes("local only") ?? false;
+}
+
+function isSearchDrivenBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return normalized?.includes('search: "') ?? false;
+}
+
+function isPriceDrivenBrowseContext(value: string | null | undefined) {
+  const normalized = formatBuyerBrowseContextLabel(value)?.toLowerCase();
+  return (
+    normalized?.includes("lowest price") ||
+    normalized?.includes("highest price") ||
+    false
+  );
+}
+
+function isRecentTransactionEvent(
+  history: Array<{ created_at: string }> | undefined,
+  windowDays: number,
+) {
+  const oldestEvent = history && history.length > 0 ? history[history.length - 1] : null;
+  if (!oldestEvent?.created_at) {
+    return false;
+  }
+
+  const createdAt = new Date(oldestEvent.created_at).getTime();
+  if (Number.isNaN(createdAt)) {
+    return false;
+  }
+
+  return Date.now() - createdAt <= windowDays * 24 * 60 * 60 * 1000;
+}
+
+function matchesActivityRecency(
+  history: Array<{ created_at: string }> | undefined,
+  filter: "7d" | "all",
+) {
+  if (filter === "all") {
+    return true;
+  }
+
+  return isRecentTransactionEvent(history, 7);
+}
+
 export function SellerWorkspace() {
   const pathname = usePathname();
   const router = useRouter();
@@ -141,7 +225,13 @@ export function SellerWorkspace() {
   const [listingActionLoading, setListingActionLoading] = useState<string | null>(null);
   const [listingSaveLoading, setListingSaveLoading] = useState<string | null>(null);
   const [listingDrafts, setListingDrafts] = useState<Record<string, ListingDraft>>({});
+  const [listingImageDrafts, setListingImageDrafts] = useState<Record<string, ListingImageDraft>>(
+    {},
+  );
+  const [listingImageActionLoading, setListingImageActionLoading] = useState<string | null>(null);
+  const [reviewResponseLoading, setReviewResponseLoading] = useState<string | null>(null);
   const [responseNotes, setResponseNotes] = useState<Record<string, string>>({});
+  const [reviewResponseDrafts, setReviewResponseDrafts] = useState<Record<string, string>>({});
   const [notificationsSeenAt, setNotificationsSeenAt] = useState<string | null>(null);
   const [notificationDeliveries, setNotificationDeliveries] = useState<NotificationDelivery[]>([]);
   const [deliveryRetryLoading, setDeliveryRetryLoading] = useState<string | null>(null);
@@ -154,6 +244,16 @@ export function SellerWorkspace() {
   );
   const [activityStatusFilter, setActivityStatusFilter] = useState<string>(
     () => searchParams.get("activityStatus") ?? "all",
+  );
+  const [activityDiscoveryFilter, setActivityDiscoveryFilter] = useState<
+    "all" | "local" | "search" | "price"
+  >(
+    () =>
+      (searchParams.get("activityDiscovery") as "all" | "local" | "search" | "price") ??
+      "all",
+  );
+  const [activityRecencyFilter, setActivityRecencyFilter] = useState<"7d" | "all">(
+    () => (searchParams.get("activityWindow") as "7d" | "all") ?? "all",
   );
   const [activityContextFilter, setActivityContextFilter] = useState<"all" | "unread" | "focused">(
     () => (searchParams.get("activityContext") as "all" | "unread" | "focused") ?? "all",
@@ -173,6 +273,7 @@ export function SellerWorkspace() {
   const [highlightedFocusedPanelKey, setHighlightedFocusedPanelKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
+  const [workspaceLinkFeedback, setWorkspaceLinkFeedback] = useState<string | null>(null);
   const [pendingBulkAction, setPendingBulkAction] = useState<PendingBulkAction | null>(null);
   const [bulkExecutionMode, setBulkExecutionMode] = useState<"best_effort" | "atomic">(
     () => (searchParams.get("bulkMode") as "best_effort" | "atomic") ?? "best_effort",
@@ -200,6 +301,7 @@ export function SellerWorkspace() {
     setNotificationsSeenAt(null);
     setListingDrafts({});
     setResponseNotes({});
+    setReviewResponseDrafts({});
     setError(message ?? null);
     setActionFeedback(null);
     setPendingBulkAction(null);
@@ -216,7 +318,9 @@ export function SellerWorkspace() {
     if (!nextWorkspace) {
       setWorkspace(null);
       setListingDrafts({});
+      setListingImageDrafts({});
       setResponseNotes({});
+      setReviewResponseDrafts({});
       setNotificationDeliveries([]);
       return;
     }
@@ -238,6 +342,17 @@ export function SellerWorkspace() {
       ]),
     );
     setListingDrafts(nextDrafts);
+    setListingImageDrafts(
+      Object.fromEntries(
+        nextWorkspace.listings.map((listing) => [
+          listing.id,
+          {
+            image_url: "",
+            alt_text: listing.title,
+          },
+        ]),
+      ),
+    );
     setResponseNotes({
       ...Object.fromEntries(
         nextWorkspace.orders.map((order) => [order.id, order.seller_response_note ?? ""]),
@@ -246,6 +361,11 @@ export function SellerWorkspace() {
         nextWorkspace.bookings.map((booking) => [booking.id, booking.seller_response_note ?? ""]),
       ),
     });
+    setReviewResponseDrafts(
+      Object.fromEntries(
+        nextWorkspace.reviews.map((review) => [review.id, review.seller_response ?? ""]),
+      ),
+    );
   }, []);
 
   useEffect(() => {
@@ -386,6 +506,18 @@ export function SellerWorkspace() {
       params.set("activityStatus", activityStatusFilter);
     }
 
+    if (activityDiscoveryFilter === "all") {
+      params.delete("activityDiscovery");
+    } else {
+      params.set("activityDiscovery", activityDiscoveryFilter);
+    }
+
+    if (activityRecencyFilter === "all") {
+      params.delete("activityWindow");
+    } else {
+      params.set("activityWindow", activityRecencyFilter);
+    }
+
     if (activityContextFilter === "all") {
       params.delete("activityContext");
     } else {
@@ -423,6 +555,8 @@ export function SellerWorkspace() {
     }
   }, [
     activityContextFilter,
+    activityDiscoveryFilter,
+    activityRecencyFilter,
     activityStatusFilter,
     activityTypeFilter,
     bulkExecutionMode,
@@ -723,6 +857,174 @@ export function SellerWorkspace() {
     });
   }
 
+  function updateListingImageDraft(
+    listingId: string,
+    updater: (current: ListingImageDraft) => ListingImageDraft,
+  ) {
+    setListingImageDrafts((current) => ({
+      ...current,
+      [listingId]: updater(
+        current[listingId] ?? {
+          image_url: "",
+          alt_text: "",
+        },
+      ),
+    }));
+  }
+
+  function addListingImage(listing: Listing) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    const draft = listingImageDrafts[listing.id];
+    if (!accessToken || !draft) {
+      setCreateError("Sign in again before updating listing images.");
+      return;
+    }
+
+    if (!draft.image_url.trim()) {
+      setCreateError("Paste an image URL before adding listing media.");
+      return;
+    }
+
+    setListingImageActionLoading(`${listing.id}:add`);
+    setCreateError(null);
+    setCreateMessage(null);
+
+    startTransition(async () => {
+      try {
+        await api.addListingImage(
+          listing.id,
+          {
+            image_url: draft.image_url.trim(),
+            alt_text: draft.alt_text.trim() || listing.title,
+          },
+          { accessToken },
+        );
+        await loadWorkspace(accessToken);
+        setCreateMessage(`Added image gallery media to ${listing.title}.`);
+      } catch (err) {
+        setCreateError(err instanceof Error ? err.message : "Unable to add listing image");
+      } finally {
+        setListingImageActionLoading(null);
+      }
+    });
+  }
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result !== "string") {
+          reject(new Error("Unable to read image file."));
+          return;
+        }
+
+        const [, base64Data = ""] = result.split(",", 2);
+        resolve(base64Data);
+      };
+      reader.onerror = () => reject(new Error("Unable to read image file."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadListingImageFile(listing: Listing, file: File) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    const draft = listingImageDrafts[listing.id];
+    if (!accessToken) {
+      setCreateError("Sign in again before uploading listing images.");
+      return;
+    }
+
+    setListingImageActionLoading(`${listing.id}:upload`);
+    setCreateError(null);
+    setCreateMessage(null);
+
+    try {
+      const base64Data = await fileToBase64(file);
+      await api.uploadListingImage(
+        listing.id,
+        {
+          filename: file.name,
+          content_type: file.type || "image/jpeg",
+          base64_data: base64Data,
+          alt_text: draft?.alt_text.trim() || listing.title,
+        },
+        { accessToken },
+      );
+      await loadWorkspace(accessToken);
+      setCreateMessage(`Uploaded image media for ${listing.title}.`);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Unable to upload listing image");
+    } finally {
+      setListingImageActionLoading(null);
+    }
+  }
+
+  function removeListingImage(listing: Listing, image: ListingImage) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      setCreateError("Sign in again before updating listing images.");
+      return;
+    }
+
+    setListingImageActionLoading(image.id);
+    setCreateError(null);
+    setCreateMessage(null);
+
+    startTransition(async () => {
+      try {
+        await api.deleteListingImage(listing.id, image.id, { accessToken });
+        await loadWorkspace(accessToken);
+        setCreateMessage(`Removed an image from ${listing.title}.`);
+      } catch (err) {
+        setCreateError(err instanceof Error ? err.message : "Unable to remove listing image");
+      } finally {
+        setListingImageActionLoading(null);
+      }
+    });
+  }
+
+  function updateReviewResponseDraft(reviewId: string, value: string) {
+    setReviewResponseDrafts((current) => ({
+      ...current,
+      [reviewId]: value,
+    }));
+  }
+
+  function saveReviewResponse(review: ReviewRead) {
+    const accessToken = window.localStorage.getItem(SELLER_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      setError("Sign in again before responding to reviews.");
+      return;
+    }
+
+    setReviewResponseLoading(review.id);
+    setError(null);
+    setActionFeedback(null);
+
+    startTransition(async () => {
+      try {
+        await api.updateReviewSellerResponse(
+          review.id,
+          {
+            seller_response: reviewResponseDrafts[review.id] ?? null,
+          },
+          { accessToken },
+        );
+        await loadWorkspace(accessToken);
+        setActionFeedback({
+          tone: "success",
+          message: "Seller review response saved.",
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to save seller response");
+        setActionFeedback(null);
+      } finally {
+        setReviewResponseLoading(null);
+      }
+    });
+  }
+
   const notifications: NotificationItem[] = useMemo(
     () =>
       workspace
@@ -784,6 +1086,27 @@ export function SellerWorkspace() {
       if (activityStatusFilter !== "all" && order.status !== activityStatusFilter) {
         return false;
       }
+      if (
+        activityDiscoveryFilter === "local" &&
+        !isLocalDrivenBrowseContext(order.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (
+        activityDiscoveryFilter === "search" &&
+        !isSearchDrivenBrowseContext(order.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (
+        activityDiscoveryFilter === "price" &&
+        !isPriceDrivenBrowseContext(order.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (!matchesActivityRecency(order.status_history, activityRecencyFilter)) {
+        return false;
+      }
       if (activityContextFilter === "unread" && !unreadActivityKeys.has(activityKey)) {
         return false;
       }
@@ -794,6 +1117,8 @@ export function SellerWorkspace() {
     });
   }, [
     activityContextFilter,
+    activityDiscoveryFilter,
+    activityRecencyFilter,
     activityStatusFilter,
     activityTypeFilter,
     focusedActivityKey,
@@ -813,6 +1138,27 @@ export function SellerWorkspace() {
       if (activityStatusFilter !== "all" && booking.status !== activityStatusFilter) {
         return false;
       }
+      if (
+        activityDiscoveryFilter === "local" &&
+        !isLocalDrivenBrowseContext(booking.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (
+        activityDiscoveryFilter === "search" &&
+        !isSearchDrivenBrowseContext(booking.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (
+        activityDiscoveryFilter === "price" &&
+        !isPriceDrivenBrowseContext(booking.buyer_browse_context)
+      ) {
+        return false;
+      }
+      if (!matchesActivityRecency(booking.status_history, activityRecencyFilter)) {
+        return false;
+      }
       if (activityContextFilter === "unread" && !unreadActivityKeys.has(activityKey)) {
         return false;
       }
@@ -823,6 +1169,8 @@ export function SellerWorkspace() {
     });
   }, [
     activityContextFilter,
+    activityDiscoveryFilter,
+    activityRecencyFilter,
     activityStatusFilter,
     activityTypeFilter,
     focusedActivityKey,
@@ -869,6 +1217,129 @@ export function SellerWorkspace() {
     [filteredBookings],
   );
   const focusedItemCount = focusedActivityKey ? 1 : 0;
+  const localDrivenOrdersCount = useMemo(
+    () =>
+      (workspace?.orders ?? []).filter((order) =>
+        isLocalDrivenBrowseContext(order.buyer_browse_context),
+      ).length,
+    [workspace?.orders],
+  );
+  const localDrivenBookingsCount = useMemo(
+    () =>
+      (workspace?.bookings ?? []).filter((booking) =>
+        isLocalDrivenBrowseContext(booking.buyer_browse_context),
+      ).length,
+    [workspace?.bookings],
+  );
+  const searchDrivenBookingsCount = useMemo(
+    () =>
+      (workspace?.bookings ?? []).filter((booking) =>
+        isSearchDrivenBrowseContext(booking.buyer_browse_context),
+      ).length,
+    [workspace?.bookings],
+  );
+  const priceDrivenConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter((transaction) =>
+        isPriceDrivenBrowseContext(transaction.buyer_browse_context),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const localDrivenRecentConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+        (transaction) =>
+          isLocalDrivenBrowseContext(transaction.buyer_browse_context) &&
+          isRecentTransactionEvent(transaction.status_history, 7),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const searchDrivenRecentConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+        (transaction) =>
+          isSearchDrivenBrowseContext(transaction.buyer_browse_context) &&
+          isRecentTransactionEvent(transaction.status_history, 7),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const priceDrivenRecentConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+        (transaction) =>
+          isPriceDrivenBrowseContext(transaction.buyer_browse_context) &&
+          isRecentTransactionEvent(transaction.status_history, 7),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const recentBrowseContextConversionsCount = useMemo(
+    () =>
+      [...(workspace?.orders ?? []), ...(workspace?.bookings ?? [])].filter(
+        (transaction) =>
+          formatBuyerBrowseContextLabel(transaction.buyer_browse_context) &&
+          isRecentTransactionEvent(transaction.status_history, 7),
+      ).length,
+    [workspace?.bookings, workspace?.orders],
+  );
+  const activeWorkspaceSummary = useMemo(() => {
+    const parts: string[] = [];
+
+    if (workspacePreset !== "default") {
+      parts.push(titleCaseWorkspaceLabel(workspacePreset));
+    }
+    if (activityTypeFilter !== "all") {
+      parts.push(`Type: ${titleCaseWorkspaceLabel(activityTypeFilter)}`);
+    }
+    if (activityStatusFilter !== "all") {
+      parts.push(`Status: ${titleCaseWorkspaceLabel(activityStatusFilter)}`);
+    }
+    if (activityDiscoveryFilter !== "all") {
+      parts.push(`Discovery: ${titleCaseWorkspaceLabel(activityDiscoveryFilter)}`);
+    }
+    if (activityRecencyFilter !== "all") {
+      parts.push(`Activity Window: ${titleCaseWorkspaceLabel(activityRecencyFilter)}`);
+    }
+    if (activityContextFilter !== "all") {
+      parts.push(`Context: ${titleCaseWorkspaceLabel(activityContextFilter)}`);
+    }
+    if (deliveryStatusFilter !== "all") {
+      parts.push(`Deliveries: ${titleCaseWorkspaceLabel(deliveryStatusFilter)}`);
+    }
+    if (deliveryRecencyFilter !== "7d") {
+      parts.push(`Window: ${titleCaseWorkspaceLabel(deliveryRecencyFilter)}`);
+    }
+    if (bulkExecutionMode !== "best_effort") {
+      parts.push("Batch Mode: Validate First");
+    }
+    if (focusedActivityKey) {
+      const [kind, id] = focusedActivityKey.split(":");
+      parts.push(`Focus: ${titleCaseWorkspaceLabel(kind ?? "item")} ${id?.slice(0, 8) ?? ""}`.trim());
+    }
+
+    return parts.length > 0 ? parts.join(" · ") : "Default workspace view";
+  }, [
+    activityContextFilter,
+    activityDiscoveryFilter,
+    activityRecencyFilter,
+    activityStatusFilter,
+    activityTypeFilter,
+    bulkExecutionMode,
+    deliveryRecencyFilter,
+    deliveryStatusFilter,
+    focusedActivityKey,
+    workspacePreset,
+  ]);
+  const isDefaultWorkspaceView =
+    workspacePreset === "default" &&
+    activityTypeFilter === "all" &&
+    activityStatusFilter === "all" &&
+    activityDiscoveryFilter === "all" &&
+    activityRecencyFilter === "all" &&
+    activityContextFilter === "all" &&
+    deliveryStatusFilter === "all" &&
+    deliveryRecencyFilter === "7d" &&
+    bulkExecutionMode === "best_effort" &&
+    !focusedActivityKey;
 
   function isUnreadNotification(notification: NotificationItem) {
     if (!notificationsSeenAt) {
@@ -953,6 +1424,29 @@ export function SellerWorkspace() {
     setFocusedActivityKey(null);
   }
 
+  function resetWorkspaceView() {
+    applySellerPreset("default");
+    setBulkExecutionMode("best_effort");
+    if (focusedActivityKey) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("focus");
+      const nextQuery = params.toString();
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+      setFocusedActivityKey(null);
+    }
+  }
+
+  async function copyWorkspaceLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setWorkspaceLinkFeedback("Link copied");
+      window.setTimeout(() => setWorkspaceLinkFeedback(null), 2000);
+    } catch {
+      setWorkspaceLinkFeedback("Copy failed");
+      window.setTimeout(() => setWorkspaceLinkFeedback(null), 2000);
+    }
+  }
+
   function applySellerPreset(
     preset: "default" | "needs-action" | "recent-failures" | "focused-work",
   ) {
@@ -961,6 +1455,8 @@ export function SellerWorkspace() {
     if (preset === "default") {
       setActivityTypeFilter("all");
       setActivityStatusFilter("all");
+      setActivityDiscoveryFilter("all");
+      setActivityRecencyFilter("all");
       setActivityContextFilter("all");
       setDeliveryStatusFilter("all");
       setDeliveryRecencyFilter("7d");
@@ -970,6 +1466,8 @@ export function SellerWorkspace() {
     if (preset === "needs-action") {
       setActivityTypeFilter("all");
       setActivityStatusFilter("all");
+      setActivityDiscoveryFilter("all");
+      setActivityRecencyFilter("all");
       setActivityContextFilter("unread");
       setDeliveryStatusFilter("queued");
       setDeliveryRecencyFilter("today");
@@ -979,6 +1477,8 @@ export function SellerWorkspace() {
     if (preset === "recent-failures") {
       setActivityTypeFilter("all");
       setActivityStatusFilter("all");
+      setActivityDiscoveryFilter("all");
+      setActivityRecencyFilter("all");
       setActivityContextFilter("all");
       setDeliveryStatusFilter("failed");
       setDeliveryRecencyFilter("7d");
@@ -987,7 +1487,24 @@ export function SellerWorkspace() {
 
     setActivityTypeFilter("all");
     setActivityStatusFilter("all");
+    setActivityDiscoveryFilter("all");
+    setActivityRecencyFilter("all");
     setActivityContextFilter("focused");
+    setDeliveryStatusFilter("all");
+    setDeliveryRecencyFilter("7d");
+  }
+
+  function applyDiscoveryQueueSlice(
+    discovery: "local" | "search" | "price",
+    type: "all" | "order" | "booking" = "all",
+    recency: "7d" | "all" = "all",
+  ) {
+    setWorkspacePreset("default");
+    setActivityTypeFilter(type);
+    setActivityStatusFilter("all");
+    setActivityDiscoveryFilter(discovery);
+    setActivityRecencyFilter(recency);
+    setActivityContextFilter("all");
     setDeliveryStatusFilter("all");
     setDeliveryRecencyFilter("7d");
   }
@@ -1426,10 +1943,102 @@ export function SellerWorkspace() {
                 Sign Out
               </button>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-4">
               <MiniStat label="Listings" value={String(workspace.listings.length)} />
               <MiniStat label="Orders" value={String(workspace.orders.length)} />
               <MiniStat label="Bookings" value={String(workspace.bookings.length)} />
+              <MiniStat label="Reviews" value={String(workspace.reviews.length)} />
+            </div>
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Demand Signals
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    Which browse lanes are converting into work
+                  </p>
+                </div>
+                <p className="text-xs uppercase tracking-[0.16em] text-foreground/46">
+                  Buyer discovery context
+                </p>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <MiniStat
+                  label="Local Match Orders"
+                  value={String(localDrivenOrdersCount)}
+                  accent="amber"
+                  onClick={() => applyDiscoveryQueueSlice("local", "order")}
+                />
+                <MiniStat
+                  label="Local Match Bookings"
+                  value={String(localDrivenBookingsCount)}
+                  accent="olive"
+                  onClick={() => applyDiscoveryQueueSlice("local", "booking")}
+                />
+                <MiniStat
+                  label="Search-Led Bookings"
+                  value={String(searchDrivenBookingsCount)}
+                  accent="sky"
+                  onClick={() => applyDiscoveryQueueSlice("search", "booking")}
+                />
+                <MiniStat
+                  label="Price-Led Conversions"
+                  value={String(priceDrivenConversionsCount)}
+                  accent="rose"
+                  onClick={() => applyDiscoveryQueueSlice("price", "all")}
+                />
+              </div>
+            </div>
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Recent Trend
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    Discovery-driven conversions in the last 7 days
+                  </p>
+                </div>
+                <p className="text-xs uppercase tracking-[0.16em] text-foreground/46">
+                  Recent mix
+                </p>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <MiniStat
+                  label="Local 7d"
+                  value={String(localDrivenRecentConversionsCount)}
+                  accent="amber"
+                  onClick={() => applyDiscoveryQueueSlice("local", "all", "7d")}
+                />
+                <MiniStat
+                  label="Search 7d"
+                  value={String(searchDrivenRecentConversionsCount)}
+                  accent="sky"
+                  onClick={() => applyDiscoveryQueueSlice("search", "all", "7d")}
+                />
+                <MiniStat
+                  label="Price 7d"
+                  value={String(priceDrivenRecentConversionsCount)}
+                  accent="rose"
+                  onClick={() => applyDiscoveryQueueSlice("price", "all", "7d")}
+                />
+                <MiniStat
+                  label="Tracked Browse 7d"
+                  value={String(recentBrowseContextConversionsCount)}
+                  accent="olive"
+                  onClick={() => {
+                    setWorkspacePreset("default");
+                    setActivityTypeFilter("all");
+                    setActivityStatusFilter("all");
+                    setActivityDiscoveryFilter("all");
+                    setActivityRecencyFilter("7d");
+                    setActivityContextFilter("all");
+                    setDeliveryStatusFilter("all");
+                    setDeliveryRecencyFilter("7d");
+                  }}
+                />
+              </div>
             </div>
 
             {actionFeedback ? (
@@ -1475,6 +2084,39 @@ export function SellerWorkspace() {
               <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
                 Workspace Views
               </p>
+              <div className="mt-4 rounded-[1.15rem] border border-border bg-background/45 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                      Current Slice
+                    </p>
+                    <p className="mt-2 text-sm text-foreground/72">{activeWorkspaceSummary}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {workspaceLinkFeedback ? (
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/48">
+                        {workspaceLinkFeedback}
+                      </span>
+                    ) : null}
+                    <button
+                      className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() => void copyWorkspaceLink()}
+                      type="button"
+                    >
+                      Copy Link
+                    </button>
+                    {!isDefaultWorkspaceView ? (
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                        onClick={resetWorkspaceView}
+                        type="button"
+                      >
+                        Reset View
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 {[
                   ["default", "Default"],
@@ -1585,6 +2227,84 @@ export function SellerWorkspace() {
                 ) : (
                   <p className="text-sm text-foreground/68">
                     Buyer requests and updates will show up here.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Recent Reviews
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    {formatSellerRating(
+                      workspace.seller.average_rating,
+                      workspace.seller.review_count,
+                    )}
+                  </p>
+                </div>
+                <span className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+                  {workspace.reviews.length} visible
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {workspace.reviews.length > 0 ? (
+                  workspace.reviews.map((review) => (
+                    <article
+                      key={review.id}
+                      className="rounded-[1.1rem] border border-border bg-background/35 px-4 py-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="rounded-full bg-[#f3e1bd] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#7c3a10]">
+                          {review.rating}/5
+                        </span>
+                        <span className="text-xs text-foreground/52">
+                          {new Date(review.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-foreground/72">
+                        {review.comment ?? "Buyer left a rating without a written comment."}
+                      </p>
+                      <div className="mt-4 rounded-[1rem] border border-border bg-white/75 px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/48">
+                            Seller Response
+                          </p>
+                          {review.seller_responded_at ? (
+                            <span className="text-[10px] uppercase tracking-[0.12em] text-foreground/45">
+                              {new Date(review.seller_responded_at).toLocaleDateString()}
+                            </span>
+                          ) : null}
+                        </div>
+                        <textarea
+                          className="mt-3 min-h-[88px] w-full rounded-[0.9rem] border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent"
+                          onChange={(event) => updateReviewResponseDraft(review.id, event.target.value)}
+                          placeholder="Reply to this buyer review with context or thanks."
+                          value={reviewResponseDrafts[review.id] ?? ""}
+                        />
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                          <p className="text-xs text-foreground/52">
+                            Public storefronts will show the latest seller response.
+                          </p>
+                          <button
+                            className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-55"
+                            disabled={reviewResponseLoading === review.id}
+                            onClick={() => saveReviewResponse(review)}
+                            type="button"
+                          >
+                            {reviewResponseLoading === review.id ? "Saving..." : "Save Response"}
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <p className="text-sm leading-6 text-foreground/68">
+                    Completed orders and bookings can now turn into reviews. They will show up here
+                    as buyers submit them.
                   </p>
                 )}
               </div>
@@ -1959,6 +2679,9 @@ export function SellerWorkspace() {
                             <span>{formatCurrency(listing.price_cents, listing.currency)}</span>
                             <span>Slug: {listing.slug}</span>
                             <span>
+                              Images: {listing.images?.length ?? 0}
+                            </span>
+                            <span>
                               Fulfillment:
                               {" "}
                               {[
@@ -2102,6 +2825,115 @@ export function SellerWorkspace() {
                             </label>
                           ))}
                         </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-border bg-background/40 px-4 py-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              Listing Images
+                            </p>
+                            <p className="mt-2 text-sm text-foreground/68">
+                              Add external image URLs now. Storage uploads can come later without changing the gallery model.
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
+                            {listing.images?.length ?? 0} image{(listing.images?.length ?? 0) === 1 ? "" : "s"}
+                          </span>
+                        </div>
+
+                        {(listing.images?.length ?? 0) > 0 ? (
+                          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            {(listing.images ?? []).map((image) => (
+                              <div
+                                key={image.id}
+                                className="overflow-hidden rounded-2xl border border-border bg-white"
+                              >
+                                <Image
+                                  alt={image.alt_text ?? listing.title}
+                                  className="h-32 w-full object-cover"
+                                  height={128}
+                                  unoptimized
+                                  src={image.image_url}
+                                  width={320}
+                                />
+                                <div className="space-y-2 px-3 py-3">
+                                  <p className="text-xs text-foreground/64">
+                                    {image.alt_text ?? listing.title}
+                                  </p>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                                    disabled={listingImageActionLoading === image.id}
+                                    onClick={() => removeListingImage(listing, image)}
+                                    type="button"
+                                  >
+                                    {listingImageActionLoading === image.id ? "Removing..." : "Remove"}
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-4 rounded-2xl border border-dashed border-border px-4 py-4 text-sm text-foreground/60">
+                            No listing images yet. Add one below to make the buyer feed feel real.
+                          </div>
+                        )}
+
+                        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]">
+                          <label className="flex items-center justify-center rounded-2xl border border-dashed border-border bg-white px-4 py-3 text-sm text-foreground/68 transition hover:border-accent hover:text-accent">
+                            <input
+                              accept="image/png,image/jpeg,image/webp"
+                              className="hidden"
+                              disabled={listingImageActionLoading === `${listing.id}:upload`}
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (!file) {
+                                  return;
+                                }
+
+                                void uploadListingImageFile(listing, file);
+                                event.currentTarget.value = "";
+                              }}
+                              type="file"
+                            />
+                            {listingImageActionLoading === `${listing.id}:upload`
+                              ? "Uploading image..."
+                              : "Choose image file"}
+                          </label>
+                          <input
+                            className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                            placeholder="https://images.example.com/listing.jpg"
+                            value={listingImageDrafts[listing.id]?.image_url ?? ""}
+                            onChange={(event) =>
+                              updateListingImageDraft(listing.id, (current) => ({
+                                ...current,
+                                image_url: event.target.value,
+                              }))
+                            }
+                          />
+                          <input
+                            className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                            placeholder="Alt text"
+                            value={listingImageDrafts[listing.id]?.alt_text ?? ""}
+                            onChange={(event) =>
+                              updateListingImageDraft(listing.id, (current) => ({
+                                ...current,
+                                alt_text: event.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            className="rounded-full bg-foreground px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90 disabled:opacity-45"
+                            disabled={listingImageActionLoading === `${listing.id}:add`}
+                            onClick={() => addListingImage(listing)}
+                            type="button"
+                          >
+                            {listingImageActionLoading === `${listing.id}:add` ? "Adding..." : "Add Image"}
+                          </button>
+                        </div>
+                        <p className="mt-3 text-xs text-foreground/52">
+                          Upload a local image file or keep using an external URL for seeded content and quick demos.
+                        </p>
                       </div>
 
                       <div className="mt-4 flex flex-wrap gap-2">
@@ -2345,6 +3177,40 @@ export function SellerWorkspace() {
                     </label>
                     <label className="min-w-40 flex-1">
                       <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Discovery
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                        value={activityDiscoveryFilter}
+                        onChange={(event) =>
+                          setActivityDiscoveryFilter(
+                            event.target.value as "all" | "local" | "search" | "price",
+                          )
+                        }
+                      >
+                        <option value="all">All discovery</option>
+                        <option value="local">Local match</option>
+                        <option value="search">Search-led</option>
+                        <option value="price">Price-led</option>
+                      </select>
+                    </label>
+                    <label className="min-w-40 flex-1">
+                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                        Activity Window
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                        value={activityRecencyFilter}
+                        onChange={(event) =>
+                          setActivityRecencyFilter(event.target.value as "7d" | "all")
+                        }
+                      >
+                        <option value="all">All time</option>
+                        <option value="7d">Last 7 days</option>
+                      </select>
+                    </label>
+                    <label className="min-w-40 flex-1">
+                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
                         Context
                       </span>
                       <select
@@ -2383,6 +3249,11 @@ export function SellerWorkspace() {
                           <p className="mt-2 text-sm text-foreground/72">
                             {focusedOrder.notes ?? "No buyer notes"}
                           </p>
+                          {formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context) ? (
+                            <div className="mt-3 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
+                              {formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context)}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="text-right">
                           <p className="text-sm font-semibold text-foreground">
@@ -2407,6 +3278,11 @@ export function SellerWorkspace() {
                             <p>Order ID: {focusedOrder.id}</p>
                             <p>Fulfillment: {focusedOrder.fulfillment}</p>
                             <p>Items: {(focusedOrder.items ?? []).length}</p>
+                            <p>
+                              Buyer discovery:{" "}
+                              {formatBuyerBrowseContextLabel(focusedOrder.buyer_browse_context) ??
+                                "No browse context"}
+                            </p>
                             <p>Seller note: {focusedOrder.seller_response_note ?? "No seller note yet"}</p>
                           </div>
                         </div>
@@ -2476,6 +3352,11 @@ export function SellerWorkspace() {
                           <p className="mt-2 text-sm text-foreground/72">
                             {focusedBooking.listing_title ?? focusedBooking.listing_id}
                           </p>
+                          {formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context) ? (
+                            <div className="mt-3 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
+                              {formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context)}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="text-right">
                           <p className="text-sm font-semibold text-foreground">
@@ -2501,6 +3382,11 @@ export function SellerWorkspace() {
                             <p>Type: {focusedBooking.listing_type ?? "Not specified"}</p>
                             <p>Starts: {new Date(focusedBooking.scheduled_start).toLocaleString()}</p>
                             <p>Ends: {new Date(focusedBooking.scheduled_end).toLocaleString()}</p>
+                            <p>
+                              Buyer discovery:{" "}
+                              {formatBuyerBrowseContextLabel(focusedBooking.buyer_browse_context) ??
+                                "No browse context"}
+                            </p>
                             <p>Seller note: {focusedBooking.seller_response_note ?? "No seller note yet"}</p>
                           </div>
                         </div>
@@ -2575,6 +3461,11 @@ export function SellerWorkspace() {
                           <p className="mt-1 text-sm text-foreground/68">
                             {order.notes ?? "No buyer notes"}
                           </p>
+                          {formatBuyerBrowseContextLabel(order.buyer_browse_context) ? (
+                            <div className="mt-2 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
+                              {formatBuyerBrowseContextLabel(order.buyer_browse_context)}
+                            </div>
+                          ) : null}
                           {order.seller_response_note ? (
                             <p className="mt-2 text-sm text-olive">
                               Seller note: {order.seller_response_note}
@@ -2687,6 +3578,11 @@ export function SellerWorkspace() {
                           <p className="mt-1 text-sm text-foreground/68">
                             {booking.notes ?? "No buyer notes"}
                           </p>
+                          {formatBuyerBrowseContextLabel(booking.buyer_browse_context) ? (
+                            <div className="mt-2 inline-flex rounded-full border border-[#d7c5a6] bg-[#f6eee2] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7c4b20]">
+                              {formatBuyerBrowseContextLabel(booking.buyer_browse_context)}
+                            </div>
+                          ) : null}
                           {booking.seller_response_note ? (
                             <p className="mt-2 text-sm text-olive">
                               Seller note: {booking.seller_response_note}
@@ -2825,14 +3721,46 @@ export function SellerWorkspace() {
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4">
+function MiniStat({
+  label,
+  value,
+  accent = "default",
+  onClick,
+}: {
+  label: string;
+  value: string;
+  accent?: "default" | "amber" | "olive" | "sky" | "rose";
+  onClick?: () => void;
+}) {
+  const accentStyles = {
+    default: "border-border bg-white",
+    amber: "border-amber-200 bg-amber-50/70",
+    olive: "border-lime-200 bg-lime-50/70",
+    sky: "border-sky-200 bg-sky-50/70",
+    rose: "border-rose-200 bg-rose-50/70",
+  } satisfies Record<string, string>;
+
+  const content = (
+    <div className={`rounded-[1.3rem] border px-4 py-4 ${accentStyles[accent]}`}>
       <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
         {label}
       </p>
       <p className="mt-2 text-2xl font-semibold tracking-[-0.04em]">{value}</p>
     </div>
+  );
+
+  if (!onClick) {
+    return content;
+  }
+
+  return (
+    <button
+      className="text-left transition hover:-translate-y-0.5"
+      onClick={onClick}
+      type="button"
+    >
+      {content}
+    </button>
   );
 }
 

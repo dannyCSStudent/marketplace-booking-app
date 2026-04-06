@@ -9,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-type HttpMethod = "get" | "post" | "patch";
+type HttpMethod = "get" | "post" | "patch" | "delete";
 type KnownPath = keyof ApiOperations;
 
 type PathsForMethod<Method extends HttpMethod> = {
@@ -23,16 +23,107 @@ type RequestBodyFor<Path extends KnownPath, Method extends keyof ApiOperations[P
   ApiOperations[Path][Method] extends { requestBody: infer Body } ? Body : never;
 
 export type Listing = ApiSchemaMap["ListingRead"];
+export type ListingImage = ApiSchemaMap["ListingImageRead"];
 export type ListingResponse = ApiSchemaMap["ListingListResponse"];
 export type Booking = ApiSchemaMap["BookingRead"];
 export type Order = ApiSchemaMap["OrderRead"];
+export type BookingAdmin = ApiSchemaMap["BookingAdminRead"] & {
+  admin_history?: Array<{
+    id: string;
+    actor_user_id: string;
+    action: string;
+    note?: string | null;
+    created_at: string;
+  }>;
+};
+export type OrderAdmin = ApiSchemaMap["OrderAdminRead"] & {
+  admin_history?: Array<{
+    id: string;
+    actor_user_id: string;
+    action: string;
+    note?: string | null;
+    created_at: string;
+  }>;
+};
 export type Profile = ApiSchemaMap["ProfileRead"];
+export type ReviewRead = {
+  id: string;
+  rating: number;
+  comment?: string | null;
+  seller_response?: string | null;
+  seller_responded_at?: string | null;
+  is_hidden?: boolean;
+  hidden_at?: string | null;
+  created_at: string;
+};
+export type ReviewCreateInput = {
+  rating: number;
+  comment?: string | null;
+  order_id?: string | null;
+  booking_id?: string | null;
+};
+export type ReviewSellerResponseUpdateInput = {
+  seller_response?: string | null;
+};
+export type ReviewReportCreateInput = {
+  reason: string;
+  notes?: string | null;
+};
+export type ReviewReportRead = {
+  id: string;
+  review_id: string;
+  reporter_id: string;
+  reason: string;
+  notes?: string | null;
+  status: string;
+  created_at: string;
+};
+export type ReviewModerationItem = {
+  id: string;
+  review_id: string;
+  reporter_id: string;
+  seller_id?: string | null;
+  reason: string;
+  notes?: string | null;
+  status: string;
+  moderator_note?: string | null;
+  resolution_reason?: string | null;
+  assignee_user_id?: string | null;
+  assigned_at?: string | null;
+  is_escalated?: boolean;
+  escalated_at?: string | null;
+  created_at: string;
+  review: ReviewRead;
+  seller_display_name?: string | null;
+  seller_slug?: string | null;
+  history?: Array<{
+    id: string;
+    actor_user_id: string;
+    action: string;
+    note?: string | null;
+    created_at: string;
+  }>;
+};
+export type ReviewVisibilityUpdateInput = {
+  is_hidden: boolean;
+  report_id?: string | null;
+};
+export type ReviewReportStatusUpdateInput = {
+  status: string;
+  moderator_note?: string | null;
+  resolution_reason?: string | null;
+};
+export type ReviewLookup = {
+  review: ReviewRead | null;
+};
 export type SellerProfile = ApiSchemaMap["SellerRead"];
 export type ProfilePayload = ApiSchemaMap["ProfileCreate"];
 export type ProfileUpdateInput = ApiSchemaMap["ProfileUpdate"];
 export type BookingCreateInput = ApiSchemaMap["BookingCreate"];
 export type BookingStatusUpdateInput = ApiSchemaMap["BookingStatusUpdate"];
 export type ListingCreateInput = ApiSchemaMap["ListingCreate"];
+export type ListingImageCreateInput = ApiSchemaMap["ListingImageCreate"];
+export type ListingImageUploadCreateInput = ApiSchemaMap["ListingImageUploadCreate"];
 export type ListingUpdateInput = ApiSchemaMap["ListingUpdate"];
 export type OrderCreateInput = ApiSchemaMap["OrderCreate"];
 export type OrderStatusUpdateInput = ApiSchemaMap["OrderStatusUpdate"];
@@ -58,7 +149,21 @@ export type SellerWorkspaceData = {
   listings: Listing[];
   orders: Order[];
   bookings: Booking[];
+  reviews: ReviewRead[];
 };
+export type AdminUser = ApiSchemaMap["AdminUserRead"];
+export type AdminTransactionsData = {
+  orders: OrderAdmin[];
+  bookings: BookingAdmin[];
+  admins: AdminUser[];
+  deliveries: NotificationDelivery[];
+};
+export type AdminDeliveriesData = {
+  admins: AdminUser[];
+  deliveries: NotificationDelivery[];
+};
+export type OrderAdminSupportUpdateInput = ApiSchemaMap["OrderAdminSupportUpdate"];
+export type BookingAdminSupportUpdateInput = ApiSchemaMap["BookingAdminSupportUpdate"];
 export type NotificationAudience = "buyer" | "seller";
 export type NotificationItem = {
   id: string;
@@ -74,7 +179,7 @@ export type NotificationItem = {
 export type NotificationDelivery = ApiSchemaMap["NotificationDeliveryRead"];
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   accessToken?: string;
   body?: unknown;
   cache?: RequestCache;
@@ -91,8 +196,14 @@ export function authHeaders(accessToken: string) {
 
 export const apiRoutes = {
   sellerBySlug: (slug: string) => `/sellers/${slug}`,
+  sellerReviewsBySlug: (slug: string) => `/sellers/${slug}/reviews`,
+  myReviewLookup: (query: string) => `/reviews/me/lookup?${query}`,
+  reviewSellerResponse: (reviewId: string) => `/reviews/${reviewId}/seller-response`,
+  reviewReport: (reviewId: string) => `/reviews/${reviewId}/report`,
+  reviewVisibility: (reviewId: string) => `/reviews/${reviewId}/visibility`,
   listingById: (listingId: string) => `/listings/${listingId}`,
   listingImages: (listingId: string) => `/listings/${listingId}/images`,
+  listingImageUpload: (listingId: string) => `/listings/${listingId}/images/upload`,
   orderById: (orderId: string) => `/orders/${orderId}`,
   bookingById: (bookingId: string) => `/bookings/${bookingId}`,
 } as const;
@@ -168,8 +279,36 @@ export function createApiClient(baseUrl: string) {
     return request<T>(path, { ...options, method: "PATCH", body });
   }
 
+  function del<Path extends PathsForMethod<"delete">>(
+    path: Path,
+    options?: Omit<RequestOptions, "method" | "body">,
+  ): Promise<ResponseFor<Path, "delete">>;
+  function del<T>(path: string, options?: Omit<RequestOptions, "method" | "body">): Promise<T>;
+  function del<T>(path: string, options?: Omit<RequestOptions, "method" | "body">) {
+    return request<T>(path, { ...options, method: "DELETE" });
+  }
+
   function getSellerBySlug(slug: string, options?: RequestConfig) {
     return get<SellerProfile>(apiRoutes.sellerBySlug(slug), options);
+  }
+
+  function getSellerReviewsBySlug(slug: string, options?: RequestConfig) {
+    return get<ReviewRead[]>(apiRoutes.sellerReviewsBySlug(slug), options);
+  }
+
+  function getMyReviewLookup(
+    params: { orderId?: string; bookingId?: string },
+    accessToken: string,
+  ) {
+    const query = new URLSearchParams();
+    if (params.orderId) {
+      query.set("order_id", params.orderId);
+    }
+    if (params.bookingId) {
+      query.set("booking_id", params.bookingId);
+    }
+
+    return get<ReviewLookup>(apiRoutes.myReviewLookup(query.toString()), { accessToken });
   }
 
   function getListingById(listingId: string, options?: RequestConfig) {
@@ -204,6 +343,22 @@ export function createApiClient(baseUrl: string) {
     return post<Profile>("/profiles/me", body, options);
   }
 
+  function updateAdminOrderSupport(
+    orderId: string,
+    body: OrderAdminSupportUpdateInput,
+    options: RequestConfig,
+  ) {
+    return patch<OrderAdmin>(`/orders/${orderId}/admin-support`, body, options);
+  }
+
+  function updateAdminBookingSupport(
+    bookingId: string,
+    body: BookingAdminSupportUpdateInput,
+    options: RequestConfig,
+  ) {
+    return patch<BookingAdmin>(`/bookings/${bookingId}/admin-support`, body, options);
+  }
+
   function updateProfile(body: ProfileUpdateInput, options: RequestConfig) {
     return patch<Profile>("/profiles/me", body, options);
   }
@@ -224,12 +379,71 @@ export function createApiClient(baseUrl: string) {
     return patch<Listing>(apiRoutes.listingById(listingId), body, options);
   }
 
+  function addListingImage(
+    listingId: string,
+    body: ListingImageCreateInput,
+    options: RequestConfig,
+  ) {
+    return post<ListingImage>(apiRoutes.listingImages(listingId), body, options);
+  }
+
+  function uploadListingImage(
+    listingId: string,
+    body: ListingImageUploadCreateInput,
+    options: RequestConfig,
+  ) {
+    return post<ListingImage>(apiRoutes.listingImageUpload(listingId), body, options);
+  }
+
+  function deleteListingImage(
+    listingId: string,
+    imageId: string,
+    options: RequestConfig,
+  ) {
+    return del<ListingImage>(`${apiRoutes.listingImages(listingId)}/${imageId}`, options);
+  }
+
   function createOrder(body: OrderCreateInput, options: RequestConfig) {
     return post<Order>("/orders", body, options);
   }
 
   function createBooking(body: BookingCreateInput, options: RequestConfig) {
     return post<Booking>("/bookings", body, options);
+  }
+
+  function createReview(body: ReviewCreateInput, options: RequestConfig) {
+    return post<ReviewRead>("/reviews", body, options);
+  }
+
+  function updateReviewSellerResponse(
+    reviewId: string,
+    body: ReviewSellerResponseUpdateInput,
+    options: RequestConfig,
+  ) {
+    return patch<ReviewRead>(apiRoutes.reviewSellerResponse(reviewId), body, options);
+  }
+
+  function createReviewReport(
+    reviewId: string,
+    body: ReviewReportCreateInput,
+    options: RequestConfig,
+  ) {
+    return post<ReviewReportRead>(apiRoutes.reviewReport(reviewId), body, options);
+  }
+
+  function listAdminReviewReports(
+    accessToken: string,
+    status: "all" | "open" | "triaged" | "resolved" = "all",
+  ) {
+    return get<ReviewModerationItem[]>(`/reviews/reports?status=${status}`, { accessToken });
+  }
+
+  function updateReviewVisibility(
+    reviewId: string,
+    body: ReviewVisibilityUpdateInput,
+    options: RequestConfig,
+  ) {
+    return patch<ReviewRead>(apiRoutes.reviewVisibility(reviewId), body, options);
   }
 
   async function loadPublicListings(options?: RequestConfig) {
@@ -267,10 +481,11 @@ export function createApiClient(baseUrl: string) {
       return null;
     }
 
-    const [listings, orders, bookings] = await Promise.all([
+    const [listings, orders, bookings, reviews] = await Promise.all([
       get<Listing[]>("/listings/me", { accessToken }),
       get<Order[]>("/orders/seller", { accessToken }),
       get<Booking[]>("/bookings/seller", { accessToken }),
+      getSellerReviewsBySlug(seller.slug, { accessToken }).catch(() => []),
     ]);
 
     return {
@@ -278,6 +493,35 @@ export function createApiClient(baseUrl: string) {
       listings,
       orders,
       bookings,
+      reviews,
+    };
+  }
+
+  async function loadAdminTransactions(accessToken: string): Promise<AdminTransactionsData> {
+    const [orders, bookings, admins, deliveries] = await Promise.all([
+      get<OrderAdmin[]>("/orders/admin", { accessToken }),
+      get<BookingAdmin[]>("/bookings/admin", { accessToken }),
+      get<AdminUser[]>("/admin/users", { accessToken }),
+      get<NotificationDelivery[]>("/notifications/admin", { accessToken }),
+    ]);
+
+    return {
+      orders,
+      bookings,
+      admins,
+      deliveries,
+    };
+  }
+
+  async function loadAdminNotificationDeliveries(accessToken: string): Promise<AdminDeliveriesData> {
+    const [admins, deliveries] = await Promise.all([
+      get<AdminUser[]>("/admin/users", { accessToken }),
+      get<NotificationDelivery[]>("/notifications/admin", { accessToken }),
+    ]);
+
+    return {
+      admins,
+      deliveries,
     };
   }
 
@@ -287,6 +531,25 @@ export function createApiClient(baseUrl: string) {
 
   function retryNotificationDelivery(deliveryId: string, accessToken: string) {
     return post<NotificationDelivery>(`/notifications/${deliveryId}/retry`, undefined, {
+      accessToken,
+    });
+  }
+
+  function retryAdminNotificationDelivery(deliveryId: string, accessToken: string) {
+    return post<NotificationDelivery>(`/notifications/admin/${deliveryId}/retry`, undefined, {
+      accessToken,
+    });
+  }
+
+  function bulkRetryAdminNotificationDeliveries(
+    deliveryIds: string[],
+    accessToken: string,
+    executionMode: "best_effort" | "atomic" = "best_effort",
+  ) {
+    return post<NotificationDeliveryBulkRetryResult>("/notifications/admin/bulk-retry", {
+      delivery_ids: deliveryIds,
+      execution_mode: executionMode,
+    } satisfies NotificationDeliveryBulkRetryRequest, {
       accessToken,
     });
   }
@@ -323,23 +586,39 @@ export function createApiClient(baseUrl: string) {
     post,
     patch,
     getSellerBySlug,
+    getSellerReviewsBySlug,
+    getMyReviewLookup,
     getListingById,
     getOrderById,
     getBookingById,
     updateOrderStatus,
     updateBookingStatus,
+    updateAdminOrderSupport,
+    updateAdminBookingSupport,
     createProfile,
     updateProfile,
     createSellerProfile,
     createListing,
     updateListing,
+    addListingImage,
+    uploadListingImage,
+    deleteListingImage,
     createOrder,
     createBooking,
+    createReview,
+    createReviewReport,
+    listAdminReviewReports,
+    updateReviewSellerResponse,
+    updateReviewVisibility,
     loadPublicListings,
     loadBuyerDashboard,
     loadSellerWorkspace,
+    loadAdminTransactions,
+    loadAdminNotificationDeliveries,
     loadMyNotificationDeliveries,
     retryNotificationDelivery,
+    retryAdminNotificationDelivery,
+    bulkRetryAdminNotificationDeliveries,
     bulkRetryNotificationDeliveries,
     bulkUpdateOrderStatuses,
     bulkUpdateBookingStatuses,

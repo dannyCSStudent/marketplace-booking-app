@@ -1,9 +1,14 @@
+from datetime import datetime, timezone
+
 from fastapi import HTTPException, status
 
 from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
 from app.schemas.orders import (
+    OrderAdminEventRead,
+    OrderAdminRead,
+    OrderAdminSupportUpdate,
     OrderBulkActionFailure,
     OrderCreate,
     OrderBulkStatusUpdateRequest,
@@ -23,13 +28,17 @@ FULFILLMENT_FIELD_BY_METHOD = {
     "shipping": "shipping_enabled",
 }
 ORDER_SELECT = (
-    "id,buyer_id,seller_id,status,fulfillment,subtotal_cents,total_cents,currency,notes,seller_response_note,"
+    "id,buyer_id,seller_id,status,fulfillment,subtotal_cents,total_cents,currency,notes,buyer_browse_context,seller_response_note,"
     "order_items(id,listing_id,quantity,unit_price_cents,total_price_cents,listings(title)),"
     "order_status_events(id,status,actor_role,note,created_at)"
 )
+ORDER_ADMIN_SELECT = (
+    f"{ORDER_SELECT},admin_note,admin_handoff_note,admin_assignee_user_id,admin_assigned_at,admin_is_escalated,admin_escalated_at,"
+    "order_admin_events(id,actor_user_id,action,note,created_at)"
+)
 
 
-def _serialize_order(row: dict) -> OrderRead:
+def _serialize_order(row: dict, *, include_admin: bool = False) -> OrderRead | OrderAdminRead:
     items = [
         OrderItemRead(
             id=item["id"],
@@ -55,7 +64,7 @@ def _serialize_order(row: dict) -> OrderRead:
             reverse=True,
         )
     ]
-    return OrderRead(
+    base_payload = dict(
         id=row["id"],
         buyer_id=row["buyer_id"],
         seller_id=row["seller_id"],
@@ -65,10 +74,38 @@ def _serialize_order(row: dict) -> OrderRead:
         total_cents=row["total_cents"],
         currency=row.get("currency") or "USD",
         notes=row.get("notes"),
+        buyer_browse_context=row.get("buyer_browse_context"),
         seller_response_note=row.get("seller_response_note"),
         items=items,
         status_history=status_history,
     )
+    if include_admin:
+        admin_history = [
+            OrderAdminEventRead(
+                id=event["id"],
+                actor_user_id=event["actor_user_id"],
+                action=event["action"],
+                note=event.get("note"),
+                created_at=event["created_at"],
+            )
+            for event in sorted(
+                row.get("order_admin_events", []),
+                key=lambda event: event.get("created_at") or "",
+                reverse=True,
+            )
+        ]
+        return OrderAdminRead(
+            **base_payload,
+            admin_note=row.get("admin_note"),
+            admin_handoff_note=row.get("admin_handoff_note"),
+            admin_assignee_user_id=row.get("admin_assignee_user_id"),
+            admin_assigned_at=row.get("admin_assigned_at"),
+            admin_is_escalated=bool(row.get("admin_is_escalated", False)),
+            admin_escalated_at=row.get("admin_escalated_at"),
+            admin_history=admin_history,
+        )
+
+    return OrderRead(**base_payload)
 
 
 def _get_order_by_id(*, order_id: str, access_token: str) -> OrderRead:
@@ -171,6 +208,132 @@ def get_my_orders(current_user: CurrentUser) -> list[OrderRead]:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return [_serialize_order(row) for row in rows]
+
+
+def get_order_by_id_for_user(current_user: CurrentUser, order_id: str) -> OrderRead:
+    return _get_order_by_id(order_id=order_id, access_token=current_user.access_token)
+
+
+def get_admin_orders() -> list[OrderAdminRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "orders",
+            query={
+                "select": ORDER_ADMIN_SELECT,
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [_serialize_order(row, include_admin=True) for row in rows]
+
+
+def _insert_order_admin_events(
+    *,
+    order_id: str,
+    actor_user_id: str,
+    events: list[dict[str, str | None]],
+) -> None:
+    if not events:
+        return
+
+    supabase = get_supabase_client()
+    try:
+        supabase.insert(
+            "order_admin_events",
+            [
+                {
+                    "order_id": order_id,
+                    "actor_user_id": actor_user_id,
+                    "action": event["action"],
+                    "note": event.get("note"),
+                }
+                for event in events
+            ],
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def update_admin_order_support(
+    order_id: str,
+    payload: OrderAdminSupportUpdate,
+    *,
+    actor_user_id: str,
+) -> OrderAdminRead:
+    supabase = get_supabase_client()
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No admin support changes provided")
+
+    try:
+        current_row = supabase.select(
+            "orders",
+            query={
+                "select": ORDER_ADMIN_SELECT,
+                "id": f"eq.{order_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    admin_events: list[dict[str, str | None]] = []
+    if "admin_note" in updates and updates["admin_note"] != current_row.get("admin_note"):
+        admin_events.append({"action": "admin_note_updated", "note": updates["admin_note"]})
+    if "admin_handoff_note" in updates and updates["admin_handoff_note"] != current_row.get("admin_handoff_note"):
+        admin_events.append({"action": "handoff_note_updated", "note": updates["admin_handoff_note"]})
+
+    if "admin_assignee_user_id" in updates:
+        if updates["admin_assignee_user_id"] != current_row.get("admin_assignee_user_id"):
+            admin_events.append(
+                {
+                    "action": "assignment_set" if updates["admin_assignee_user_id"] else "assignment_cleared",
+                    "note": updates["admin_assignee_user_id"],
+                }
+            )
+        updates["admin_assigned_at"] = (
+            datetime.now(timezone.utc).isoformat() if updates["admin_assignee_user_id"] else None
+        )
+
+    if "admin_is_escalated" in updates:
+        if bool(updates["admin_is_escalated"]) != bool(current_row.get("admin_is_escalated", False)):
+            admin_events.append(
+                {
+                    "action": "escalation_enabled" if updates["admin_is_escalated"] else "escalation_cleared",
+                    "note": None,
+                }
+            )
+        updates["admin_escalated_at"] = (
+            datetime.now(timezone.utc).isoformat() if updates["admin_is_escalated"] else None
+        )
+
+    try:
+        rows = supabase.update(
+            "orders",
+            updates,
+            query={
+                "id": f"eq.{order_id}",
+                "select": ORDER_ADMIN_SELECT,
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    _insert_order_admin_events(order_id=order_id, actor_user_id=actor_user_id, events=admin_events)
+    return _serialize_order(rows[0], include_admin=True)
+
 
 def get_seller_orders(current_user: CurrentUser) -> list[OrderRead]:
     supabase = get_supabase_client()
@@ -282,6 +445,7 @@ def create_order(current_user: CurrentUser, payload: OrderCreate) -> OrderRead:
                 "total_cents": subtotal,
                 "currency": currency,
                 "notes": payload.notes,
+                "buyer_browse_context": payload.buyer_browse_context,
             },
             access_token=current_user.access_token,
         )

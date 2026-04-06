@@ -24,7 +24,10 @@ class SellerRead(BaseModel):
     display_name: str
     slug: str
     bio: str | None = None
+    is_verified: bool = False
     city: str | None = None
     state: str | None = None
     country: str | None = None
     accepts_custom_orders: bool = True
+    average_rating: float = 0
+    review_count: int = 0

@@ -3,7 +3,13 @@ from fastapi import HTTPException, status
 from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
+from app.schemas.reviews import ReviewRead
 from app.schemas.sellers import SellerCreate, SellerRead, SellerUpdate
+
+SELLER_SELECT = (
+    "id,user_id,display_name,slug,bio,is_verified,accepts_custom_orders,"
+    "average_rating,review_count,city,state,country"
+)
 
 def get_my_seller(current_user: CurrentUser) -> SellerRead:
     supabase = get_supabase_client()
@@ -11,7 +17,7 @@ def get_my_seller(current_user: CurrentUser) -> SellerRead:
         row = supabase.select(
             "seller_profiles",
             query={
-                "select": "id,user_id,display_name,slug,bio,city,state,country,accepts_custom_orders",
+                "select": SELLER_SELECT,
                 "user_id": f"eq.{current_user.id}",
             },
             access_token=current_user.access_token,
@@ -58,7 +64,7 @@ def update_my_seller(current_user: CurrentUser, payload: SellerUpdate) -> Seller
             changes,
             query={
                 "user_id": f"eq.{current_user.id}",
-                "select": "id,user_id,display_name,slug,bio,city,state,country,accepts_custom_orders",
+                "select": SELLER_SELECT,
             },
             access_token=current_user.access_token,
         )
@@ -76,7 +82,7 @@ def get_seller_by_slug(slug: str) -> SellerRead:
         row = supabase.select(
             "seller_profiles",
             query={
-                "select": "id,user_id,display_name,slug,bio,city,state,country,accepts_custom_orders",
+                "select": SELLER_SELECT,
                 "slug": f"eq.{slug}",
             },
             use_service_role=True,
@@ -88,3 +94,25 @@ def get_seller_by_slug(slug: str) -> SellerRead:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return SellerRead(**row)
+
+
+def get_seller_reviews_by_slug(slug: str, limit: int = 5) -> list[ReviewRead]:
+    supabase = get_supabase_client()
+    seller = get_seller_by_slug(slug)
+
+    try:
+        rows = supabase.select(
+            "reviews",
+            query={
+                "select": "id,rating,comment,seller_response,seller_responded_at,is_hidden,hidden_at,created_at",
+                "seller_id": f"eq.{seller.id}",
+                "is_hidden": "eq.false",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [ReviewRead(**row) for row in rows]

@@ -1,6 +1,54 @@
 // This file is auto-generated from docs/openapi.json.
 // Do not edit it by hand. Run `pnpm --filter api openapi:types`.
 
+export type AdminUserRead = {
+    id: string;
+    full_name?: string | null;
+    username?: string | null;
+    email?: string | null;
+    role?: string | null;
+  };
+
+export type BookingAdminEventRead = {
+    id: string;
+    actor_user_id: string;
+    action: string;
+    note?: string | null;
+    created_at: string;
+  };
+
+export type BookingAdminRead = {
+    id: string;
+    buyer_id: string;
+    seller_id: string;
+    listing_id: string;
+    status: string;
+    scheduled_start: string;
+    scheduled_end: string;
+    total_cents?: number | null;
+    currency?: string;
+    notes?: string | null;
+    buyer_browse_context?: string | null;
+    seller_response_note?: string | null;
+    listing_title?: string | null;
+    listing_type?: string | null;
+    status_history?: BookingStatusEventRead[];
+    admin_note?: string | null;
+    admin_handoff_note?: string | null;
+    admin_assignee_user_id?: string | null;
+    admin_assigned_at?: string | null;
+    admin_is_escalated?: boolean;
+    admin_escalated_at?: string | null;
+    admin_history?: BookingAdminEventRead[];
+  };
+
+export type BookingAdminSupportUpdate = {
+    admin_note?: string | null;
+    admin_handoff_note?: string | null;
+    admin_assignee_user_id?: string | null;
+    admin_is_escalated?: boolean | null;
+  };
+
 export type BookingBulkActionFailure = {
     id: string;
     detail: string;
@@ -28,6 +76,7 @@ export type BookingCreate = {
     scheduled_start: string;
     scheduled_end: string;
     notes?: string | null;
+    buyer_browse_context?: string | null;
   };
 
 export type BookingRead = {
@@ -41,6 +90,7 @@ export type BookingRead = {
     total_cents?: number | null;
     currency?: string;
     notes?: string | null;
+    buyer_browse_context?: string | null;
     seller_response_note?: string | null;
     listing_title?: string | null;
     listing_type?: string | null;
@@ -91,7 +141,23 @@ export type ListingCreate = {
 export type ListingImageCreate = {
     image_url: string;
     alt_text?: string | null;
+    sort_order?: number | null;
+  };
+
+export type ListingImageRead = {
+    id: string;
+    listing_id: string;
+    image_url: string;
+    alt_text?: string | null;
     sort_order?: number;
+    created_at: string;
+  };
+
+export type ListingImageUploadCreate = {
+    filename: string;
+    content_type: string;
+    base64_data: string;
+    alt_text?: string | null;
   };
 
 export type ListingListResponse = {
@@ -122,6 +188,7 @@ export type ListingRead = {
     delivery_enabled?: boolean;
     shipping_enabled?: boolean;
     lead_time_hours?: number | null;
+    images?: ListingImageRead[];
     created_at: string;
     updated_at: string;
   };
@@ -181,6 +248,44 @@ export type NotificationDeliveryRead = {
     created_at: string;
   };
 
+export type OrderAdminEventRead = {
+    id: string;
+    actor_user_id: string;
+    action: string;
+    note?: string | null;
+    created_at: string;
+  };
+
+export type OrderAdminRead = {
+    id: string;
+    buyer_id: string;
+    seller_id: string;
+    status: string;
+    fulfillment: string;
+    subtotal_cents: number;
+    total_cents: number;
+    currency?: string;
+    notes?: string | null;
+    buyer_browse_context?: string | null;
+    seller_response_note?: string | null;
+    items?: OrderItemRead[];
+    status_history?: OrderStatusEventRead[];
+    admin_note?: string | null;
+    admin_handoff_note?: string | null;
+    admin_assignee_user_id?: string | null;
+    admin_assigned_at?: string | null;
+    admin_is_escalated?: boolean;
+    admin_escalated_at?: string | null;
+    admin_history?: OrderAdminEventRead[];
+  };
+
+export type OrderAdminSupportUpdate = {
+    admin_note?: string | null;
+    admin_handoff_note?: string | null;
+    admin_assignee_user_id?: string | null;
+    admin_is_escalated?: boolean | null;
+  };
+
 export type OrderBulkActionFailure = {
     id: string;
     detail: string;
@@ -206,6 +311,7 @@ export type OrderCreate = {
     seller_id: string;
     fulfillment: string;
     notes?: string | null;
+    buyer_browse_context?: string | null;
     items: OrderItemCreate[];
   };
 
@@ -233,6 +339,7 @@ export type OrderRead = {
     total_cents: number;
     currency?: string;
     notes?: string | null;
+    buyer_browse_context?: string | null;
     seller_response_note?: string | null;
     items?: OrderItemRead[];
     status_history?: OrderStatusEventRead[];
@@ -291,6 +398,89 @@ export type ProfileUpdate = {
     expo_push_token?: string | null;
   };
 
+export type ReviewCreate = {
+    rating: number;
+    comment?: string | null;
+    order_id?: string | null;
+    booking_id?: string | null;
+  };
+
+export type ReviewLookup = {
+    review?: ReviewRead | null;
+  };
+
+export type ReviewModerationEventRead = {
+    id: string;
+    actor_user_id: string;
+    action: string;
+    note?: string | null;
+    created_at: string;
+  };
+
+export type ReviewModerationItem = {
+    id: string;
+    review_id: string;
+    reporter_id: string;
+    seller_id?: string | null;
+    reason: string;
+    notes?: string | null;
+    status: string;
+    moderator_note?: string | null;
+    resolution_reason?: string | null;
+    assignee_user_id?: string | null;
+    assigned_at?: string | null;
+    is_escalated?: boolean;
+    escalated_at?: string | null;
+    created_at: string;
+    review: ReviewRead;
+    seller_display_name?: string | null;
+    seller_slug?: string | null;
+    history?: ReviewModerationEventRead[];
+  };
+
+export type ReviewRead = {
+    id: string;
+    rating: number;
+    comment?: string | null;
+    seller_response?: string | null;
+    seller_responded_at?: string | null;
+    is_hidden?: boolean;
+    hidden_at?: string | null;
+    created_at: string;
+  };
+
+export type ReviewReportCreate = {
+    reason: string;
+    notes?: string | null;
+  };
+
+export type ReviewReportRead = {
+    id: string;
+    review_id: string;
+    reporter_id: string;
+    reason: string;
+    notes?: string | null;
+    status: string;
+    created_at: string;
+  };
+
+export type ReviewReportStatusUpdate = {
+    status: string;
+    moderator_note?: string | null;
+    resolution_reason?: string | null;
+    assignee_user_id?: string | null;
+    is_escalated?: boolean | null;
+  };
+
+export type ReviewSellerResponseUpdate = {
+    seller_response?: string | null;
+  };
+
+export type ReviewVisibilityUpdate = {
+    is_hidden: boolean;
+    report_id?: string | null;
+  };
+
 export type SellerCreate = {
     display_name: string;
     slug: string;
@@ -307,10 +497,13 @@ export type SellerRead = {
     display_name: string;
     slug: string;
     bio?: string | null;
+    is_verified?: boolean;
     city?: string | null;
     state?: string | null;
     country?: string | null;
     accepts_custom_orders?: boolean;
+    average_rating?: number;
+    review_count?: number;
   };
 
 export type SellerUpdate = {
@@ -332,6 +525,10 @@ export type ValidationError = {
   };
 
 export type ApiSchemaMap = {
+  AdminUserRead: AdminUserRead;
+  BookingAdminEventRead: BookingAdminEventRead;
+  BookingAdminRead: BookingAdminRead;
+  BookingAdminSupportUpdate: BookingAdminSupportUpdate;
   BookingBulkActionFailure: BookingBulkActionFailure;
   BookingBulkStatusUpdateItem: BookingBulkStatusUpdateItem;
   BookingBulkStatusUpdateRequest: BookingBulkStatusUpdateRequest;
@@ -343,6 +540,8 @@ export type ApiSchemaMap = {
   HTTPValidationError: HTTPValidationError;
   ListingCreate: ListingCreate;
   ListingImageCreate: ListingImageCreate;
+  ListingImageRead: ListingImageRead;
+  ListingImageUploadCreate: ListingImageUploadCreate;
   ListingListResponse: ListingListResponse;
   ListingRead: ListingRead;
   ListingUpdate: ListingUpdate;
@@ -350,6 +549,9 @@ export type ApiSchemaMap = {
   NotificationDeliveryBulkRetryRequest: NotificationDeliveryBulkRetryRequest;
   NotificationDeliveryBulkRetryResult: NotificationDeliveryBulkRetryResult;
   NotificationDeliveryRead: NotificationDeliveryRead;
+  OrderAdminEventRead: OrderAdminEventRead;
+  OrderAdminRead: OrderAdminRead;
+  OrderAdminSupportUpdate: OrderAdminSupportUpdate;
   OrderBulkActionFailure: OrderBulkActionFailure;
   OrderBulkStatusUpdateItem: OrderBulkStatusUpdateItem;
   OrderBulkStatusUpdateRequest: OrderBulkStatusUpdateRequest;
@@ -363,6 +565,16 @@ export type ApiSchemaMap = {
   ProfileCreate: ProfileCreate;
   ProfileRead: ProfileRead;
   ProfileUpdate: ProfileUpdate;
+  ReviewCreate: ReviewCreate;
+  ReviewLookup: ReviewLookup;
+  ReviewModerationEventRead: ReviewModerationEventRead;
+  ReviewModerationItem: ReviewModerationItem;
+  ReviewRead: ReviewRead;
+  ReviewReportCreate: ReviewReportCreate;
+  ReviewReportRead: ReviewReportRead;
+  ReviewReportStatusUpdate: ReviewReportStatusUpdate;
+  ReviewSellerResponseUpdate: ReviewSellerResponseUpdate;
+  ReviewVisibilityUpdate: ReviewVisibilityUpdate;
   SellerCreate: SellerCreate;
   SellerRead: SellerRead;
   SellerUpdate: SellerUpdate;
@@ -370,10 +582,20 @@ export type ApiSchemaMap = {
 };
 
 export type ApiOperations = {
+  "/admin/users": {
+    get: {
+      response: AdminUserRead[];
+    };
+  };
   "/bookings": {
     post: {
       requestBody: BookingCreate;
       response: BookingRead;
+    };
+  };
+  "/bookings/admin": {
+    get: {
+      response: BookingAdminRead[];
     };
   };
   "/bookings/bulk-status": {
@@ -393,9 +615,18 @@ export type ApiOperations = {
     };
   };
   "/bookings/{booking_id}": {
+    get: {
+      response: BookingRead;
+    };
     patch: {
       requestBody: BookingStatusUpdate;
       response: BookingRead;
+    };
+  };
+  "/bookings/{booking_id}/admin-support": {
+    patch: {
+      requestBody: BookingAdminSupportUpdate;
+      response: BookingAdminRead;
     };
   };
   "/health": {
@@ -431,7 +662,34 @@ export type ApiOperations = {
   "/listings/{listing_id}/images": {
     post: {
       requestBody: ListingImageCreate;
-      response: unknown;
+      response: ListingImageRead;
+    };
+  };
+  "/listings/{listing_id}/images/upload": {
+    post: {
+      requestBody: ListingImageUploadCreate;
+      response: ListingImageRead;
+    };
+  };
+  "/listings/{listing_id}/images/{image_id}": {
+    delete: {
+      response: ListingImageRead;
+    };
+  };
+  "/notifications/admin": {
+    get: {
+      response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/admin/bulk-retry": {
+    post: {
+      requestBody: NotificationDeliveryBulkRetryRequest;
+      response: NotificationDeliveryBulkRetryResult;
+    };
+  };
+  "/notifications/admin/{delivery_id}/retry": {
+    post: {
+      response: NotificationDeliveryRead;
     };
   };
   "/notifications/bulk-retry": {
@@ -456,6 +714,11 @@ export type ApiOperations = {
       response: OrderRead;
     };
   };
+  "/orders/admin": {
+    get: {
+      response: OrderAdminRead[];
+    };
+  };
   "/orders/bulk-status": {
     post: {
       requestBody: OrderBulkStatusUpdateRequest;
@@ -473,9 +736,18 @@ export type ApiOperations = {
     };
   };
   "/orders/{order_id}": {
+    get: {
+      response: OrderRead;
+    };
     patch: {
       requestBody: OrderStatusUpdate;
       response: OrderRead;
+    };
+  };
+  "/orders/{order_id}/admin-support": {
+    patch: {
+      requestBody: OrderAdminSupportUpdate;
+      response: OrderAdminRead;
     };
   };
   "/profiles/me": {
@@ -489,6 +761,46 @@ export type ApiOperations = {
     post: {
       requestBody: ProfileCreate;
       response: ProfileRead;
+    };
+  };
+  "/reviews": {
+    post: {
+      requestBody: ReviewCreate;
+      response: ReviewRead;
+    };
+  };
+  "/reviews/me/lookup": {
+    get: {
+      response: ReviewLookup;
+    };
+  };
+  "/reviews/reports": {
+    get: {
+      response: ReviewModerationItem[];
+    };
+  };
+  "/reviews/reports/{report_id}": {
+    patch: {
+      requestBody: ReviewReportStatusUpdate;
+      response: ReviewModerationItem;
+    };
+  };
+  "/reviews/{review_id}/report": {
+    post: {
+      requestBody: ReviewReportCreate;
+      response: ReviewReportRead;
+    };
+  };
+  "/reviews/{review_id}/seller-response": {
+    patch: {
+      requestBody: ReviewSellerResponseUpdate;
+      response: ReviewRead;
+    };
+  };
+  "/reviews/{review_id}/visibility": {
+    patch: {
+      requestBody: ReviewVisibilityUpdate;
+      response: ReviewRead;
     };
   };
   "/sellers": {
@@ -509,6 +821,11 @@ export type ApiOperations = {
   "/sellers/{slug}": {
     get: {
       response: SellerRead;
+    };
+  };
+  "/sellers/{slug}/reviews": {
+    get: {
+      response: ReviewRead[];
     };
   };
 };

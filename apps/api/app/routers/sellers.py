@@ -1,8 +1,15 @@
 from fastapi import APIRouter, Depends, status
 
 from app.dependencies.auth import get_current_user
+from app.schemas.reviews import ReviewRead
 from app.schemas.sellers import SellerCreate, SellerRead, SellerUpdate
-from app.services.sellers import create_seller, get_my_seller, get_seller_by_slug, update_my_seller
+from app.services.sellers import (
+    create_seller,
+    get_my_seller,
+    get_seller_by_slug,
+    get_seller_reviews_by_slug,
+    update_my_seller,
+)
 
 router = APIRouter()
 
@@ -27,3 +34,8 @@ def patch_my_seller(
 @router.get("/{slug}", response_model=SellerRead)
 def read_seller_by_slug(slug: str) -> SellerRead:
     return get_seller_by_slug(slug)
+
+
+@router.get("/{slug}/reviews", response_model=list[ReviewRead])
+def read_seller_reviews_by_slug(slug: str) -> list[ReviewRead]:
+    return get_seller_reviews_by_slug(slug)

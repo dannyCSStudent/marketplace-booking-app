@@ -26,6 +26,7 @@ class SupabaseClient:
         self.settings = settings
         self.rest_base_url = f"{settings.supabase_url}/rest/v1"
         self.auth_base_url = f"{settings.supabase_url}/auth/v1"
+        self.storage_base_url = f"{settings.supabase_url}/storage/v1"
 
     def get_user(self, access_token: str) -> SupabaseUser:
         payload = self._request(
@@ -144,7 +145,7 @@ class SupabaseClient:
         query: dict[str, str],
         access_token: str | None = None,
         use_service_role: bool = False,
-    ) -> Any:
+        ) -> Any:
         return self._request(
             method="DELETE",
             url=self._rest_url(table, query),
@@ -152,6 +153,30 @@ class SupabaseClient:
             access_token=access_token,
             use_service_role=use_service_role,
         )
+
+    def upload_storage_object(
+        self,
+        *,
+        bucket: str,
+        path: str,
+        payload: bytes,
+        content_type: str,
+        use_service_role: bool = True,
+        upsert: bool = False,
+    ) -> dict[str, Any]:
+        return self._request_bytes(
+            method="POST",
+            url=f"{self.storage_base_url}/object/{bucket}/{path}",
+            body=payload,
+            headers={
+                "Content-Type": content_type,
+                "x-upsert": "true" if upsert else "false",
+            },
+            use_service_role=use_service_role,
+        )
+
+    def public_storage_url(self, bucket: str, path: str) -> str:
+        return f"{self.storage_base_url}/object/public/{bucket}/{path}"
 
     def _rest_url(self, table: str, query: dict[str, str] | None = None) -> str:
         if not query:
@@ -184,6 +209,37 @@ class SupabaseClient:
 
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = Request(url=url, data=data, headers=request_headers, method=method)
+
+        try:
+            with urlopen(request) as response:
+                raw_body = response.read().decode("utf-8")
+                if not raw_body:
+                    return None
+                return json.loads(raw_body)
+        except HTTPError as exc:
+            self._raise_error(exc)
+        except URLError as exc:
+            raise SupabaseError(status_code=503, detail=f"Supabase connection failed: {exc.reason}") from exc
+
+    def _request_bytes(
+        self,
+        *,
+        method: str,
+        url: str,
+        body: bytes,
+        headers: dict[str, str] | None = None,
+        access_token: str | None = None,
+        use_service_role: bool = False,
+    ) -> Any:
+        request_headers = {
+            "apikey": self._api_key(use_service_role=use_service_role),
+        }
+        request_headers.update(headers or {})
+
+        bearer_token = access_token or self._api_key(use_service_role=use_service_role)
+        request_headers["Authorization"] = f"Bearer {bearer_token}"
+
+        request = Request(url=url, data=body, headers=request_headers, method=method)
 
         try:
             with urlopen(request) as response:

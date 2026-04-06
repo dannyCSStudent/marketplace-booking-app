@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { Suspense } from "react";
+import { PublicCatalogPanel } from "@/app/components/public-catalog-panel";
 import { SellerWorkspace } from "@/app/components/seller-workspace";
 import { formatCurrency, getMarketplaceData } from "@/app/lib/api";
 
@@ -87,6 +89,14 @@ export default async function Home() {
                     {seller?.bio ??
                       "Connect the seeded seller profile to see storefront details and listing ownership."}
                   </p>
+                  {seller?.slug ? (
+                    <Link
+                      href={`/sellers/${seller.slug}`}
+                      className="mt-4 inline-flex rounded-full border border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground transition hover:border-accent hover:text-accent"
+                    >
+                      Open Storefront
+                    </Link>
+                  ) : null}
                 </div>
                 <div className="rounded-2xl border border-accent/20 bg-accent px-3 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-white">
                   Live
@@ -132,50 +142,19 @@ export default async function Home() {
               </div>
             </div>
 
-            <div className="mt-6 grid gap-4">
-              {sellerListings.length > 0 ? (
-                sellerListings.map((listing) => (
-                  <article
-                    key={listing.id}
-                    className="rounded-[1.5rem] border border-border bg-white/70 p-5 transition-transform duration-200 hover:-translate-y-0.5"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div className="space-y-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-foreground px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-background">
-                            {listing.type}
-                          </span>
-                          <span className="font-mono text-xs uppercase tracking-[0.22em] text-foreground/48">
-                            {listing.city}, {listing.state}
-                          </span>
-                        </div>
-                        <div>
-                          <h3 className="text-2xl font-semibold tracking-[-0.04em]">
-                            {listing.title}
-                          </h3>
-                          <p className="mt-2 max-w-2xl text-sm leading-6 text-foreground/68">
-                            {listing.description}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="rounded-[1.25rem] border border-border bg-[#f9f1e2] px-4 py-3 text-right">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
-                          Starting At
-                        </p>
-                        <p className="mt-1 text-xl font-semibold">
-                          {formatCurrency(listing.price_cents, listing.currency)}
-                        </p>
-                      </div>
-                    </div>
-                  </article>
-                ))
-              ) : (
-                <div className="rounded-[1.5rem] border border-dashed border-border bg-white/55 p-8 text-sm leading-6 text-foreground/66">
-                  No seller-owned listings were returned. If the API is running, check that
-                  `NEXT_PUBLIC_API_BASE_URL` points at the FastAPI service.
+            <Suspense
+              fallback={
+                <div className="mt-6 rounded-[1.5rem] border border-border bg-white/55 p-8 text-sm leading-6 text-foreground/66">
+                  Loading catalog...
                 </div>
-              )}
-            </div>
+              }
+            >
+              <PublicCatalogPanel
+                emptyText="No seller-owned listings were returned. If the API is running, check that `NEXT_PUBLIC_API_BASE_URL` points at the FastAPI service."
+                listings={sellerListings}
+                sellerSlug={seller?.slug}
+              />
+            </Suspense>
           </div>
 
           <div className="space-y-6">

@@ -53,7 +53,21 @@ class ListingUpdate(BaseModel):
 class ListingImageCreate(BaseModel):
     image_url: str
     alt_text: str | None = None
+    sort_order: int | None = None
+
+class ListingImageUploadCreate(BaseModel):
+    filename: str
+    content_type: str
+    base64_data: str
+    alt_text: str | None = None
+
+class ListingImageRead(BaseModel):
+    id: str
+    listing_id: str
+    image_url: str
+    alt_text: str | None = None
     sort_order: int = 0
+    created_at: str
 
 class ListingRead(BaseModel):
     id: str
@@ -78,6 +92,7 @@ class ListingRead(BaseModel):
     delivery_enabled: bool = False
     shipping_enabled: bool = False
     lead_time_hours: int | None = None
+    images: list[ListingImageRead] = []
     created_at: str
     updated_at: str
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { formatCurrency, formatLocation } from '@/lib/api';
 import { getBuyerBrowseFilters, setBuyerBrowseFilters } from '@/lib/session-storage';
@@ -78,6 +78,10 @@ function getLocationSummary(
   });
 
   return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null;
+}
+
+function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }) {
+  return listing.images?.[0]?.image_url ?? null;
 }
 
 export default function BrowseScreen() {
@@ -307,6 +311,7 @@ export default function BrowseScreen() {
         {filteredListings.map((listing) => (
           (() => {
             const signals = getListingSignals(listing);
+            const primaryImageUrl = getPrimaryImageUrl(listing);
             return (
             <Pressable
               key={listing.id}
@@ -317,6 +322,13 @@ export default function BrowseScreen() {
                 })
               }
               style={styles.card}>
+              {primaryImageUrl ? (
+                <Image source={{ uri: primaryImageUrl }} style={styles.cardImage} />
+              ) : (
+                <View style={styles.cardImagePlaceholder}>
+                  <Text style={styles.cardImagePlaceholderText}>{listing.type}</Text>
+                </View>
+              )}
               <View style={styles.cardTop}>
                 <Text style={[styles.typePill, { color: typeColors[listing.type] }]}>{listing.type}</Text>
                 <Text style={styles.locationText}>{formatLocation(listing) || 'Location pending'}</Text>
@@ -549,6 +561,27 @@ const styles = StyleSheet.create({
   },
   cardList: {
     gap: 14,
+  },
+  cardImage: {
+    width: '100%',
+    height: 184,
+    borderRadius: 18,
+    backgroundColor: '#e8dcc9',
+  },
+  cardImagePlaceholder: {
+    width: '100%',
+    height: 184,
+    borderRadius: 18,
+    backgroundColor: '#d9c7a8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardImagePlaceholderText: {
+    color: '#4d4338',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
   },
   card: {
     backgroundColor: '#fff8ee',

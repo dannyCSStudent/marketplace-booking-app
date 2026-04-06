@@ -26,6 +26,9 @@ class Settings:
     notification_sent_retention_days: int = 14
     notification_failed_retention_days: int = 30
     notification_maintenance_poll_seconds: int = 21600
+    listing_media_bucket: str = "listing-media"
+    admin_user_ids: tuple[str, ...] = ()
+    admin_user_roles: dict[str, str] | None = None
 
 
 def get_settings() -> Settings:
@@ -55,6 +58,21 @@ def get_settings() -> Settings:
     notification_maintenance_poll_seconds = int(
         os.getenv("NOTIFICATION_MAINTENANCE_POLL_SECONDS", "21600")
     )
+    listing_media_bucket = os.getenv("LISTING_MEDIA_BUCKET", "listing-media")
+    admin_user_ids_raw = os.getenv("ADMIN_USER_IDS", "")
+    admin_user_ids = tuple(
+        user_id.strip() for user_id in admin_user_ids_raw.split(",") if user_id.strip()
+    )
+    admin_user_roles_raw = os.getenv("ADMIN_USER_ROLES", "")
+    admin_user_roles: dict[str, str] = {}
+    for entry in admin_user_roles_raw.split(","):
+        if ":" not in entry:
+            continue
+        user_id, role = entry.split(":", 1)
+        normalized_user_id = user_id.strip()
+        normalized_role = role.strip()
+        if normalized_user_id and normalized_role:
+            admin_user_roles[normalized_user_id] = normalized_role
 
     if not supabase_url:
         raise RuntimeError("SUPABASE_URL is not configured")
@@ -84,4 +102,7 @@ def get_settings() -> Settings:
         notification_sent_retention_days=notification_sent_retention_days,
         notification_failed_retention_days=notification_failed_retention_days,
         notification_maintenance_poll_seconds=notification_maintenance_poll_seconds,
+        listing_media_bucket=listing_media_bucket,
+        admin_user_ids=admin_user_ids,
+        admin_user_roles=admin_user_roles,
     )
