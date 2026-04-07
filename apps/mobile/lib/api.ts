@@ -18,6 +18,7 @@ import {
   type ProfilePayload,
   type ProfileUpdateInput,
   type SellerProfile,
+  type PlatformFeeRateRead,
 } from '@repo/api-client';
 export { formatCurrency, formatLocation } from '@repo/api-client';
 import { Platform } from 'react-native';
@@ -78,6 +79,7 @@ export type {
   ProfilePayload,
   ProfileUpdateInput,
   SellerProfile,
+  PlatformFeeRateRead,
 };
 export { ApiError };
 export { buildNotifications };

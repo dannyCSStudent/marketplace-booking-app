@@ -27,6 +27,8 @@ export type BookingAdminRead = {
     scheduled_end: string;
     total_cents?: number | null;
     currency?: string;
+    platform_fee_cents?: number;
+    platform_fee_rate?: string;
     notes?: string | null;
     buyer_browse_context?: string | null;
     seller_response_note?: string | null;
@@ -89,6 +91,8 @@ export type BookingRead = {
     scheduled_end: string;
     total_cents?: number | null;
     currency?: string;
+    platform_fee_cents?: number;
+    platform_fee_rate?: string;
     notes?: string | null;
     buyer_browse_context?: string | null;
     seller_response_note?: string | null;
@@ -110,6 +114,13 @@ export type BookingStatusUpdate = {
     seller_response_note?: string | null;
   };
 
+export type CategoryRead = {
+    id: string;
+    name: string;
+    slug: string;
+    parent_id?: string | null;
+  };
+
 export type HTTPValidationError = {
     detail?: ValidationError[];
   };
@@ -118,7 +129,7 @@ export type ListingAiAssistRequest = {
     listing_id?: string | null;
     title?: string | null;
     description?: string | null;
-    type?: string | null;
+    type?: ListingType | null;
     category_id?: string | null;
     city?: string | null;
     state?: string | null;
@@ -146,7 +157,7 @@ export type ListingCreate = {
     title: string;
     slug?: string | null;
     description?: string | null;
-    type: string;
+    type: ListingType;
     status?: string;
     price_cents?: number | null;
     currency?: string;
@@ -162,6 +173,7 @@ export type ListingCreate = {
     delivery_enabled?: boolean;
     shipping_enabled?: boolean;
     lead_time_hours?: number | null;
+    is_promoted?: boolean;
   };
 
 export type ListingImageCreate = {
@@ -195,6 +207,7 @@ export type ListingPriceInsight = {
     listing_id: string;
     currency: string;
     sample_size: number;
+    comparison_scope: string;
     min_price_cents?: number | null;
     max_price_cents?: number | null;
     avg_price_cents?: number | null;
@@ -203,14 +216,40 @@ export type ListingPriceInsight = {
     summary: string;
   };
 
+export type ListingPricingScopeCount = {
+    scope: string;
+    count: number;
+  };
+
+export type ListingPromotionDetail = {
+    id: string;
+    title: string;
+    seller_id: string;
+  };
+
+export type ListingPromotionEvent = {
+    id: string;
+    listing_id: string;
+    seller_id: string;
+    promoted: boolean;
+    platform_fee_rate: string;
+    created_at: string;
+  };
+
+export type ListingPromotionSummary = {
+    type: string;
+    count: number;
+  };
+
 export type ListingRead = {
     id: string;
     seller_id: string;
     category_id?: string | null;
+    category?: string | null;
     title: string;
     slug: string;
     description?: string | null;
-    type: string;
+    type: ListingType;
     status: string;
     price_cents?: number | null;
     currency?: string;
@@ -231,17 +270,21 @@ export type ListingRead = {
     updated_at: string;
     last_operating_adjustment_at?: string | null;
     last_operating_adjustment_summary?: string | null;
+    last_pricing_comparison_scope?: string | null;
     available_today?: boolean;
     is_new_listing?: boolean;
     recent_transaction_count?: number;
+    is_promoted?: boolean;
   };
+
+export type ListingType = "product" | "service" | "hybrid";
 
 export type ListingUpdate = {
     category_id?: string | null;
     title?: string | null;
     slug?: string | null;
     description?: string | null;
-    type?: string | null;
+    type?: ListingType | null;
     status?: string | null;
     price_cents?: number | null;
     currency?: string | null;
@@ -257,6 +300,7 @@ export type ListingUpdate = {
     delivery_enabled?: boolean | null;
     shipping_enabled?: boolean | null;
     lead_time_hours?: number | null;
+    is_promoted?: boolean | null;
   };
 
 export type NotificationDeliveryBulkActionFailure = {
@@ -308,6 +352,9 @@ export type OrderAdminRead = {
     subtotal_cents: number;
     total_cents: number;
     currency?: string;
+    delivery_fee_cents?: number;
+    platform_fee_cents?: number;
+    platform_fee_rate?: string;
     notes?: string | null;
     buyer_browse_context?: string | null;
     seller_response_note?: string | null;
@@ -381,6 +428,9 @@ export type OrderRead = {
     subtotal_cents: number;
     total_cents: number;
     currency?: string;
+    delivery_fee_cents?: number;
+    platform_fee_cents?: number;
+    platform_fee_rate?: string;
     notes?: string | null;
     buyer_browse_context?: string | null;
     seller_response_note?: string | null;
@@ -399,6 +449,25 @@ export type OrderStatusEventRead = {
 export type OrderStatusUpdate = {
     status: string;
     seller_response_note?: string | null;
+  };
+
+export type PlatformFeeHistoryPoint = {
+    date: string;
+    order_fee_cents: number;
+    booking_fee_cents: number;
+  };
+
+export type PlatformFeeRateCreate = {
+    name: string;
+    rate: number | string;
+    effective_at?: string | null;
+  };
+
+export type PlatformFeeRateRead = {
+    id?: string | null;
+    name: string;
+    rate: string;
+    effective_at?: string | null;
   };
 
 export type ProfileCreate = {
@@ -580,6 +649,7 @@ export type ApiSchemaMap = {
   BookingRead: BookingRead;
   BookingStatusEventRead: BookingStatusEventRead;
   BookingStatusUpdate: BookingStatusUpdate;
+  CategoryRead: CategoryRead;
   HTTPValidationError: HTTPValidationError;
   ListingAiAssistRequest: ListingAiAssistRequest;
   ListingAiAssistResponse: ListingAiAssistResponse;
@@ -590,7 +660,12 @@ export type ApiSchemaMap = {
   ListingImageUploadCreate: ListingImageUploadCreate;
   ListingListResponse: ListingListResponse;
   ListingPriceInsight: ListingPriceInsight;
+  ListingPricingScopeCount: ListingPricingScopeCount;
+  ListingPromotionDetail: ListingPromotionDetail;
+  ListingPromotionEvent: ListingPromotionEvent;
+  ListingPromotionSummary: ListingPromotionSummary;
   ListingRead: ListingRead;
+  ListingType: ListingType;
   ListingUpdate: ListingUpdate;
   NotificationDeliveryBulkActionFailure: NotificationDeliveryBulkActionFailure;
   NotificationDeliveryBulkRetryRequest: NotificationDeliveryBulkRetryRequest;
@@ -609,6 +684,9 @@ export type ApiSchemaMap = {
   OrderRead: OrderRead;
   OrderStatusEventRead: OrderStatusEventRead;
   OrderStatusUpdate: OrderStatusUpdate;
+  PlatformFeeHistoryPoint: PlatformFeeHistoryPoint;
+  PlatformFeeRateCreate: PlatformFeeRateCreate;
+  PlatformFeeRateRead: PlatformFeeRateRead;
   ProfileCreate: ProfileCreate;
   ProfileRead: ProfileRead;
   ProfileUpdate: ProfileUpdate;
@@ -629,6 +707,36 @@ export type ApiSchemaMap = {
 };
 
 export type ApiOperations = {
+  "/admin/listings/pricing-scope-summary": {
+    get: {
+      response: ListingPricingScopeCount[];
+    };
+  };
+  "/admin/listings/promoted": {
+    get: {
+      response: ListingPromotionDetail[];
+    };
+  };
+  "/admin/listings/promotions/events": {
+    get: {
+      response: ListingPromotionEvent[];
+    };
+  };
+  "/admin/listings/promotions/summary": {
+    get: {
+      response: ListingPromotionSummary[];
+    };
+  };
+  "/admin/listings/{listing_id}/promotion": {
+    patch: {
+      response: ListingRead;
+    };
+  };
+  "/admin/platform-fees/history": {
+    get: {
+      response: PlatformFeeHistoryPoint[];
+    };
+  };
   "/admin/users": {
     get: {
       response: AdminUserRead[];
@@ -676,6 +784,11 @@ export type ApiOperations = {
       response: BookingAdminRead;
     };
   };
+  "/categories": {
+    get: {
+      response: CategoryRead[];
+    };
+  };
   "/health": {
     get: {
       response: {
@@ -701,6 +814,11 @@ export type ApiOperations = {
     post: {
       requestBody: ListingAiAssistRequest;
       response: ListingAiAssistResponse;
+    };
+  };
+  "/listings/export": {
+    get: {
+      response: unknown;
     };
   };
   "/listings/me": {
@@ -811,6 +929,15 @@ export type ApiOperations = {
     patch: {
       requestBody: OrderAdminSupportUpdate;
       response: OrderAdminRead;
+    };
+  };
+  "/platform-fees": {
+    get: {
+      response: PlatformFeeRateRead;
+    };
+    post: {
+      requestBody: PlatformFeeRateCreate;
+      response: PlatformFeeRateRead;
     };
   };
   "/profiles/me": {

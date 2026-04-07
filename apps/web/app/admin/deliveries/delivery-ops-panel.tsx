@@ -103,6 +103,79 @@ function titleCaseFilterLabel(value: string) {
     .join(" ");
 }
 
+function getListingTractionPill(listing: Listing) {
+  const recentCount = listing.recent_transaction_count ?? 0;
+
+  if (recentCount >= 5) {
+    return {
+      label: `Hot lane · ${recentCount} recent requests`,
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }
+
+  if (recentCount >= 3) {
+    return {
+      label: `Popular near you · ${recentCount} recent requests`,
+      className: "border-sky-200 bg-sky-50 text-sky-700",
+    };
+  }
+
+  if (recentCount > 0) {
+    return {
+      label: `${recentCount} recent request${recentCount === 1 ? "" : "s"}`,
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+    };
+  }
+
+  if (listing.is_new_listing) {
+    return {
+      label: "New listing",
+      className: "border-orange-200 bg-orange-50 text-orange-700",
+    };
+  }
+
+  return null;
+}
+
+function getListingComparisonScopeBadge(scope: string | null | undefined) {
+  if (!scope) {
+    return null;
+  }
+
+  if (scope === "Category + local") {
+    return {
+      label: scope,
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }
+
+  if (scope === "Category") {
+    return {
+      label: scope,
+      className: "border-sky-200 bg-sky-50 text-sky-700",
+    };
+  }
+
+  if (scope === "Type + local") {
+    return {
+      label: scope,
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+    };
+  }
+
+  if (scope === "Type") {
+    return {
+      label: scope,
+      className: "border-border bg-background/60 text-foreground/68",
+    };
+  }
+
+  return {
+    label: scope,
+    className: "border-rose-200 bg-rose-50 text-rose-700",
+  };
+}
+
 function formatBuyerBrowseContextLabel(value: string | null | undefined) {
   if (!value) {
     return null;
@@ -2059,6 +2132,9 @@ export function DeliveryOpsPanel() {
 
                     {listingOpsContext ? (
                       <div className="rounded-[1.25rem] border border-border bg-background/75 p-4">
+                        {(() => {
+                          const tractionPill = getListingTractionPill(listingOpsContext.listing);
+                          return (
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <p className="text-xs uppercase tracking-[0.2em] text-foreground/46">
@@ -2073,6 +2149,37 @@ export function DeliveryOpsPanel() {
                                 {listingOpsContext.retentionTrendLabel}
                               </span>
                             </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                            {listingOpsContext.listing.available_today ? (
+                              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                                Available today
+                              </span>
+                            ) : null}
+                            {tractionPill ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${tractionPill.className}`}
+                              >
+                                {tractionPill.label}
+                              </span>
+                            ) : null}
+                            {getListingComparisonScopeBadge(
+                              listingOpsContext.listing.last_pricing_comparison_scope,
+                            ) ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+                                  getListingComparisonScopeBadge(
+                                    listingOpsContext.listing.last_pricing_comparison_scope,
+                                  )?.className
+                                }`}
+                              >
+                                {
+                                  getListingComparisonScopeBadge(
+                                    listingOpsContext.listing.last_pricing_comparison_scope,
+                                  )?.label
+                                }
+                              </span>
+                            ) : null}
+                            </div>
                           </div>
                           <div className="text-right text-xs text-foreground/50">
                             <p>
@@ -2082,6 +2189,8 @@ export function DeliveryOpsPanel() {
                             </p>
                           </div>
                         </div>
+                          );
+                        })()}
                         <div className="mt-3 grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-4">
                           <div>
                             <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">

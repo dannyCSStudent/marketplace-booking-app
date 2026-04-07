@@ -12,22 +12,25 @@ import {
 import { ApiError, buildNotifications, createApiClient, formatCurrency } from "@/app/lib/api";
 import type {
   Booking,
+  CategoryRead,
   Listing,
-  ListingImage,
+  ListingAiAssistSuggestion,
   ListingCreateInput,
+  ListingImage,
+  ListingPriceInsight,
+  ListingType,
   ListingUpdateInput,
   NotificationDelivery,
   NotificationItem,
   Order,
+  PlatformFeeRateRead,
   Profile,
-  ProfileUpdateInput,
   ProfilePayload,
+  ProfileUpdateInput,
   ReviewRead,
   SellerCreateInput,
   SellerProfile,
   SellerWorkspaceData,
-  ListingAiAssistSuggestion,
-  ListingPriceInsight,
 } from "@/app/lib/api";
 import type { NotificationDeliveryBulkRetryResult } from "@repo/api-client";
 
@@ -40,6 +43,7 @@ type WorkspaceState = {
 };
 
 type ListingDraft = {
+  category_id: string;
   price_cents: string;
   requires_booking: boolean;
   duration_minutes: string;
@@ -49,6 +53,7 @@ type ListingDraft = {
   meetup_enabled: boolean;
   delivery_enabled: boolean;
   shipping_enabled: boolean;
+  is_promoted: boolean;
 };
 
 type ListingImageDraft = {
@@ -139,6 +144,108 @@ function getListingOperatingGuidance(listing: Listing) {
   }
 
   return "Driven by order flow and fulfillment methods. Tune pickup, meetup, delivery, or shipping first.";
+}
+
+function getListingTractionPill(listing: Listing) {
+  const recentCount = listing.recent_transaction_count ?? 0;
+
+  if (recentCount >= 5) {
+    return {
+      label: `Hot lane · ${recentCount} recent requests`,
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }
+
+  if (recentCount >= 3) {
+    return {
+      label: `Popular near you · ${recentCount} recent requests`,
+      className: "border-sky-200 bg-sky-50 text-sky-700",
+    };
+  }
+
+  if (recentCount > 0) {
+    return {
+      label: `${recentCount} recent request${recentCount === 1 ? "" : "s"}`,
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+    };
+  }
+
+  if (listing.is_new_listing) {
+    return {
+      label: "New listing",
+      className: "border-orange-200 bg-orange-50 text-orange-700",
+    };
+  }
+
+  return null;
+}
+
+function getPriceComparisonScopeBadge(scope: string) {
+  if (scope === "Category + local") {
+    return {
+      label: scope,
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }
+
+  if (scope === "Category") {
+    return {
+      label: scope,
+      className: "border-sky-200 bg-sky-50 text-sky-700",
+    };
+  }
+
+  if (scope === "Type + local") {
+    return {
+      label: scope,
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+    };
+  }
+
+  if (scope === "Type") {
+    return {
+      label: scope,
+      className: "border-border bg-background/60 text-foreground/68",
+    };
+  }
+
+  return {
+    label: scope,
+    className: "border-rose-200 bg-rose-50 text-rose-700",
+  };
+}
+
+function getPricePositionBadge(input: {
+  currentPriceCents: number | null;
+  suggestedPriceCents: number | null | undefined;
+  currency: string;
+}) {
+  if (
+    input.currentPriceCents == null ||
+    input.suggestedPriceCents == null ||
+    Number.isNaN(input.currentPriceCents)
+  ) {
+    return null;
+  }
+
+  const delta = input.currentPriceCents - input.suggestedPriceCents;
+  if (delta === 0) {
+    return {
+      label: "On suggested price",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }
+
+  const formattedDelta = formatCurrency(Math.abs(delta), input.currency);
+  return delta > 0
+    ? {
+        label: `${formattedDelta} above suggested`,
+        className: "border-amber-200 bg-amber-50 text-amber-700",
+      }
+    : {
+        label: `${formattedDelta} below suggested`,
+        className: "border-sky-200 bg-sky-50 text-sky-700",
+      };
 }
 
 function formatSellerRating(rating?: number, reviewCount?: number) {
@@ -759,12 +866,45 @@ export function SellerWorkspace() {
   const [notificationDeliveries, setNotificationDeliveries] = useState<NotificationDelivery[]>([]);
   const [deliveryRetryLoading, setDeliveryRetryLoading] = useState<string | null>(null);
   const [retryingFailedDeliveries, setRetryingFailedDeliveries] = useState(false);
+  const [platformFee, setPlatformFee] = useState<PlatformFeeRateRead | null>(null);
+  const [platformFeeLoading, setPlatformFeeLoading] = useState(true);
   const [focusedActivityKey, setFocusedActivityKey] = useState<string | null>(
     () => searchParams.get("focus"),
   );
   const [activityTypeFilter, setActivityTypeFilter] = useState<"all" | "order" | "booking">(
     () => (searchParams.get("activityType") as "all" | "order" | "booking") ?? "all",
   );
+  useEffect(() => {
+    let isMounted = true;
+
+    setPlatformFeeLoading(true);
+    api
+      .getPlatformFees({ cache: "no-store" })
+      .then((fee) => {
+        if (isMounted) {
+          setPlatformFee(fee);
+          setPlatformFeeLoading(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setPlatformFee(null);
+          setPlatformFeeLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+  const platformFeeRateLabel = platformFee
+    ? `${(Number(platformFee.rate) * 100).toFixed(2)}%`
+    : platformFeeLoading
+    ? "Loading…"
+    : "Unavailable";
+  const platformFeeEffectiveLabel = platformFee?.effective_at
+    ? new Date(platformFee.effective_at).toLocaleString()
+    : "Not set";
   const [activityStatusFilter, setActivityStatusFilter] = useState<string>(
     () => searchParams.get("activityStatus") ?? "all",
   );
@@ -944,6 +1084,7 @@ export function SellerWorkspace() {
     () => (searchParams.get("bulkMode") as "best_effort" | "atomic") ?? "best_effort",
   );
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
+  const [categories, setCategories] = useState<CategoryRead[]>([]);
   const [accountProfile, setAccountProfile] = useState<Profile | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createMessage, setCreateMessage] = useState<string | null>(null);
@@ -951,9 +1092,10 @@ export function SellerWorkspace() {
   const [description, setDescription] = useState(
     "Small-batch sweet bread box for local pickup.",
   );
-  const [listingType, setListingType] = useState<"product" | "service" | "hybrid">(
+  const [listingType, setListingType] = useState<ListingType>(
     "product",
   );
+  const [listingCategoryId, setListingCategoryId] = useState("");
   const [price, setPrice] = useState("2400");
 
   const clearSellerSession = useCallback((message?: string) => {
@@ -997,6 +1139,7 @@ export function SellerWorkspace() {
       nextWorkspace.listings.map((listing) => [
         listing.id,
         {
+          category_id: listing.category_id ?? "",
           price_cents: listing.price_cents?.toString() ?? "",
           requires_booking: listing.requires_booking ?? false,
           duration_minutes: listing.duration_minutes?.toString() ?? "",
@@ -1006,6 +1149,7 @@ export function SellerWorkspace() {
           meetup_enabled: listing.meetup_enabled ?? false,
           delivery_enabled: listing.delivery_enabled ?? false,
           shipping_enabled: listing.shipping_enabled ?? false,
+          is_promoted: listing.is_promoted ?? false,
         },
       ]),
     );
@@ -1034,6 +1178,27 @@ export function SellerWorkspace() {
         nextWorkspace.reviews.map((review) => [review.id, review.seller_response ?? ""]),
       ),
     );
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const nextCategories = await api.listCategories();
+        if (!cancelled) {
+          setCategories(nextCategories);
+        }
+      } catch {
+        if (!cancelled) {
+          setCategories([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function updateResponseNote(id: string, value: string) {
@@ -1383,6 +1548,7 @@ export function SellerWorkspace() {
 
     const listingPayload: ListingCreateInput = {
       seller_id: workspace.seller.id,
+      category_id: listingCategoryId || undefined,
       title,
       description,
       type: listingType,
@@ -1409,6 +1575,7 @@ export function SellerWorkspace() {
       onFinally: () => setLoading(false),
       onSuccess: () => {
         setCreateMessage("Listing created and workspace refreshed.");
+        setListingCategoryId("");
       },
       execute: (accessToken) => api.createListing(listingPayload, { accessToken }),
     });
@@ -1592,6 +1759,7 @@ export function SellerWorkspace() {
       },
       execute: (accessToken) =>
         api.updateListing(listing.id, {
+          category_id: draft.category_id || null,
           price_cents: draft.price_cents === "" ? null : Number(draft.price_cents),
           requires_booking: draft.requires_booking,
           duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
@@ -1601,6 +1769,7 @@ export function SellerWorkspace() {
           meetup_enabled: draft.meetup_enabled,
           delivery_enabled: draft.delivery_enabled,
           shipping_enabled: draft.shipping_enabled,
+          is_promoted: draft.is_promoted,
         }, { accessToken }),
     });
   }
@@ -1706,6 +1875,7 @@ export function SellerWorkspace() {
             title,
             description: description?.trim() ? description : undefined,
             type: listingType,
+            category_id: listingCategoryId || undefined,
             city: workspace.seller.city ?? undefined,
             state: workspace.seller.state ?? undefined,
             country: workspace.seller.country ?? undefined,
@@ -1728,6 +1898,9 @@ export function SellerWorkspace() {
   function applyCreateListingSuggestion(suggestion: ListingAiAssistSuggestion) {
     setTitle(suggestion.suggested_title);
     setDescription(suggestion.suggested_description);
+    if (suggestion.suggested_category_id) {
+      setListingCategoryId(suggestion.suggested_category_id);
+    }
     setListingCreateAiState((current) => (current ? { ...current, suggestion } : current));
   }
 
@@ -4991,6 +5164,16 @@ export function SellerWorkspace() {
               <MiniStat label="Bookings" value={String(workspace.bookings.length)} />
               <MiniStat label="Reviews" value={String(workspace.reviews.length)} />
             </div>
+            <div className="mt-4 space-y-2">
+              <MiniStat
+                label="Active platform fee"
+                value={platformFeeRateLabel}
+                accent="rose"
+              />
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                Effective {platformFeeEffectiveLabel}
+              </p>
+            </div>
             <div className="rounded-3xl border border-border bg-white px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -5111,7 +5294,7 @@ export function SellerWorkspace() {
                   Seller ops watch
                 </p>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-11">
+              <div className="mt-4 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                 <MiniStat
                   label="Failed Alerts 7d"
                   value={String(failedDeliveryRecentCount)}
@@ -5195,7 +5378,7 @@ export function SellerWorkspace() {
                 <p>Delivery Drag: listings where failed sends are outpacing recent recovery.</p>
                 <p>Recovery Lane: listings where recent successful sends are ahead of failures.</p>
               </div>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-col gap-2">
                 {topSupportWatchListing ? (
                   (() => {
                     const supportPressure = getSupportPreviewDetail(topSupportWatchListing);
@@ -5309,7 +5492,7 @@ export function SellerWorkspace() {
                 ) : null}
               </div>
               {nextSupportWatchListing || nextDeliveryDragListing || nextRecoveryLaneListing || nextTrustWatchListing ? (
-                <div className="mt-2 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-col gap-2">
                   {nextSupportWatchListing ? (
                     (() => {
                       const supportPressure = getSupportPreviewDetail(nextSupportWatchListing);
@@ -5583,6 +5766,7 @@ export function SellerWorkspace() {
                             retentionTrendLabel: retentionTrend.label,
                             hasReviewPressure: hasSellerReviewPressure,
                           });
+                          const tractionPill = getListingTractionPill(item.listing);
                           const supportPressureAction = getListingSupportPressureAction(
                             item.listing.id,
                             deliveryPressure,
@@ -5613,6 +5797,18 @@ export function SellerWorkspace() {
                             <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700">
                               Cross seller · {item.crossSellerCount}
                             </span>
+                            {item.listing.available_today ? (
+                              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
+                                Available today
+                              </span>
+                            ) : null}
+                            {tractionPill ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${tractionPill.className}`}
+                              >
+                                {tractionPill.label}
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
@@ -6217,17 +6413,32 @@ export function SellerWorkspace() {
                     <select
                       className="w-full rounded-2xl border border-border bg-white px-4 py-3 outline-none transition focus:border-accent"
                       value={listingType}
-                      onChange={(event) =>
-                        setListingType(
-                          event.target.value as "product" | "service" | "hybrid",
-                        )
-                      }
+                      onChange={(event) => setListingType(event.target.value as ListingType)}
                     >
                       <option value="product">Product</option>
                       <option value="service">Service</option>
                       <option value="hybrid">Hybrid</option>
                     </select>
                   </label>
+                  <label className="block">
+                    <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Category
+                    </span>
+                    <select
+                      className="w-full rounded-2xl border border-border bg-white px-4 py-3 outline-none transition focus:border-accent"
+                      value={listingCategoryId}
+                      onChange={(event) => setListingCategoryId(event.target.value)}
+                    >
+                      <option value="">Unassigned</option>
+                      {categories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
                   <label className="block">
                     <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
                       Price Cents
@@ -6367,10 +6578,23 @@ export function SellerWorkspace() {
                       deliveryPressure,
                       supportPressure?.label ?? null,
                     );
+                    const tractionPill = getListingTractionPill(listing);
                     const isPressureEasing = pressureEasingListingIds.includes(listing.id);
                     const recoveryDelta = listingRecoveryDeltaById[listing.id] ?? 0;
                     const aiState = listingAiState[listing.id];
                     const priceInsightState = listingPriceInsights[listing.id];
+                    const draftPriceCents = Number(listingDrafts[listing.id].price_cents);
+                    const pricePositionBadge = priceInsightState?.insight
+                      ? getPricePositionBadge({
+                          currentPriceCents:
+                            listingDrafts[listing.id].price_cents.trim() === "" ||
+                            Number.isNaN(draftPriceCents)
+                              ? null
+                              : draftPriceCents,
+                          suggestedPriceCents: priceInsightState.insight.suggested_price_cents,
+                          currency: priceInsightState.insight.currency,
+                        })
+                      : null;
 
                     return (
                       <div
@@ -6427,6 +6651,18 @@ export function SellerWorkspace() {
                                 {listingTrend.label}
                               </span>
                             ) : null}
+                            {listing.available_today ? (
+                              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                                Available today
+                              </span>
+                            ) : null}
+                            {tractionPill ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${tractionPill.className}`}
+                              >
+                                {tractionPill.label}
+                              </span>
+                            ) : null}
                             {supportPressure ? (
                               <span
                                 className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${supportPressure.toneClass}`}
@@ -6481,7 +6717,23 @@ export function SellerWorkspace() {
                             {getListingOperatingGuidance(listing)}
                           </p>
                           <TuneRoleActionButton onClick={() => focusListingRoleControls(listing)} />
-                          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-foreground/58">
+                            <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-foreground/58">
+                              {listing.category ? <span>Category: {listing.category}</span> : null}
+                              {listing.last_pricing_comparison_scope ? (
+                                <span
+                                  className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                                    getPriceComparisonScopeBadge(
+                                      listing.last_pricing_comparison_scope,
+                                    ).className
+                                  }`}
+                                >
+                                  {
+                                    getPriceComparisonScopeBadge(
+                                      listing.last_pricing_comparison_scope,
+                                    ).label
+                                  }
+                                </span>
+                              ) : null}
                             <span>{formatCurrency(listing.price_cents, listing.currency)}</span>
                             <span>Slug: {listing.slug}</span>
                             <span>
@@ -6504,6 +6756,28 @@ export function SellerWorkspace() {
                       </div>
 
                       <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <label className="block">
+                          <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                            Category
+                          </span>
+                          <select
+                            className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                            value={listingDrafts[listing.id].category_id}
+                            onChange={(event) =>
+                              updateListingDraft(listing.id, (current) => ({
+                                ...current,
+                                category_id: event.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">Unassigned</option>
+                            {categories.map((category) => (
+                              <option key={category.id} value={category.id}>
+                                {category.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                         <div
                           className={`rounded-2xl border px-4 py-3 transition ${
                             highlightedListingControlKey === `${listing.id}:pricing`
@@ -6599,6 +6873,27 @@ export function SellerWorkspace() {
                             />
                             Local only
                           </label>
+                          <label className="mt-2 block text-sm text-foreground/76">
+                            <span className="mb-1 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              Promoted listing
+                            </span>
+                            <div className="flex items-center gap-2 text-sm text-foreground/76">
+                              <input
+                                checked={listingDrafts[listing.id].is_promoted}
+                                onChange={(event) =>
+                                  updateListingDraft(listing.id, (current) => ({
+                                    ...current,
+                                    is_promoted: event.target.checked,
+                                  }))
+                                }
+                                type="checkbox"
+                              />
+                              Feature this listing in the buyer feed
+                            </div>
+                            <p className="text-[11px] text-foreground/50">
+                              Promoted listings are highlighted to buyers and display the “Promoted” badge.
+                            </p>
+                          </label>
                         </div>
                       </div>
 
@@ -6635,6 +6930,19 @@ export function SellerWorkspace() {
                         {priceInsightState?.insight ? (
                           <div className="mt-3 space-y-2 text-sm text-foreground/70">
                             <div className="flex flex-wrap gap-3">
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                                  getPriceComparisonScopeBadge(
+                                    priceInsightState.insight.comparison_scope,
+                                  ).className
+                                }`}
+                              >
+                                {
+                                  getPriceComparisonScopeBadge(
+                                    priceInsightState.insight.comparison_scope,
+                                  ).label
+                                }
+                              </span>
                               <span className="text-[11px] uppercase tracking-[0.14em] text-foreground/56">
                                 Sample {priceInsightState.insight.sample_size}
                               </span>
@@ -6650,6 +6958,13 @@ export function SellerWorkspace() {
                                   priceInsightState.insight.currency,
                                 )}
                               </span>
+                              {pricePositionBadge ? (
+                                <span
+                                  className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${pricePositionBadge.className}`}
+                                >
+                                  {pricePositionBadge.label}
+                                </span>
+                              ) : null}
                             </div>
                             <p className="flex flex-wrap gap-2 text-[11px] text-foreground/60">
                               <span>
@@ -8134,16 +8449,16 @@ function PressurePreviewRow({
   onTuneClick?: (() => void) | null;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex w-full flex-wrap items-center gap-2">
       <button
-        className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${laneClassName}`}
+        className={`shrink-0 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${laneClassName}`}
         onClick={onLaneClick}
         type="button"
       >
         {lane}
       </button>
       <button
-        className={primaryClassName}
+        className={`${primaryClassName} max-w-full whitespace-normal text-left`}
         onClick={onPrimaryClick}
         type="button"
       >
@@ -8151,7 +8466,7 @@ function PressurePreviewRow({
       </button>
       {trendLabel ? (
         <span
-          className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${getListingPreviewRetentionTrendToneClass(
+          className={`shrink-0 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${getListingPreviewRetentionTrendToneClass(
             trendLabel,
           )}`}
         >
@@ -8160,7 +8475,7 @@ function PressurePreviewRow({
       ) : null}
       {tuneLabel && onTuneClick ? (
         <button
-          className="rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-accent hover:text-accent"
+          className="shrink-0 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-accent hover:text-accent"
           onClick={onTuneClick}
           type="button"
         >

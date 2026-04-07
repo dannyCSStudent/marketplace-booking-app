@@ -2,7 +2,13 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { formatBuyerActionError, formatCurrency, formatLocation } from '@/lib/api';
+import {
+  fetchApi,
+  formatBuyerActionError,
+  formatCurrency,
+  formatLocation,
+  type PlatformFeeRateRead,
+} from '@/lib/api';
 import { setBuyerBrowseFilters } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
@@ -53,7 +59,7 @@ function getSuggestionSecondarySignal(listing: {
 
 function getSuggestionActionMode(listing: {
   requires_booking?: boolean | null;
-  type: 'product' | 'service' | 'hybrid';
+  type: string;
 }) {
   return listing.requires_booking || listing.type === 'service' ? 'Booking ready' : 'Order ready';
 }
@@ -103,7 +109,7 @@ function buildMobileBrowseContext(input: {
 function getRecommendedBrowsePreset(input: {
   listings: {
     id: string;
-    type: 'product' | 'service' | 'hybrid';
+    type: string;
     is_local_only?: boolean | null;
   }[];
   orders: {
@@ -178,7 +184,7 @@ function getRecommendedBrowsePreset(input: {
 
 function getRecommendationReason(
   listing: {
-    type: 'product' | 'service' | 'hybrid';
+    type: string;
     is_local_only?: boolean | null;
   },
   preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
@@ -209,9 +215,53 @@ function getRecommendationReason(
   return null;
 }
 
+function getListingComparisonScopeBadge(scope: string | null | undefined) {
+  if (!scope) {
+    return null;
+  }
+
+  if (scope === 'Category + local') {
+    return {
+      label: scope,
+      badgeStyle: { borderColor: '#9bc9b1', backgroundColor: '#e4f1ed' },
+      textStyle: { color: '#0f5f62' },
+    };
+  }
+
+  if (scope === 'Category') {
+    return {
+      label: scope,
+      badgeStyle: { borderColor: '#c7e0ff', backgroundColor: '#ecf7ff' },
+      textStyle: { color: '#0f4a87' },
+    };
+  }
+
+  if (scope === 'Type + local') {
+    return {
+      label: scope,
+      badgeStyle: { borderColor: '#f1c58d', backgroundColor: '#fff4e7' },
+      textStyle: { color: '#8a4a0f' },
+    };
+  }
+
+  if (scope === 'Type') {
+    return {
+      label: scope,
+      badgeStyle: { borderColor: '#d4cfcd', backgroundColor: '#f4f1eb' },
+      textStyle: { color: '#4e4a41' },
+    };
+  }
+
+  return {
+    label: scope,
+    badgeStyle: { borderColor: '#f5b3c0', backgroundColor: '#ffeef0' },
+    textStyle: { color: '#a01622' },
+  };
+}
+
 function getRecommendationScore(
   listing: {
-    type: 'product' | 'service' | 'hybrid';
+    type: string;
     is_local_only?: boolean | null;
   },
   preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
@@ -244,7 +294,7 @@ function getRecommendationScore(
 
 function getRecommendationMatch(
   listing: {
-    type: 'product' | 'service' | 'hybrid';
+    type: string;
     is_local_only?: boolean | null;
   },
   preset: { label: 'Local-First' | 'Services' | 'Hybrid' | 'Products' } | null,
@@ -277,6 +327,8 @@ export default function ListingDetailScreen() {
   const [notes, setNotes] = useState('Buyer flow test from mobile.');
   const [selectedFulfillment, setSelectedFulfillment] = useState<string>('');
   const [bookingDayOffset, setBookingDayOffset] = useState('1');
+  const [platformFee, setPlatformFee] = useState<PlatformFeeRateRead | null>(null);
+  const [platformFeeLoading, setPlatformFeeLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const listing = useMemo(() => listings.find((item) => item.id === id), [id, listings]);
@@ -364,6 +416,29 @@ export default function ListingDetailScreen() {
     }
   }, [fulfillmentOptions]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setPlatformFeeLoading(true);
+
+    fetchApi<PlatformFeeRateRead>('/platform-fees')
+      .then((fee) => {
+        if (!cancelled) {
+          setPlatformFee(fee);
+          setPlatformFeeLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPlatformFee(null);
+          setPlatformFeeLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (!listing) {
     return (
       <View style={styles.missingState}>
@@ -377,11 +452,29 @@ export default function ListingDetailScreen() {
 
   const transactionCount = listing.recent_transaction_count ?? 0;
   const isPopularNearYou = transactionCount >= 3;
+  const comparisonScopeBadge = getListingComparisonScopeBadge(
+    listing.last_pricing_comparison_scope,
+  );
   const tractionValue = transactionCount > 0
     ? `${transactionCount} recent requests${isPopularNearYou ? ' · Popular near you' : ''}`
     : listing.is_new_listing
       ? 'New entry · waiting on the first buyers'
       : 'Activity warming up';
+  const platformFeeRateNumber = platformFee ? Number(platformFee.rate) : 0;
+  const platformFeePercentLabel = platformFeeLoading
+    ? 'Loading…'
+    : platformFee
+      ? `${(platformFeeRateNumber * 100).toFixed(2).replace(/\.00$/, '')}%`
+      : 'Unavailable';
+  const platformFeeAmountLabel =
+    platformFee && platformFeeRateNumber > 0
+      ? formatCurrency(Math.round(listing.price_cents * platformFeeRateNumber), listing.currency)
+      : null;
+  const platformFeeDetail = platformFeeLoading
+    ? 'Connecting to the current rate'
+    : platformFee
+      ? `${platformFeeAmountLabel ?? 'Fee added at checkout'} · ${platformFee.name}`
+      : 'Platform fee info unavailable';
 
   async function handleOrder() {
     setError(null);
@@ -463,6 +556,11 @@ export default function ListingDetailScreen() {
         <Text style={styles.location}>{formatLocation(listing) || 'Location pending'}</Text>
         <Text style={styles.description}>{listing.description}</Text>
         <Text style={styles.price}>{formatCurrency(listing.price_cents, listing.currency)}</Text>
+        <View style={styles.platformFeeRow}>
+          <Text style={styles.platformFeeLabel}>Platform fee</Text>
+          <Text style={styles.platformFeeValue}>{platformFeePercentLabel}</Text>
+        </View>
+        <Text style={styles.platformFeeDetail}>{platformFeeDetail}</Text>
         <View style={styles.heroBadgeRow}>
           <View style={[styles.heroBadge, styles.heroBadgeBooking]}>
             <Text style={[styles.heroBadgeText, styles.heroBadgeBookingText]}>
@@ -492,6 +590,18 @@ export default function ListingDetailScreen() {
           {listing.is_new_listing ? (
             <View style={[styles.heroBadge, styles.heroBadgeNew]}>
               <Text style={[styles.heroBadgeText, styles.heroBadgeNewText]}>New listing</Text>
+            </View>
+          ) : null}
+          {listing.is_promoted ? (
+            <View style={[styles.heroBadge, styles.heroBadgePromoted]}>
+              <Text style={[styles.heroBadgeText, styles.heroBadgePromotedText]}>Promoted</Text>
+            </View>
+          ) : null}
+          {comparisonScopeBadge ? (
+            <View style={[styles.heroBadge, comparisonScopeBadge.badgeStyle]}>
+              <Text style={[styles.heroBadgeText, comparisonScopeBadge.textStyle]}>
+                {comparisonScopeBadge.label}
+              </Text>
             </View>
           ) : null}
         </View>
@@ -909,6 +1019,30 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
   },
+  platformFeeRow: {
+    marginTop: 4,
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+  },
+  platformFeeLabel: {
+    color: '#7a6d5a',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  platformFeeValue: {
+    color: '#1f2319',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  platformFeeDetail: {
+    color: '#5f5548',
+    fontSize: 12,
+    lineHeight: 18,
+  },
   heroBadgeRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -937,6 +1071,9 @@ const styles = StyleSheet.create({
   heroBadgeNew: {
     backgroundColor: '#fff5e6',
   },
+  heroBadgePromoted: {
+    backgroundColor: '#fbe8dd',
+  },
   heroBadgeText: {
     fontSize: 11,
     fontWeight: '700',
@@ -960,6 +1097,9 @@ const styles = StyleSheet.create({
   },
   heroBadgeNewText: {
     color: '#7c4310',
+  },
+  heroBadgePromotedText: {
+    color: '#b94c23',
   },
   quickGrid: {
     flexDirection: 'row',

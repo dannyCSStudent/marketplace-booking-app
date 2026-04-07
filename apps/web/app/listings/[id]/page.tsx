@@ -36,6 +36,45 @@ function formatSellerRating(rating?: number, reviewCount?: number) {
   return `${safeRating.toFixed(1)} stars · ${safeReviewCount} review${safeReviewCount === 1 ? "" : "s"}`;
 }
 
+function getListingComparisonScopeBadge(scope: string | null | undefined) {
+  if (!scope) {
+    return null;
+  }
+
+  if (scope === "Category + local") {
+    return {
+      label: scope,
+      className: "rounded-full border border-[#9bc9b1] bg-[#e4f1ed] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0f5f62]",
+    };
+  }
+
+  if (scope === "Category") {
+    return {
+      label: scope,
+      className: "rounded-full border border-[#c7e0ff] bg-[#ecf7ff] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0f4a87]",
+    };
+  }
+
+  if (scope === "Type + local") {
+    return {
+      label: scope,
+      className: "rounded-full border border-[#f1c58d] bg-[#fff4e7] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a4a0f]",
+    };
+  }
+
+  if (scope === "Type") {
+    return {
+      label: scope,
+      className: "rounded-full border border-border bg-background/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-foreground/68",
+    };
+  }
+
+  return {
+    label: scope,
+    className: "rounded-full border border-[#f5b3c0] bg-[#ffeef0] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a01622]",
+  };
+}
+
 export default async function ListingDetailPage({
   params,
 }: {
@@ -53,6 +92,7 @@ export default async function ListingDetailPage({
   const transactionCount = listing.recent_transaction_count ?? 0;
   const isPopularNearYou = transactionCount >= 3;
   const listingLocationLabel = getLocationLabel([listing.city, listing.state, listing.country]);
+  const comparisonScopeBadge = getListingComparisonScopeBadge(listing.last_pricing_comparison_scope);
   const tractionValue = transactionCount > 0
     ? `${transactionCount} recent requests${transactionCount >= 3 ? ' · Popular near you' : ''}`
     : listing.is_new_listing
@@ -119,10 +159,18 @@ export default async function ListingDetailPage({
                       Popular near you
                     </span>
                   ) : null}
+                  {listing.is_promoted ? (
+                    <span className="rounded-full border border-[#b94c23]/30 bg-[#fbe8dd] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#b94c23]">
+                      Promoted
+                    </span>
+                  ) : null}
                   {listing.is_new_listing ? (
                     <span className="rounded-full bg-[#fff5e6] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7c4310]">
                       New listing
                     </span>
+                  ) : null}
+                  {comparisonScopeBadge ? (
+                    <span className={comparisonScopeBadge.className}>{comparisonScopeBadge.label}</span>
                   ) : null}
                 </div>
                 <h1 className="text-4xl font-semibold tracking-[-0.05em] text-foreground sm:text-5xl">

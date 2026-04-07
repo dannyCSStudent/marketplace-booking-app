@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
@@ -17,11 +18,16 @@ from app.schemas.bookings import (
     BookingStatusEventRead,
     BookingStatusUpdate,
 )
+from app.services.platform_fees import (
+    calculate_platform_fee,
+    get_active_platform_fee_rate_value,
+)
 from app.services.workflows import BOOKING_TRANSITIONS_BY_ACTOR, validate_transition
 from app.services.notifications import queue_transaction_notification_jobs
 
 BOOKING_SELECT = (
     "id,buyer_id,seller_id,listing_id,status,scheduled_start,scheduled_end,total_cents,currency,"
+    "platform_fee_cents,platform_fee_rate,"
     "seller_response_note,"
     "notes,buyer_browse_context,listings(title,type),booking_status_events(id,status,actor_role,note,created_at)"
 )
@@ -57,6 +63,8 @@ def _serialize_booking(row: dict, *, include_admin: bool = False) -> BookingRead
         scheduled_end=row["scheduled_end"],
         total_cents=row.get("total_cents"),
         currency=row.get("currency") or "USD",
+        platform_fee_cents=row.get("platform_fee_cents", 0),
+        platform_fee_rate=Decimal(str(row.get("platform_fee_rate", 0))),
         notes=row.get("notes"),
         buyer_browse_context=row.get("buyer_browse_context"),
         seller_response_note=row.get("seller_response_note"),
@@ -407,6 +415,14 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
                 detail=f"Booking duration must be exactly {duration_minutes} minutes",
             )
 
+    price_cents = listing.get("price_cents")
+    if price_cents is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Booking requires a priced listing")
+
+    platform_fee_rate = get_active_platform_fee_rate_value()
+    platform_fee_cents = calculate_platform_fee(price_cents, platform_fee_rate)
+    total_cents = price_cents + platform_fee_cents
+
     try:
         rows = supabase.insert(
             "bookings",
@@ -416,8 +432,10 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
                 "listing_id": payload.listing_id,
                 "scheduled_start": scheduled_start.isoformat(),
                 "scheduled_end": scheduled_end.isoformat(),
-                "total_cents": listing.get("price_cents"),
+                "total_cents": total_cents,
                 "currency": listing.get("currency") or "USD",
+                "platform_fee_cents": platform_fee_cents,
+                "platform_fee_rate": str(platform_fee_rate),
                 "notes": payload.notes,
                 "buyer_browse_context": payload.buyer_browse_context,
             },

@@ -4,9 +4,11 @@ export { formatCurrency } from "@repo/api-client";
 export { ApiError, apiRoutes, buildNotifications, createApiClient };
 export type {
   AdminUser,
+  CategoryRead,
   BookingAdmin,
   Booking,
   Listing,
+  ListingType,
   ListingImage,
   ListingCreateInput,
   ListingImageCreateInput,
@@ -16,7 +18,9 @@ export type {
   ListingAiAssistResponse,
   ListingAiAssistSuggestion,
   ListingPriceInsight,
+  ListingPricingScopeCount,
   ListingResponse,
+  PlatformFeeRateRead,
   NotificationItem,
   NotificationDelivery,
   OrderAdmin,
@@ -36,6 +40,10 @@ export type {
   SellerCreateInput,
   SellerProfile,
   SellerWorkspaceData,
+  ListingPromotionDetail,
+  ListingPromotionSummary,
+  ListingPromotionEvent,
+  PlatformFeeHistoryPoint,
 } from "@repo/api-client";
 
 type MarketplaceData = {

@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel
 
@@ -61,6 +62,9 @@ class OrderRead(BaseModel):
     subtotal_cents: int
     total_cents: int
     currency: str = "USD"
+    delivery_fee_cents: int = 0
+    platform_fee_cents: int = 0
+    platform_fee_rate: Decimal = Decimal("0")
     notes: str | None = None
     buyer_browse_context: str | None = None
     seller_response_note: str | None = None

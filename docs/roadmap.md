@@ -145,16 +145,20 @@ Make the product meaningfully better than generic marketplaces.
 #### Pricing Intelligence
 - Suggested price ranges
 - Basic demand insights
+Status: in progress. Seller workspace pricing insights and listing traction signals are live.
+    - Added comparison-scope history so sellers know exactly which sample tier (category/local/type) backed their price changes.
 
 #### Local Feed Enhancements
 - “Available today” listings
 - “Popular near you”
 - “New listings”
+Status: live across buyer web, buyer mobile, listing detail, seller workspace, and admin ops panels.
 
 #### Seller Insights
 - Repeat customers
 - Listing performance
 - Conversion hints
+Status: in progress. Seller workspace and admin ops now surface listing retention, adjustment summaries, and recent demand pills.
 
 #### Smart Discovery
 - Better search ranking

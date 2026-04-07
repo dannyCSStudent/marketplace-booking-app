@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel
 
@@ -50,6 +51,8 @@ class BookingRead(BaseModel):
     scheduled_end: datetime
     total_cents: int | None = None
     currency: str = "USD"
+    platform_fee_cents: int = 0
+    platform_fee_rate: Decimal = Decimal("0")
     notes: str | None = None
     buyer_browse_context: str | None = None
     seller_response_note: str | None = None

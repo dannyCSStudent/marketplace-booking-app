@@ -1,9 +1,18 @@
+from enum import Enum
+
 from pydantic import BaseModel
+
+
+class ListingType(str, Enum):
+    product = "product"
+    service = "service"
+    hybrid = "hybrid"
 
 class ListingQueryParams(BaseModel):
     query: str | None = None
     category: str | None = None
-    type: str | None = None
+    type: ListingType | None = None
+    promoted: bool | None = None
 
 class ListingCreate(BaseModel):
     seller_id: str
@@ -11,7 +20,7 @@ class ListingCreate(BaseModel):
     title: str
     slug: str | None = None
     description: str | None = None
-    type: str
+    type: ListingType
     status: str = "draft"
     price_cents: int | None = None
     currency: str = "USD"
@@ -27,13 +36,14 @@ class ListingCreate(BaseModel):
     delivery_enabled: bool = False
     shipping_enabled: bool = False
     lead_time_hours: int | None = None
+    is_promoted: bool = False
 
 class ListingUpdate(BaseModel):
     category_id: str | None = None
     title: str | None = None
     slug: str | None = None
     description: str | None = None
-    type: str | None = None
+    type: ListingType | None = None
     status: str | None = None
     price_cents: int | None = None
     currency: str | None = None
@@ -49,6 +59,7 @@ class ListingUpdate(BaseModel):
     delivery_enabled: bool | None = None
     shipping_enabled: bool | None = None
     lead_time_hours: int | None = None
+    is_promoted: bool | None = None
 
 class ListingImageCreate(BaseModel):
     image_url: str
@@ -73,10 +84,11 @@ class ListingRead(BaseModel):
     id: str
     seller_id: str
     category_id: str | None = None
+    category: str | None = None
     title: str
     slug: str
     description: str | None = None
-    type: str
+    type: ListingType
     status: str
     price_cents: int | None = None
     currency: str = "USD"
@@ -97,9 +109,38 @@ class ListingRead(BaseModel):
     updated_at: str
     last_operating_adjustment_at: str | None = None
     last_operating_adjustment_summary: str | None = None
+    last_pricing_comparison_scope: str | None = None
     available_today: bool = False
     is_new_listing: bool = False
     recent_transaction_count: int = 0
+    is_promoted: bool = False
+
+
+class ListingPricingScopeCount(BaseModel):
+    scope: str
+    count: int
+
+
+class ListingPromotionSummary(BaseModel):
+    type: str
+    count: int
+
+
+class ListingPromotionDetail(BaseModel):
+    id: str
+    title: str
+    seller_id: str
+
+
+
+class ListingPromotionEvent(BaseModel):
+    id: str
+    listing_id: str
+    seller_id: str
+    promoted: bool
+    platform_fee_rate: str
+    created_at: str
+
 
 class ListingListResponse(BaseModel):
     items: list[ListingRead]
@@ -110,7 +151,7 @@ class ListingAiAssistRequest(BaseModel):
     listing_id: str | None = None
     title: str | None = None
     description: str | None = None
-    type: str | None = None
+    type: ListingType | None = None
     category_id: str | None = None
     city: str | None = None
     state: str | None = None
@@ -135,6 +176,7 @@ class ListingPriceInsight(BaseModel):
     listing_id: str
     currency: str
     sample_size: int
+    comparison_scope: str
     min_price_cents: int | None = None
     max_price_cents: int | None = None
     avg_price_cents: int | None = None

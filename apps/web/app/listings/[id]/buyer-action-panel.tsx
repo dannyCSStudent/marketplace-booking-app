@@ -242,7 +242,7 @@ function getRecommendedBrowsePreset(input: {
 }
 
 function getRecommendationReason(
-  listing: Listing,
+  listing: Pick<Listing, "type" | "is_local_only">,
   preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
 ) {
   if (!preset) {
@@ -275,7 +275,7 @@ function getRecommendationReason(
 }
 
 function getRecommendationScore(
-  listing: Listing,
+  listing: Pick<Listing, "type" | "is_local_only">,
   preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
 ) {
   if (!preset) {
@@ -308,7 +308,7 @@ function getRecommendationScore(
 }
 
 function getRecommendationMatch(
-  listing: Listing,
+  listing: Pick<Listing, "type" | "is_local_only">,
   preset: { label: "Local-First" | "Services" | "Hybrid" | "Products" } | null,
 ) {
   const score = getRecommendationScore(listing, preset);
@@ -346,6 +346,7 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
   const [quantity, setQuantity] = useState("1");
   const [notes, setNotes] = useState("Buyer flow test from web.");
   const [bookingDayOffset, setBookingDayOffset] = useState("1");
+  const [platformFeeRate, setPlatformFeeRate] = useState(0);
   const [selectedFulfillment, setSelectedFulfillment] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -476,6 +477,33 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
     })();
   }, [listing]);
 
+  const sanitizedQuantity = Math.max(1, Number(quantity) || 1);
+  const unitPrice = listing.price_cents ?? 0;
+  const subtotal = unitPrice * sanitizedQuantity;
+  const platformFeeAmount = Math.round(subtotal * platformFeeRate);
+  const totalWithFee = subtotal + platformFeeAmount;
+  const platformFeePercentLabel = `${(platformFeeRate * 100).toFixed(2).replace(/\.00$/, "")} %`;
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await api.getPlatformFees({ cache: "no-store" });
+        if (!cancelled) {
+          setPlatformFeeRate(Number(response.rate ?? 0));
+        }
+      } catch {
+        if (!cancelled) {
+          setPlatformFeeRate(0);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function handleAuthenticate() {
     setLoading(true);
     setError(null);
@@ -526,7 +554,7 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
           items: [
             {
               listing_id: listing.id,
-              quantity: Number(quantity),
+              quantity: sanitizedQuantity,
             },
           ],
         },
@@ -961,6 +989,22 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
           {formatCurrency(listing.price_cents, listing.currency)}
         </p>
       </div>
+      {canOrder ? (
+        <div className="mt-3 rounded-[1.5rem] border border-white/12 bg-white/10 p-4 text-sm text-white/80">
+          <div className="flex items-center justify-between">
+            <span>Subtotal</span>
+            <span>{formatCurrency(subtotal, listing.currency)}</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <span>Platform fee ({platformFeePercentLabel})</span>
+            <span>{formatCurrency(platformFeeAmount, listing.currency)}</span>
+          </div>
+          <div className="mt-3 flex items-center justify-between text-white">
+            <span className="font-semibold">Total</span>
+            <span className="font-semibold">{formatCurrency(totalWithFee, listing.currency)}</span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

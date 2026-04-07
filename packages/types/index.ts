@@ -98,6 +98,7 @@ export interface Listing {
   meetup_enabled: boolean;
   delivery_enabled: boolean;
   shipping_enabled: boolean;
+  is_promoted: boolean;
   lead_time_hours: number | null;
   created_at: ISODateString;
   updated_at: ISODateString;
@@ -136,6 +137,7 @@ export interface Order {
   subtotal_cents: number;
   delivery_fee_cents: number;
   platform_fee_cents: number;
+  platform_fee_rate: number;
   total_cents: number;
   currency: string;
   notes: string | null;
@@ -165,6 +167,8 @@ export interface Booking {
   total_cents: number | null;
   currency: string;
   notes: string | null;
+  platform_fee_cents: number;
+  platform_fee_rate: number;
   created_at: ISODateString;
   updated_at: ISODateString;
 }

@@ -23,13 +23,16 @@ from app.schemas.listings import (
     ListingRead,
     ListingUpdate,
 )
+from app.services.platform_fees import get_active_platform_fee_rate_value
 
 LISTING_IMAGE_SELECT = "id,listing_id,image_url,alt_text,sort_order,created_at"
 LISTING_SELECT = (
     "id,seller_id,category_id,title,slug,description,type,status,price_cents,currency,"
     "inventory_count,requires_booking,duration_minutes,is_local_only,city,state,country,"
-    "pickup_enabled,meetup_enabled,delivery_enabled,shipping_enabled,lead_time_hours,"
+    "pickup_enabled,meetup_enabled,delivery_enabled,shipping_enabled,is_promoted,lead_time_hours,"
     "created_at,updated_at,last_operating_adjustment_at,last_operating_adjustment_summary,"
+    "last_pricing_comparison_scope,"
+    "category:categories(name),"
     f"images:listing_images({LISTING_IMAGE_SELECT})"
 )
 
@@ -71,11 +74,19 @@ def _build_listing_payload(payload: ListingCreate) -> dict[str, object]:
 
 
 def _to_listing_read(row: dict[str, object]) -> ListingRead:
+    category = row.get("category")
+    category_name: str | None = None
+    if isinstance(category, dict):
+        name = category.get("name")
+        category_name = name if isinstance(name, str) else None
+    elif isinstance(category, str):
+        category_name = category
+
     images = sorted(
         [ListingImageRead(**image) for image in (row.get("images") or [])],
         key=lambda image: (image.sort_order, image.created_at),
     )
-    return ListingRead(**{**row, "images": images})
+    return ListingRead(**{**row, "category": category_name, "images": images})
 
 
 def _build_operating_adjustment_summary(
@@ -296,8 +307,13 @@ def _calculate_median(prices: list[int]) -> int:
     return sorted_prices[mid]
 
 
-def _collect_similar_price_samples(listing: ListingRead, supabase) -> list[int]:
-    query = {
+def _build_price_sample_query(
+    listing: ListingRead,
+    *,
+    category_only: bool,
+    local_only: bool,
+) -> dict[str, str | int]:
+    query: dict[str, str | int] = {
         "select": "price_cents",
         "status": "eq.active",
         "type": f"eq.{listing.type}",
@@ -305,17 +321,98 @@ def _collect_similar_price_samples(listing: ListingRead, supabase) -> list[int]:
         "limit": 50,
     }
     query["id"] = f"neq.{listing.id}"
-    if listing.category_id:
+    if category_only and listing.category_id:
         query["category_id"] = f"eq.{listing.category_id}"
-    if listing.city:
+    if local_only and listing.city:
         query["city"] = f"eq.{listing.city}"
-    elif listing.state:
+    elif local_only and listing.state:
         query["state"] = f"eq.{listing.state}"
     if listing.country:
         query["country"] = f"eq.{listing.country}"
 
-    rows = supabase.select("listings", query=query, use_service_role=True)
-    return [row["price_cents"] for row in rows if row.get("price_cents") is not None]
+    return query
+
+
+def _collect_similar_price_samples(
+    listing: ListingRead,
+    supabase,
+) -> tuple[list[int], str]:
+    sample_tiers: list[tuple[str, dict[str, str | int]]] = []
+
+    if listing.category_id:
+        sample_tiers.append(
+            (
+                "category + local",
+                _build_price_sample_query(listing, category_only=True, local_only=True),
+            )
+        )
+        sample_tiers.append(
+            (
+                "category",
+                _build_price_sample_query(listing, category_only=True, local_only=False),
+            )
+        )
+
+    sample_tiers.append(
+        (
+            "type + local",
+            _build_price_sample_query(listing, category_only=False, local_only=True),
+        )
+    )
+    sample_tiers.append(
+        (
+            "type",
+            _build_price_sample_query(listing, category_only=False, local_only=False),
+        )
+    )
+
+    seen_signatures: set[tuple[tuple[str, str | int], ...]] = set()
+    for label, query in sample_tiers:
+        signature = tuple(sorted(query.items()))
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+
+        rows = supabase.select("listings", query=query, use_service_role=True)
+        prices = [row["price_cents"] for row in rows if row.get("price_cents") is not None]
+        if prices:
+            return prices, label
+
+    return [], "none"
+
+
+def _format_price_sample_scope(sample_scope: str, listing: ListingRead) -> str:
+    category_label = listing.category or "category"
+    location_hint = _build_listing_location_hint(listing)
+
+    if sample_scope == "category + local":
+        if location_hint:
+            return f"{category_label} listings in {location_hint}"
+        return f"{category_label} listings nearby"
+
+    if sample_scope == "category":
+        return f"{category_label} listings"
+
+    if sample_scope == "type + local":
+        type_label = listing.type.replace("_", " ")
+        if location_hint:
+            return f"{type_label} listings in {location_hint}"
+        return f"{type_label} listings nearby"
+
+    type_label = listing.type.replace("_", " ")
+    return f"{type_label} listings"
+
+
+def _format_price_comparison_scope_label(sample_scope: str) -> str:
+    if sample_scope == "category + local":
+        return "Category + local"
+    if sample_scope == "category":
+        return "Category"
+    if sample_scope == "type + local":
+        return "Type + local"
+    if sample_scope == "type":
+        return "Type"
+    return "No sample"
 
 
 def _collect_recent_transaction_counts(listing_ids: list[str], supabase) -> dict[str, int]:
@@ -360,16 +457,22 @@ def _attach_recent_transaction_counts(rows: list[dict[str, object]], supabase) -
 def _build_price_insight(
     listing: ListingRead,
     prices: list[int],
+    sample_scope: str,
 ) -> ListingPriceInsight:
     sample_size = len(prices)
-    location_hint = _build_listing_location_hint(listing)
+    sample_scope_label = _format_price_sample_scope(sample_scope, listing)
 
     if sample_size == 0:
-        summary = "No similar active listings with pricing data yet."
+        summary = (
+            f"No active {sample_scope_label} with pricing data yet."
+            if sample_scope != "none"
+            else "No similar active listings with pricing data yet."
+        )
         return ListingPriceInsight(
             listing_id=listing.id,
             currency=listing.currency,
             sample_size=0,
+            comparison_scope=_format_price_comparison_scope_label(sample_scope),
             summary=summary,
         )
 
@@ -378,15 +481,13 @@ def _build_price_insight(
     avg_price = round(sum(prices) / sample_size)
     median_price = _calculate_median(prices)
     suggested_price = median_price if median_price else listing.price_cents
-    summary_parts = [f"Derived from {sample_size} similar listings"]
-    if location_hint:
-        summary_parts.append(f"in {location_hint}")
-    summary = " ".join(summary_parts) + "."
+    summary = f"Derived from {sample_size} active {sample_scope_label}."
 
     return ListingPriceInsight(
         listing_id=listing.id,
         currency=listing.currency,
         sample_size=sample_size,
+        comparison_scope=_format_price_comparison_scope_label(sample_scope),
         min_price_cents=min_price,
         max_price_cents=max_price,
         avg_price_cents=avg_price,
@@ -394,6 +495,46 @@ def _build_price_insight(
         suggested_price_cents=suggested_price,
         summary=summary,
     )
+
+
+def _collect_recent_transaction_counts(listing_ids: list[str], supabase) -> dict[str, int]:
+    if not listing_ids:
+        return {}
+
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    threshold = week_ago.isoformat()
+    quoted_ids = ",".join(f'"{listing_id}"' for listing_id in listing_ids)
+    query = {
+        "select": "listing_id",
+        "listing_id": f"in.({quoted_ids})",
+        "created_at": f"gte.{threshold}",
+        "limit": "1000",
+    }
+    counts: Counter[str] = Counter()
+
+    def _sum_rows(table: str) -> None:
+        try:
+            rows = supabase.select(table, query=query, use_service_role=True)
+        except SupabaseError:
+            return
+
+        for row in rows:
+            listing_id = row.get("listing_id")
+            if listing_id:
+                counts[listing_id] += 1
+
+    _sum_rows("order_items")
+    _sum_rows("bookings")
+
+    return dict(counts)
+
+
+def _attach_recent_transaction_counts(rows: list[dict[str, object]], supabase) -> None:
+    listing_ids = [row["id"] for row in rows if row.get("id")]
+    counts = _collect_recent_transaction_counts(listing_ids, supabase)
+    for row in rows:
+        row["recent_transaction_count"] = counts.get(row.get("id"), 0)
+
 
 def list_public_listings(params: ListingQueryParams) -> ListingListResponse:
     supabase = get_supabase_client()
@@ -407,7 +548,15 @@ def list_public_listings(params: ListingQueryParams) -> ListingListResponse:
     if params.category:
         query["category_id"] = f"eq.{params.category}"
     if params.query:
-        query["title"] = f"ilike.*{params.query}*"
+        escaped_query = params.query.replace(",", r"\,")
+        query["or"] = (
+            f"title.ilike.*{escaped_query}*,"
+            f"description.ilike.*{escaped_query}*,"
+            f"city.ilike.*{escaped_query}*,"
+            f"state.ilike.*{escaped_query}*,"
+            f"country.ilike.*{escaped_query}*,"
+            f"slug.ilike.*{escaped_query}*"
+        )
 
     try:
         rows = supabase.select("listings", query=query, use_service_role=True)
@@ -415,15 +564,36 @@ def list_public_listings(params: ListingQueryParams) -> ListingListResponse:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     reference_time = datetime.now(timezone.utc)
-    reference_time = datetime.now(timezone.utc)
-    reference_time = datetime.now(timezone.utc)
     _attach_available_today(rows, supabase)
     _attach_recent_transaction_counts(rows, supabase)
     _attach_new_listing_flag(rows, reference_time)
-    _attach_new_listing_flag(rows, reference_time)
-    _attach_new_listing_flag(rows, reference_time)
     items = [_to_listing_read(row) for row in rows]
     return ListingListResponse(items=items, total=len(items))
+
+
+def list_pricing_scope_counts() -> list[dict[str, object]]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "listings",
+            query={
+                "select": "last_pricing_comparison_scope",
+                "status": "eq.active",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    counts: Counter[str] = Counter()
+    for row in rows:
+        scope = row.get("last_pricing_comparison_scope") or "Uncategorized"
+        counts[str(scope)] += 1
+
+    return [
+        {"scope": scope, "count": count}
+        for scope, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    ]
 
 def get_admin_listings() -> list[ListingRead]:
     supabase = get_supabase_client()
@@ -440,8 +610,10 @@ def get_admin_listings() -> list[ListingRead]:
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    reference_time = datetime.now(timezone.utc)
     _attach_available_today(rows, supabase)
     _attach_recent_transaction_counts(rows, supabase)
+    _attach_new_listing_flag(rows, reference_time)
     return [_to_listing_read(row) for row in rows]
 
 def get_my_listings(current_user: CurrentUser) -> list[ListingRead]:
@@ -464,8 +636,10 @@ def get_my_listings(current_user: CurrentUser) -> list[ListingRead]:
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    reference_time = datetime.now(timezone.utc)
     _attach_available_today(rows, supabase)
     _attach_recent_transaction_counts(rows, supabase)
+    _attach_new_listing_flag(rows, reference_time)
     return [_to_listing_read(row) for row in rows]
 
 def get_listing_by_id(listing_id: str) -> ListingRead:
@@ -552,8 +726,8 @@ def get_listing_price_insight(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     listing = _to_listing_read(row)
-    prices = _collect_similar_price_samples(listing, supabase)
-    return _build_price_insight(listing, prices)
+    prices, sample_scope = _collect_similar_price_samples(listing, supabase)
+    return _build_price_insight(listing, prices, sample_scope)
 
 def create_listing(current_user: CurrentUser, payload: ListingCreate) -> ListingRead:
     supabase = get_supabase_client()
@@ -596,6 +770,14 @@ def update_listing(current_user: CurrentUser, listing_id: str, payload: ListingU
         changes["last_operating_adjustment_at"] = datetime.now(timezone.utc).isoformat()
         changes["last_operating_adjustment_summary"] = adjustment_summary
 
+    if "price_cents" in changes:
+        listing_obj = _to_listing_read(current_row)
+        _, sample_scope = _collect_similar_price_samples(listing_obj, supabase)
+        if sample_scope != "none":
+            changes["last_pricing_comparison_scope"] = _format_price_comparison_scope_label(sample_scope)
+        else:
+            changes["last_pricing_comparison_scope"] = None
+
     try:
         rows = supabase.update(
             "listings",
@@ -613,6 +795,106 @@ def update_listing(current_user: CurrentUser, listing_id: str, payload: ListingU
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Listing not found")
 
     return _to_listing_read(rows[0])
+
+
+def set_listing_promotion(listing_id: str, promoted: bool) -> ListingRead:
+    supabase = get_supabase_client()
+
+    try:
+        rows = supabase.update(
+            "listings",
+            {"is_promoted": promoted},
+            query={
+                "id": f"eq.{listing_id}",
+                "select": LISTING_SELECT,
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Listing not found")
+
+    listing = _to_listing_read(rows[0])
+    record_promotion_event(listing, promoted)
+    return listing
+
+
+def list_promoted_listings(limit: int = 5) -> list[dict[str, object]]:
+    supabase = get_supabase_client()
+
+    try:
+        rows = supabase.select(
+            "listings",
+            query={
+                "select": "id,title,seller_id",
+                "is_promoted": "eq.true",
+                "order": "updated_at.desc",
+                "limit": str(limit),
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return rows
+
+
+def list_promoted_summary() -> list[dict[str, object]]:
+    supabase = get_supabase_client()
+
+    try:
+        rows = supabase.select(
+            "listings",
+            query={
+                "select": "type",
+                "is_promoted": "eq.true",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    counts = Counter(str(row.get("type")) for row in rows if row.get("type"))
+
+    return [{"type": listing_type, "count": count} for listing_type, count in counts.items()]
+
+
+def list_promotion_events(limit: int = 20) -> list[dict[str, object]]:
+    supabase = get_supabase_client()
+
+    try:
+        rows = supabase.select(
+            "promotion_events",
+            query={
+                "select": "id,listing_id,seller_id,promoted,platform_fee_rate,created_at",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return rows
+
+
+def record_promotion_event(listing: ListingRead, promoted: bool) -> None:
+    supabase = get_supabase_client()
+    platform_fee_rate = get_active_platform_fee_rate_value()
+
+    payload = {
+        "listing_id": listing.id,
+        "seller_id": listing.seller_id,
+        "promoted": promoted,
+        "platform_fee_rate": str(platform_fee_rate),
+    }
+
+    try:
+        supabase.insert("promotion_events", payload, use_service_role=True)
+    except (SupabaseError, AttributeError):
+        pass
 
 def add_listing_image(
     current_user: CurrentUser,

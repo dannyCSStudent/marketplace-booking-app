@@ -30,6 +30,31 @@
         }
       }
     },
+    "/categories": {
+      "get": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "List Categories",
+        "operationId": "list_categories_categories_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CategoryRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Categories Categories Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/profiles/me": {
       "get": {
         "tags": [
@@ -568,6 +593,85 @@
                 "schema": {
                   "$ref": "#/components/schemas/ListingRead"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/listings/export": {
+      "get": {
+        "tags": [
+          "listings"
+        ],
+        "summary": "Export Listings",
+        "operationId": "export_listings_listings_export_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -2923,6 +3027,422 @@
           }
         }
       }
+    },
+    "/admin/listings/pricing-scope-summary": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Pricing Scope Counts",
+        "operationId": "read_pricing_scope_counts_admin_listings_pricing_scope_summary_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ListingPricingScopeCount"
+                  },
+                  "title": "Response Read Pricing Scope Counts Admin Listings Pricing Scope Summary Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/listings/promoted": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Promoted Listings",
+        "operationId": "read_promoted_listings_admin_listings_promoted_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ListingPromotionDetail"
+                  },
+                  "title": "Response Read Promoted Listings Admin Listings Promoted Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/listings/promotions/summary": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Promoted Summary",
+        "operationId": "read_promoted_summary_admin_listings_promotions_summary_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ListingPromotionSummary"
+                  },
+                  "title": "Response Read Promoted Summary Admin Listings Promotions Summary Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/listings/promotions/events": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Promotion Events",
+        "operationId": "read_promotion_events_admin_listings_promotions_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ListingPromotionEvent"
+                  },
+                  "title": "Response Read Promotion Events Admin Listings Promotions Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/listings/{listing_id}/promotion": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Update Listing Promotion",
+        "operationId": "update_listing_promotion_admin_listings__listing_id__promotion_patch",
+        "parameters": [
+          {
+            "name": "listing_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Listing Id"
+            }
+          },
+          {
+            "name": "promoted",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean",
+              "title": "Promoted"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/platform-fees/history": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Platform Fee History",
+        "operationId": "read_platform_fee_history_admin_platform_fees_history_get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 60,
+              "minimum": 1,
+              "default": 14,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PlatformFeeHistoryPoint"
+                  },
+                  "title": "Response Read Platform Fee History Admin Platform Fees History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/platform-fees": {
+      "get": {
+        "tags": [
+          "platform-fees"
+        ],
+        "summary": "Read Platform Fee Rate",
+        "operationId": "read_platform_fee_rate_platform_fees_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformFeeRateRead"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "platform-fees"
+        ],
+        "summary": "Create Platform Fee Rate",
+        "operationId": "create_platform_fee_rate_platform_fees_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformFeeRateCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformFeeRateRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3071,6 +3591,17 @@
             "type": "string",
             "title": "Currency",
             "default": "USD"
+          },
+          "platform_fee_cents": {
+            "type": "integer",
+            "title": "Platform Fee Cents",
+            "default": 0
+          },
+          "platform_fee_rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Platform Fee Rate",
+            "default": "0"
           },
           "notes": {
             "anyOf": [
@@ -3460,6 +3991,17 @@
             "title": "Currency",
             "default": "USD"
           },
+          "platform_fee_cents": {
+            "type": "integer",
+            "title": "Platform Fee Cents",
+            "default": 0
+          },
+          "platform_fee_rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Platform Fee Rate",
+            "default": "0"
+          },
           "notes": {
             "anyOf": [
               {
@@ -3600,6 +4142,40 @@
         ],
         "title": "BookingStatusUpdate"
       },
+      "CategoryRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug"
+        ],
+        "title": "CategoryRead"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -3651,13 +4227,12 @@
           "type": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ListingType"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Type"
+            ]
           },
           "category_id": {
             "anyOf": [
@@ -3838,8 +4413,7 @@
             "title": "Description"
           },
           "type": {
-            "type": "string",
-            "title": "Type"
+            "$ref": "#/components/schemas/ListingType"
           },
           "status": {
             "type": "string",
@@ -3957,6 +4531,11 @@
               }
             ],
             "title": "Lead Time Hours"
+          },
+          "is_promoted": {
+            "type": "boolean",
+            "title": "Is Promoted",
+            "default": false
           }
         },
         "type": "object",
@@ -4115,6 +4694,10 @@
             "type": "integer",
             "title": "Sample Size"
           },
+          "comparison_scope": {
+            "type": "string",
+            "title": "Comparison Scope"
+          },
           "min_price_cents": {
             "anyOf": [
               {
@@ -4180,9 +4763,107 @@
           "listing_id",
           "currency",
           "sample_size",
+          "comparison_scope",
           "summary"
         ],
         "title": "ListingPriceInsight"
+      },
+      "ListingPricingScopeCount": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "count"
+        ],
+        "title": "ListingPricingScopeCount"
+      },
+      "ListingPromotionDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "seller_id"
+        ],
+        "title": "ListingPromotionDetail"
+      },
+      "ListingPromotionEvent": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "listing_id": {
+            "type": "string",
+            "title": "Listing Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "promoted": {
+            "type": "boolean",
+            "title": "Promoted"
+          },
+          "platform_fee_rate": {
+            "type": "string",
+            "title": "Platform Fee Rate"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "listing_id",
+          "seller_id",
+          "promoted",
+          "platform_fee_rate",
+          "created_at"
+        ],
+        "title": "ListingPromotionEvent"
+      },
+      "ListingPromotionSummary": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "count"
+        ],
+        "title": "ListingPromotionSummary"
       },
       "ListingRead": {
         "properties": {
@@ -4205,6 +4886,17 @@
             ],
             "title": "Category Id"
           },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
           "title": {
             "type": "string",
             "title": "Title"
@@ -4225,8 +4917,7 @@
             "title": "Description"
           },
           "type": {
-            "type": "string",
-            "title": "Type"
+            "$ref": "#/components/schemas/ListingType"
           },
           "status": {
             "type": "string",
@@ -4382,6 +5073,17 @@
             ],
             "title": "Last Operating Adjustment Summary"
           },
+          "last_pricing_comparison_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pricing Comparison Scope"
+          },
           "available_today": {
             "type": "boolean",
             "title": "Available Today",
@@ -4396,6 +5098,11 @@
             "type": "integer",
             "title": "Recent Transaction Count",
             "default": 0
+          },
+          "is_promoted": {
+            "type": "boolean",
+            "title": "Is Promoted",
+            "default": false
           }
         },
         "type": "object",
@@ -4410,6 +5117,15 @@
           "updated_at"
         ],
         "title": "ListingRead"
+      },
+      "ListingType": {
+        "type": "string",
+        "enum": [
+          "product",
+          "service",
+          "hybrid"
+        ],
+        "title": "ListingType"
       },
       "ListingUpdate": {
         "properties": {
@@ -4460,13 +5176,12 @@
           "type": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ListingType"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Type"
+            ]
           },
           "status": {
             "anyOf": [
@@ -4632,6 +5347,17 @@
               }
             ],
             "title": "Lead Time Hours"
+          },
+          "is_promoted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Promoted"
           }
         },
         "type": "object",
@@ -4857,6 +5583,22 @@
             "type": "string",
             "title": "Currency",
             "default": "USD"
+          },
+          "delivery_fee_cents": {
+            "type": "integer",
+            "title": "Delivery Fee Cents",
+            "default": 0
+          },
+          "platform_fee_cents": {
+            "type": "integer",
+            "title": "Platform Fee Cents",
+            "default": 0
+          },
+          "platform_fee_rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Platform Fee Rate",
+            "default": "0"
           },
           "notes": {
             "anyOf": [
@@ -5277,6 +6019,22 @@
             "title": "Currency",
             "default": "USD"
           },
+          "delivery_fee_cents": {
+            "type": "integer",
+            "title": "Delivery Fee Cents",
+            "default": 0
+          },
+          "platform_fee_cents": {
+            "type": "integer",
+            "title": "Platform Fee Cents",
+            "default": 0
+          },
+          "platform_fee_rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Platform Fee Rate",
+            "default": "0"
+          },
           "notes": {
             "anyOf": [
               {
@@ -5402,6 +6160,109 @@
           "status"
         ],
         "title": "OrderStatusUpdate"
+      },
+      "PlatformFeeHistoryPoint": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "order_fee_cents": {
+            "type": "integer",
+            "title": "Order Fee Cents"
+          },
+          "booking_fee_cents": {
+            "type": "integer",
+            "title": "Booking Fee Cents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "order_fee_cents",
+          "booking_fee_cents"
+        ],
+        "title": "PlatformFeeHistoryPoint"
+      },
+      "PlatformFeeRateCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Rate"
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "rate"
+        ],
+        "title": "PlatformFeeRateCreate"
+      },
+      "PlatformFeeRateRead": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rate"
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "rate"
+        ],
+        "title": "PlatformFeeRateRead"
       },
       "ProfileCreate": {
         "properties": {

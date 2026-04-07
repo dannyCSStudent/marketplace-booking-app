@@ -14,6 +14,29 @@ Marketplace and service-booking monorepo built with:
 - `apps/mobile`: Expo buyer app
 - `apps/web`: Next.js seller workspace
 
+## Discovery Signals
+
+The listing API now returns discovery metadata that is shared across buyer, seller, and admin surfaces:
+
+- `available_today`: derived from listing availability rows for the current day/time
+- `recent_transaction_count`: counts recent order and booking activity for the listing
+- `is_new_listing`: marks listings created within the last 3 days
+- `last_operating_adjustment_at` and `last_operating_adjustment_summary`: track recent seller operating changes
+- `last_pricing_comparison_scope`: records the last evidence tier (category/local/type) that powered a saved price
+
+These signals currently power:
+
+- buyer web and mobile feed filters such as `Available today` and `Popular near you`
+- buyer listing detail badges and traction summaries
+- seller workspace listing traction pills and pricing/adjustment context
+- admin support and delivery ops listing context panels
+
+## Admin tools
+
+- `/listings/export`: CSV download that includes `last_pricing_comparison_scope`, now linked from the support and delivery queues.
+- `/admin/pricing-audit`: quick scope counts for the last saved price decisions, accessible from the new admin nav and audit button.
+- `/admin/listings/pricing-scope-summary`: API feed for dashboards, alerts, and automated exports.
+
 ## Core Scripts
 
 ```sh

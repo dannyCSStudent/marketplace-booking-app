@@ -12,6 +12,14 @@ const typeColors = {
   hybrid: '#6f4a09',
 } as const;
 
+function getListingTypeColor(type: string) {
+  if (type === 'product' || type === 'service' || type === 'hybrid') {
+    return typeColors[type];
+  }
+
+  return '#4d4338';
+}
+
 function getListingSignals(listing: {
   requires_booking?: boolean;
   pickup_enabled?: boolean;
@@ -40,7 +48,129 @@ function getLocationLabel(parts: (string | null | undefined)[]) {
   return label || 'Location pending';
 }
 
-function formatTypeFilter(typeFilter: 'all' | 'product' | 'service' | 'hybrid') {
+function getListingSearchScore(
+  listing: {
+    title: string;
+    slug: string;
+    description?: string | null;
+    category?: string | null;
+    city?: string | null;
+    state?: string | null;
+    country?: string | null;
+    type: string;
+  },
+  normalizedQuery: string,
+) {
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const title = listing.title.toLowerCase();
+  const slug = listing.slug.toLowerCase();
+  const description = listing.description?.toLowerCase() ?? '';
+  const category = listing.category?.toLowerCase() ?? '';
+  const location = [listing.city, listing.state, listing.country]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  const type = listing.type.toLowerCase();
+
+  let score = 0;
+  if (title === normalizedQuery) {
+    score += 120;
+  } else if (title.startsWith(normalizedQuery)) {
+    score += 80;
+  } else if (title.includes(normalizedQuery)) {
+    score += 60;
+  }
+  if (slug.startsWith(normalizedQuery)) {
+    score += 50;
+  } else if (slug.includes(normalizedQuery)) {
+    score += 30;
+  }
+  if (location.startsWith(normalizedQuery)) {
+    score += 35;
+  } else if (location.includes(normalizedQuery)) {
+    score += 20;
+  }
+  if (type === normalizedQuery) {
+    score += 18;
+  } else if (type.includes(normalizedQuery)) {
+    score += 10;
+  }
+  if (category === normalizedQuery) {
+    score += 22;
+  } else if (category.includes(normalizedQuery)) {
+    score += 12;
+  }
+  if (description.includes(normalizedQuery)) {
+    score += 8;
+  }
+
+  return score;
+}
+
+function getSuggestedSearches(
+  listings: {
+    title: string;
+    category?: string | null;
+    city?: string | null;
+    state?: string | null;
+    type: string;
+  }[],
+  normalizedQuery: string,
+) {
+  const suggestions = new Map<string, number>();
+
+  const pushSuggestion = (label: string | null | undefined, weight: number) => {
+    const normalized = label?.trim();
+    if (!normalized) {
+      return;
+    }
+
+    if (normalizedQuery && normalized.toLowerCase().includes(normalizedQuery)) {
+      return;
+    }
+
+    suggestions.set(normalized, (suggestions.get(normalized) ?? 0) + weight);
+  };
+
+  listings.forEach((listing) => {
+    pushSuggestion(listing.city ?? null, 3);
+    pushSuggestion(listing.state ?? null, 2);
+    pushSuggestion(listing.category ?? null, 3);
+    pushSuggestion(formatTypeFilter(listing.type), 2);
+
+    const titleTokens = listing.title.match(/[A-Za-z0-9&'-]{4,}/g) ?? [];
+    titleTokens.slice(0, 3).forEach((token) => {
+      pushSuggestion(token, 1);
+    });
+  });
+
+  return [...suggestions.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 6)
+    .map(([label]) => label);
+}
+
+function getCategoryOptions(listings: { category?: string | null }[]) {
+  const counts = new Map<string, number>();
+
+  listings.forEach((listing) => {
+    const label = listing.category?.trim();
+    if (!label) {
+      return;
+    }
+
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  });
+
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([label, count]) => ({ label, count }));
+}
+
+function formatTypeFilter(typeFilter: string) {
   if (typeFilter === 'all') {
     return 'All Listings';
   }
@@ -53,7 +183,15 @@ function formatTypeFilter(typeFilter: 'all' | 'product' | 'service' | 'hybrid') 
     return 'Services';
   }
 
-  return 'Hybrid';
+  if (typeFilter === 'hybrid') {
+    return 'Hybrid';
+  }
+
+  return typeFilter
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function formatSortMode(sortMode: 'newest' | 'price-low' | 'price-high') {
@@ -92,7 +230,7 @@ function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }
 function getRecommendedBrowsePreset(input: {
   listings: {
     id: string;
-    type: 'product' | 'service' | 'hybrid';
+    type: string;
     is_local_only?: boolean | null;
   }[];
   orders: {
@@ -167,7 +305,7 @@ function getRecommendedBrowsePreset(input: {
 
 function getRecommendationBadge(
   listing: {
-    type: 'product' | 'service' | 'hybrid';
+    type: string;
     is_local_only?: boolean | null;
   },
   preset: { label: string } | null,
@@ -200,7 +338,7 @@ function getRecommendationBadge(
 
 function getRecommendationScore(
   listing: {
-    type: 'product' | 'service' | 'hybrid';
+    type: string;
     is_local_only?: boolean | null;
   },
   preset: { label: string } | null,
@@ -235,6 +373,7 @@ export default function BrowseScreen() {
   const { listings, orders, bookings, refreshMarketplace, refreshing, error } = useBuyerSession();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'product' | 'service' | 'hybrid'>('all');
   const [sortMode, setSortMode] = useState<'newest' | 'price-low' | 'price-high'>('newest');
   const [localOnly, setLocalOnly] = useState(false);
@@ -243,6 +382,7 @@ export default function BrowseScreen() {
   const [filtersRestored, setFiltersRestored] = useState(false);
   const hasActiveBrowseFilters =
     searchQuery.trim().length > 0 ||
+    categoryFilter.trim().length > 0 ||
     typeFilter !== 'all' ||
     sortMode !== 'newest' ||
     localOnly ||
@@ -264,6 +404,7 @@ export default function BrowseScreen() {
       try {
         const storedFilters = JSON.parse(storedValue) as {
           searchQuery?: string;
+          categoryFilter?: string;
           typeFilter?: 'all' | 'product' | 'service' | 'hybrid';
           sortMode?: 'newest' | 'price-low' | 'price-high';
           localOnly?: boolean;
@@ -272,6 +413,7 @@ export default function BrowseScreen() {
         };
 
         setSearchQuery(storedFilters.searchQuery ?? '');
+        setCategoryFilter(storedFilters.categoryFilter ?? '');
         setTypeFilter(storedFilters.typeFilter ?? 'all');
         setSortMode(storedFilters.sortMode ?? 'newest');
         setLocalOnly(storedFilters.localOnly ?? false);
@@ -293,6 +435,7 @@ export default function BrowseScreen() {
     void setBuyerBrowseFilters(
       JSON.stringify({
         searchQuery,
+        categoryFilter,
         typeFilter,
         sortMode,
         localOnly,
@@ -304,6 +447,7 @@ export default function BrowseScreen() {
     filtersRestored,
     localOnly,
     searchQuery,
+    categoryFilter,
     sortMode,
     typeFilter,
     availableToday,
@@ -314,6 +458,7 @@ export default function BrowseScreen() {
     [bookings, listings, orders],
   );
   const baseLocationLabel = useMemo(() => getLocationSummary(listings), [listings]);
+  const categoryOptions = useMemo(() => getCategoryOptions(listings), [listings]);
 
   const filteredListings = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -324,6 +469,10 @@ export default function BrowseScreen() {
       }
 
       if (localOnly && !listing.is_local_only) {
+        return false;
+      }
+
+      if (categoryFilter && listing.category !== categoryFilter) {
         return false;
       }
 
@@ -350,6 +499,7 @@ export default function BrowseScreen() {
       const haystack = [
         listing.title,
         listing.description,
+        listing.category,
         listing.city,
         listing.state,
         listing.country,
@@ -371,6 +521,12 @@ export default function BrowseScreen() {
         return (right.price_cents ?? 0) - (left.price_cents ?? 0);
       }
 
+      const rightSearchScore = getListingSearchScore(right, query);
+      const leftSearchScore = getListingSearchScore(left, query);
+      if (rightSearchScore !== leftSearchScore) {
+        return rightSearchScore - leftSearchScore;
+      }
+
       const rightRecommendationScore = getRecommendationScore(right, recommendedPreset);
       const leftRecommendationScore = getRecommendationScore(left, recommendedPreset);
       if (rightRecommendationScore !== leftRecommendationScore) {
@@ -390,6 +546,7 @@ export default function BrowseScreen() {
   }, [
     listings,
     localOnly,
+    categoryFilter,
     recommendedPreset,
     searchQuery,
     sortMode,
@@ -409,12 +566,18 @@ export default function BrowseScreen() {
   );
   const summaryText = [
     formatTypeFilter(typeFilter),
+    categoryFilter || null,
     formatSortMode(sortMode),
     availableToday ? 'Available today' : null,
     popularOnly ? 'Popular near you' : null,
   ]
     .filter(Boolean)
     .join(' · ');
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const suggestedSearches = useMemo(
+    () => getSuggestedSearches(filteredListings.length > 0 ? filteredListings : listings, normalizedSearchQuery),
+    [filteredListings, listings, normalizedSearchQuery],
+  );
 
   return (
     <ScrollView
@@ -448,6 +611,7 @@ export default function BrowseScreen() {
               style={styles.clearButton}
               onPress={() => {
                 setSearchQuery('');
+                setCategoryFilter('');
                 setTypeFilter('all');
                 setSortMode('newest');
                 setLocalOnly(false);
@@ -468,6 +632,7 @@ export default function BrowseScreen() {
               ]}
               onPress={() => {
                 setTypeFilter(recommendedPreset.type);
+                setCategoryFilter('');
                 setLocalOnly(recommendedPreset.localOnly);
                 setSortMode('newest');
                 setSearchQuery('');
@@ -491,6 +656,33 @@ export default function BrowseScreen() {
           placeholder="Search listings, services, or location"
           placeholderTextColor="#8d8376"
         />
+        {suggestedSearches.length > 0 ? (
+          <View style={styles.searchSuggestionRow}>
+            {suggestedSearches.map((suggestion) => (
+              <FilterChip
+                key={suggestion}
+                label={suggestion}
+                active={searchQuery.trim().toLowerCase() === suggestion.toLowerCase()}
+                onPress={() => setSearchQuery(suggestion)}
+              />
+            ))}
+          </View>
+        ) : null}
+        <View style={styles.filterRow}>
+          <FilterChip
+            label="All categories"
+            active={!categoryFilter}
+            onPress={() => setCategoryFilter('')}
+          />
+          {categoryOptions.map((option) => (
+            <FilterChip
+              key={option.label}
+              label={`${option.label} (${option.count})`}
+              active={categoryFilter === option.label}
+              onPress={() => setCategoryFilter(option.label)}
+            />
+          ))}
+        </View>
         <View style={styles.filterRow}>
           <FilterChip
             label="All"
@@ -582,6 +774,11 @@ export default function BrowseScreen() {
               baseLocationLabel &&
               locationLabel === baseLocationLabel &&
               (listing.recent_transaction_count ?? 0) >= 3;
+            const searchScore = getListingSearchScore(listing, normalizedSearchQuery);
+            const isBestMatch =
+              normalizedSearchQuery.length > 0 &&
+              filteredListings[0]?.id === listing.id &&
+              searchScore > 0;
             return (
             <Pressable
               key={listing.id}
@@ -600,7 +797,10 @@ export default function BrowseScreen() {
                 </View>
               )}
               <View style={styles.cardTop}>
-                <Text style={[styles.typePill, { color: typeColors[listing.type] }]}>{listing.type}</Text>
+                <Text style={[styles.typePill, { color: getListingTypeColor(listing.type) }]}>{listing.type}</Text>
+                {listing.category ? (
+                  <Text style={styles.categoryPill}>{listing.category}</Text>
+                ) : null}
                 <Text style={styles.locationText}>{formatLocation(listing) || 'Location pending'}</Text>
               </View>
               <View style={styles.badgeRow}>
@@ -620,6 +820,11 @@ export default function BrowseScreen() {
                     <Text style={styles.recommendationCardBadgeText}>
                       {recommendationBadge.text}
                     </Text>
+                  </View>
+                ) : null}
+                {isBestMatch ? (
+                  <View style={[styles.scanBadge, styles.bestMatchBadge]}>
+                    <Text style={[styles.scanBadgeText, styles.bestMatchBadgeText]}>Best match</Text>
                   </View>
                 ) : null}
                 <View style={[styles.scanBadge, styles.bookingBadge]}>
@@ -828,6 +1033,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 13,
   },
+  searchSuggestionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   filterRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -934,6 +1144,7 @@ const styles = StyleSheet.create({
   },
   cardTop: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: 10,
     alignItems: 'center',
@@ -970,6 +1181,9 @@ const styles = StyleSheet.create({
   bookingBadge: {
     backgroundColor: '#e4f1ed',
   },
+  bestMatchBadge: {
+    backgroundColor: '#f3ecff',
+  },
   availableBadge: {
     backgroundColor: '#e8f7ed',
   },
@@ -998,6 +1212,9 @@ const styles = StyleSheet.create({
   bookingBadgeText: {
     color: '#0f5f62',
   },
+  bestMatchBadgeText: {
+    color: '#6b37a8',
+  },
   localBadgeText: {
     color: '#7c3a10',
   },
@@ -1020,6 +1237,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 1,
+  },
+  categoryPill: {
+    backgroundColor: '#f7ecd7',
+    borderColor: '#d8b77a',
+    borderRadius: 999,
+    borderWidth: 1,
+    color: '#7a5717',
+    overflow: 'hidden',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   locationText: {
     color: '#6f6556',

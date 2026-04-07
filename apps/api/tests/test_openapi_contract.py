@@ -9,6 +9,7 @@ class OpenAPIContractTests(unittest.TestCase):
         paths = schema["paths"]
 
         expected_paths = {
+            "/categories",
             "/profiles/me",
             "/sellers",
             "/sellers/me",
@@ -45,6 +46,7 @@ class OpenAPIContractTests(unittest.TestCase):
         components = schema["components"]["schemas"]
 
         for schema_name in [
+            "CategoryRead",
             "ProfileRead",
             "SellerRead",
             "ListingRead",
@@ -92,8 +94,10 @@ class OpenAPIContractTests(unittest.TestCase):
 
         listing_read = components["ListingRead"]["properties"]
         listing_create = components["ListingCreate"]["properties"]
+        price_insight = components["ListingPriceInsight"]["properties"]
 
         for field_name in [
+            "category",
             "slug",
             "status",
             "inventory_count",
@@ -104,14 +108,15 @@ class OpenAPIContractTests(unittest.TestCase):
             "meetup_enabled",
             "delivery_enabled",
             "shipping_enabled",
-        "lead_time_hours",
-        "created_at",
-        "updated_at",
-        "last_operating_adjustment_at",
-        "last_operating_adjustment_summary",
-        "recent_transaction_count",
-        "is_new_listing",
-      ]:
+            "lead_time_hours",
+            "created_at",
+            "updated_at",
+            "last_operating_adjustment_at",
+            "last_operating_adjustment_summary",
+            "recent_transaction_count",
+            "is_new_listing",
+            "last_pricing_comparison_scope",
+        ]:
             self.assertIn(field_name, listing_read)
 
         for field_name in [
@@ -121,6 +126,8 @@ class OpenAPIContractTests(unittest.TestCase):
             "lead_time_hours",
         ]:
             self.assertIn(field_name, listing_create)
+
+        self.assertIn("comparison_scope", price_insight)
 
 
 if __name__ == "__main__":

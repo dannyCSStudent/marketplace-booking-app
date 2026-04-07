@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 
@@ -18,6 +19,10 @@ from app.schemas.orders import (
     OrderStatusEventRead,
     OrderStatusUpdate,
 )
+from app.services.platform_fees import (
+    calculate_platform_fee,
+    get_active_platform_fee_rate_value,
+)
 from app.services.workflows import ORDER_TRANSITIONS_BY_ACTOR, validate_transition
 from app.services.notifications import queue_transaction_notification_jobs
 
@@ -28,7 +33,7 @@ FULFILLMENT_FIELD_BY_METHOD = {
     "shipping": "shipping_enabled",
 }
 ORDER_SELECT = (
-    "id,buyer_id,seller_id,status,fulfillment,subtotal_cents,total_cents,currency,notes,buyer_browse_context,seller_response_note,"
+    "id,buyer_id,seller_id,status,fulfillment,subtotal_cents,total_cents,currency,delivery_fee_cents,platform_fee_cents,platform_fee_rate,notes,buyer_browse_context,seller_response_note,"
     "order_items(id,listing_id,quantity,unit_price_cents,total_price_cents,listings(title)),"
     "order_status_events(id,status,actor_role,note,created_at)"
 )
@@ -71,11 +76,14 @@ def _serialize_order(row: dict, *, include_admin: bool = False) -> OrderRead | O
         status=row["status"],
         fulfillment=row["fulfillment"],
         subtotal_cents=row["subtotal_cents"],
+        platform_fee_cents=row.get("platform_fee_cents", 0),
+        platform_fee_rate=Decimal(str(row.get("platform_fee_rate", 0))),
         total_cents=row["total_cents"],
         currency=row.get("currency") or "USD",
         notes=row.get("notes"),
         buyer_browse_context=row.get("buyer_browse_context"),
         seller_response_note=row.get("seller_response_note"),
+        delivery_fee_cents=row.get("delivery_fee_cents", 0),
         items=items,
         status_history=status_history,
     )
@@ -434,6 +442,10 @@ def create_order(current_user: CurrentUser, payload: OrderCreate) -> OrderRead:
             }
         )
 
+    platform_fee_rate = get_active_platform_fee_rate_value()
+    platform_fee_cents = calculate_platform_fee(subtotal, platform_fee_rate)
+    total_cents = subtotal + platform_fee_cents
+
     try:
         rows = supabase.insert(
             "orders",
@@ -442,10 +454,12 @@ def create_order(current_user: CurrentUser, payload: OrderCreate) -> OrderRead:
                 "seller_id": payload.seller_id,
                 "fulfillment": payload.fulfillment,
                 "subtotal_cents": subtotal,
-                "total_cents": subtotal,
+                "total_cents": total_cents,
                 "currency": currency,
                 "notes": payload.notes,
                 "buyer_browse_context": payload.buyer_browse_context,
+                "platform_fee_cents": platform_fee_cents,
+                "platform_fee_rate": str(platform_fee_rate),
             },
             access_token=current_user.access_token,
         )

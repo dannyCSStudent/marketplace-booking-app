@@ -1,4 +1,7 @@
+import csv
+import io
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.dependencies.auth import get_current_user
 from app.dependencies.admin import require_admin_user
@@ -39,6 +42,56 @@ def list_listings(
 ) -> ListingListResponse:
     params = ListingQueryParams(query=query, category=category, type=type)
     return list_public_listings(params)
+
+
+@router.get("/export")
+def export_listings(
+    query: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    type: str | None = Query(default=None),
+):
+    params = ListingQueryParams(query=query, category=category, type=type)
+    response = list_public_listings(params)
+
+    def iter_csv():
+        header = [
+            "id",
+            "title",
+            "type",
+            "category",
+            "price_cents",
+            "currency",
+            "status",
+            "last_pricing_comparison_scope",
+            "last_operating_adjustment_summary",
+            "available_today",
+            "is_new_listing",
+        ]
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(header)
+        yield buffer.getvalue()
+        buffer.truncate(0)
+        buffer.seek(0)
+        for listing in response.items:
+            writer.writerow([
+                listing.id,
+                listing.title,
+                listing.type,
+                listing.category or "",
+                listing.price_cents or "",
+                listing.currency,
+                listing.status,
+                listing.last_pricing_comparison_scope or "",
+                listing.last_operating_adjustment_summary or "",
+                listing.available_today,
+                listing.is_new_listing,
+            ])
+            yield buffer.getvalue()
+            buffer.truncate(0)
+            buffer.seek(0)
+
+    return StreamingResponse(iter_csv(), media_type="text/csv")
 
 @router.get("/me", response_model=list[ListingRead])
 def read_my_listings(current_user=Depends(get_current_user)) -> list[ListingRead]:

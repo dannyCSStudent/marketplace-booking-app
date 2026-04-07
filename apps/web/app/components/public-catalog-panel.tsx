@@ -5,10 +5,10 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { createApiClient, formatCurrency, type Booking, type Listing, type Order } from "@/app/lib/api";
+import { createApiClient, formatCurrency, type Booking, type Listing, type ListingType, type Order } from "@/app/lib/api";
 import { restoreBuyerSession } from "@/app/lib/buyer-auth";
 
-type CatalogTypeFilter = "all" | "product" | "service" | "hybrid";
+type CatalogTypeFilter = "all" | ListingType;
 type CatalogSort = "featured" | "price_low" | "price_high";
 
 function getLocationLabel(parts: Array<string | null | undefined>) {
@@ -42,6 +42,107 @@ function titleCaseLabel(value: string) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function getListingSearchScore(listing: Listing, normalizedQuery: string) {
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const title = listing.title.toLowerCase();
+  const slug = listing.slug.toLowerCase();
+  const description = listing.description?.toLowerCase() ?? "";
+  const category = listing.category?.toLowerCase() ?? "";
+  const location = [listing.city, listing.state, listing.country]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const type = listing.type.toLowerCase();
+
+  let score = 0;
+  if (title === normalizedQuery) {
+    score += 120;
+  } else if (title.startsWith(normalizedQuery)) {
+    score += 80;
+  } else if (title.includes(normalizedQuery)) {
+    score += 60;
+  }
+  if (slug.startsWith(normalizedQuery)) {
+    score += 50;
+  } else if (slug.includes(normalizedQuery)) {
+    score += 30;
+  }
+  if (location.startsWith(normalizedQuery)) {
+    score += 35;
+  } else if (location.includes(normalizedQuery)) {
+    score += 20;
+  }
+  if (type === normalizedQuery) {
+    score += 18;
+  } else if (type.includes(normalizedQuery)) {
+    score += 10;
+  }
+  if (category === normalizedQuery) {
+    score += 22;
+  } else if (category.includes(normalizedQuery)) {
+    score += 12;
+  }
+  if (description.includes(normalizedQuery)) {
+    score += 8;
+  }
+
+  return score;
+}
+
+function getSuggestedSearches(listings: Listing[], normalizedQuery: string) {
+  const suggestions = new Map<string, number>();
+
+  const pushSuggestion = (label: string | null | undefined, weight: number) => {
+    const normalized = label?.trim();
+    if (!normalized) {
+      return;
+    }
+
+    if (normalizedQuery && normalized.toLowerCase().includes(normalizedQuery)) {
+      return;
+    }
+
+    suggestions.set(normalized, (suggestions.get(normalized) ?? 0) + weight);
+  };
+
+  listings.forEach((listing) => {
+    pushSuggestion(listing.city ?? null, 3);
+    pushSuggestion(listing.state ?? null, 2);
+    pushSuggestion(listing.category ?? null, 3);
+    pushSuggestion(titleCaseLabel(listing.type), 2);
+
+    const titleTokens = listing.title.match(/[A-Za-z0-9&'-]{4,}/g) ?? [];
+    titleTokens.slice(0, 3).forEach((token) => {
+      pushSuggestion(token, 1);
+    });
+  });
+
+  return [...suggestions.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 6)
+    .map(([label]) => label);
+}
+
+function getCategoryOptions(listings: Listing[]) {
+  const counts = new Map<string, number>();
+
+  listings.forEach((listing) => {
+    const label = listing.category?.trim();
+    if (!label) {
+      return;
+    }
+
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  });
+
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([label, count]) => ({ label, count }));
 }
 
 function getRecommendedBrowsePreset(input: {
@@ -112,7 +213,7 @@ function getRecommendedBrowsePreset(input: {
 }
 
 function getRecommendationBadge(
-  listing: Listing,
+  listing: Pick<Listing, "type" | "is_local_only">,
   preset: { label: string } | null,
 ) {
   if (!preset) {
@@ -157,7 +258,7 @@ function getRecommendationBadge(
 }
 
 function getRecommendationScore(
-  listing: Listing,
+  listing: Pick<Listing, "type" | "is_local_only">,
   preset: { label: string } | null,
 ) {
   if (!preset) {
@@ -219,6 +320,7 @@ export function PublicCatalogPanel({
     sortParam === "price_low" || sortParam === "price_high" ? sortParam : "featured";
   const localOnly = searchParams.get("local") === "1";
   const query = searchParams.get("q") ?? "";
+  const categoryFilter = searchParams.get("category") ?? "";
   const recommendedPresetActive = Boolean(
     recommendedPreset &&
       typeFilter === recommendedPreset.type &&
@@ -226,6 +328,7 @@ export function PublicCatalogPanel({
   );
   const availableToday = searchParams.get("available") === "1";
   const popularOnly = searchParams.get("popular") === "1";
+  const promotedOnly = searchParams.get("promoted") === "1";
   const baseLocationLabel = useMemo(() => {
     const locationCounts = new Map<string, number>();
     listings.forEach((listing) => {
@@ -242,18 +345,22 @@ export function PublicCatalogPanel({
   function updateCatalogState(next: {
     type?: CatalogTypeFilter;
     query?: string;
+    category?: string;
     sort?: CatalogSort;
     localOnly?: boolean;
     availableToday?: boolean;
     popularOnly?: boolean;
+    promotedOnly?: boolean;
   }) {
     const params = new URLSearchParams(searchParams.toString());
     const nextType = next.type ?? typeFilter;
     const nextQuery = next.query ?? query;
+    const nextCategory = next.category ?? categoryFilter;
     const nextSort = next.sort ?? sortMode;
     const nextLocalOnly = next.localOnly ?? localOnly;
     const nextAvailable = next.availableToday ?? availableToday;
     const nextPopular = next.popularOnly ?? popularOnly;
+    const nextPromoted = next.promotedOnly ?? promotedOnly;
 
     if (nextType === "all") {
       params.delete("type");
@@ -265,6 +372,12 @@ export function PublicCatalogPanel({
       params.set("q", nextQuery.trim());
     } else {
       params.delete("q");
+    }
+
+    if (nextCategory.trim()) {
+      params.set("category", nextCategory.trim());
+    } else {
+      params.delete("category");
     }
 
     if (nextSort === "featured") {
@@ -288,6 +401,11 @@ export function PublicCatalogPanel({
       params.set("popular", "1");
     } else {
       params.delete("popular");
+    }
+    if (nextPromoted) {
+      params.set("promoted", "1");
+    } else {
+      params.delete("promoted");
     }
 
     const nextQueryString = params.toString();
@@ -344,7 +462,15 @@ export function PublicCatalogPanel({
           return false;
         }
 
+        if (categoryFilter && listing.category !== categoryFilter) {
+          return false;
+        }
+
         if (availableToday && !(listing.available_today ?? false)) {
+          return false;
+        }
+
+        if (promotedOnly && !listing.is_promoted) {
           return false;
         }
 
@@ -367,6 +493,7 @@ export function PublicCatalogPanel({
       const haystack = [
         listing.title,
         listing.description,
+        listing.category,
         listing.type,
         listing.city,
         listing.state,
@@ -385,6 +512,16 @@ export function PublicCatalogPanel({
         if (sortMode === "price_high") {
           return (right.price_cents ?? 0) - (left.price_cents ?? 0);
         }
+        const leftPromotion = left.is_promoted ? 1 : 0;
+        const rightPromotion = right.is_promoted ? 1 : 0;
+        if (leftPromotion !== rightPromotion) {
+          return rightPromotion - leftPromotion;
+        }
+        const rightSearchScore = getListingSearchScore(right, normalizedQuery);
+        const leftSearchScore = getListingSearchScore(left, normalizedQuery);
+        if (rightSearchScore !== leftSearchScore) {
+          return rightSearchScore - leftSearchScore;
+        }
         const rightRecommendationScore = getRecommendationScore(right, recommendedPreset);
         const leftRecommendationScore = getRecommendationScore(left, recommendedPreset);
         if (rightRecommendationScore !== leftRecommendationScore) {
@@ -402,7 +539,9 @@ export function PublicCatalogPanel({
     localOnly,
     availableToday,
     popularOnly,
+    promotedOnly,
     query,
+    categoryFilter,
     recommendedPreset,
     sortMode,
     typeFilter,
@@ -432,6 +571,9 @@ export function PublicCatalogPanel({
     if (typeFilter !== "all") {
       parts.push(titleCaseLabel(typeFilter));
     }
+    if (categoryFilter) {
+      parts.push(categoryFilter);
+    }
     if (localOnly) {
       parts.push("Local Only");
     }
@@ -447,6 +589,9 @@ export function PublicCatalogPanel({
     if (popularOnly) {
       parts.push("Popular near you");
     }
+    if (promotedOnly) {
+      parts.push("Promoted only");
+    }
     parts.push(`${filteredListings.length} result${filteredListings.length === 1 ? "" : "s"}`);
     return parts.join(" · ");
   }, [
@@ -454,14 +599,29 @@ export function PublicCatalogPanel({
     filteredListings.length,
     localOnly,
     query,
+    categoryFilter,
     sortMode,
     typeFilter,
     availableToday,
     popularOnly,
+    promotedOnly,
   ]);
 
   const isDefaultView =
-    typeFilter === "all" && sortMode === "featured" && !localOnly && !query.trim();
+    typeFilter === "all" &&
+    sortMode === "featured" &&
+    !localOnly &&
+    !availableToday &&
+    !popularOnly &&
+    !promotedOnly &&
+    !categoryFilter &&
+    !query.trim();
+  const normalizedSearchQuery = query.trim().toLowerCase();
+  const categoryOptions = useMemo(() => getCategoryOptions(listings), [listings]);
+  const suggestedSearches = useMemo(
+    () => getSuggestedSearches(filteredListings.length > 0 ? filteredListings : listings, normalizedSearchQuery),
+    [filteredListings, listings, normalizedSearchQuery],
+  );
 
   async function copyCurrentSliceLink() {
     try {
@@ -488,6 +648,7 @@ export function PublicCatalogPanel({
                     updateCatalogState({
                       type: recommendedPreset.type,
                       query: "",
+                      category: "",
                       sort: "featured",
                       localOnly: recommendedPreset.localOnly,
                     })
@@ -511,6 +672,20 @@ export function PublicCatalogPanel({
               placeholder="Search title, description, or location"
               className="rounded-2xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-accent"
             />
+            {suggestedSearches.length > 0 ? (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {suggestedSearches.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => updateCatalogState({ query: suggestion })}
+                    className="rounded-full border border-border bg-background px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/64 transition hover:border-accent hover:text-accent"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </label>
 
           <div className="flex flex-col gap-2 text-sm text-foreground/72">
@@ -546,6 +721,39 @@ export function PublicCatalogPanel({
               ))}
             </div>
           </div>
+
+          {categoryOptions.length > 0 ? (
+            <div className="flex flex-col gap-2 text-sm text-foreground/72">
+              <span>Category</span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => updateCatalogState({ category: "" })}
+                  className={`rounded-full border px-4 py-2 text-sm transition ${
+                    !categoryFilter
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-background text-foreground/72 hover:border-foreground/28"
+                  }`}
+                >
+                  All Categories
+                </button>
+                {categoryOptions.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() => updateCatalogState({ category: option.label })}
+                    className={`rounded-full border px-4 py-2 text-sm transition ${
+                      categoryFilter === option.label
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-background text-foreground/72 hover:border-foreground/28"
+                    }`}
+                  >
+                    {option.label} ({option.count})
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="flex flex-col gap-2 text-sm text-foreground/72">
             <span>Sort</span>
@@ -624,6 +832,24 @@ export function PublicCatalogPanel({
               </button>
             </div>
           </div>
+
+          <div className="flex flex-col gap-2 text-sm text-foreground/72">
+            <span>Promotions</span>
+            <div className="flex flex-wrap gap-2">
+              <button
+                key={promotedOnly ? "promoted-on" : "promoted-off"}
+                type="button"
+                onClick={() => updateCatalogState({ promotedOnly: !promotedOnly })}
+                className={`rounded-full border px-4 py-2 text-sm transition ${
+                  promotedOnly
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-background text-foreground/72 hover:border-foreground/28"
+                }`}
+              >
+                {promotedOnly ? "Promoted only" : "Include promoted"}
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="mt-4 rounded-[1.15rem] border border-border bg-background/55 px-4 py-3">
@@ -667,8 +893,12 @@ export function PublicCatalogPanel({
                     updateCatalogState({
                       type: "all",
                       query: "",
+                      category: "",
                       sort: "featured",
                       localOnly: false,
+                      availableToday: false,
+                      popularOnly: false,
+                      promotedOnly: false,
                     });
                   }}
                   type="button"
@@ -691,6 +921,11 @@ export function PublicCatalogPanel({
               baseLocationLabel &&
               locationLabel === baseLocationLabel &&
               (listing.recent_transaction_count ?? 0) >= 3;
+            const searchScore = getListingSearchScore(listing, normalizedSearchQuery);
+            const isBestMatch =
+              normalizedSearchQuery.length > 0 &&
+              filteredListings[0]?.id === listing.id &&
+              searchScore > 0;
 
             return (
             <article
@@ -729,6 +964,11 @@ export function PublicCatalogPanel({
                       <span className="rounded-full bg-foreground px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-background shadow-sm">
                         {listing.type}
                       </span>
+                      {listing.category ? (
+                        <span className="rounded-full border border-[#b7924f]/25 bg-[#f7ecd7] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7a5717]">
+                          {listing.category}
+                        </span>
+                      ) : null}
                       <span
                         className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
                           getListingSignals(listing).booking === "Booking Ready"
@@ -738,15 +978,20 @@ export function PublicCatalogPanel({
                       >
                         {getListingSignals(listing).booking}
                       </span>
-                      {listing.is_local_only ? (
-                        <span className="rounded-full border border-[#0f5f62]/20 bg-[#e4f1ed] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0f5f62]">
-                          Local Only
-                        </span>
-                      ) : null}
-                      <span className="font-mono text-xs uppercase tracking-[0.22em] text-foreground/48">
-                        {getLocationLabel([listing.city, listing.state])}
-                      </span>
-                    </div>
+                  {listing.is_local_only ? (
+                    <span className="rounded-full border border-[#0f5f62]/20 bg-[#e4f1ed] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0f5f62]">
+                      Local Only
+                    </span>
+                  ) : null}
+                  {listing.is_promoted ? (
+                    <span className="rounded-full border border-[#b94c23]/30 bg-[#fbe8dd] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#b94c23]">
+                      Promoted
+                    </span>
+                  ) : null}
+                  <span className="font-mono text-xs uppercase tracking-[0.22em] text-foreground/48">
+                    {getLocationLabel([listing.city, listing.state])}
+                  </span>
+                </div>
                     <div>
                       <h3 className="text-2xl font-semibold tracking-[-0.04em]">{listing.title}</h3>
                       <p className="mt-2 text-sm leading-6 text-foreground/68">
@@ -782,6 +1027,11 @@ export function PublicCatalogPanel({
                       className={`rounded-full border px-3 py-2 ${recommendationBadge.className}`}
                     >
                       {recommendationBadge.text}
+                    </span>
+                  ) : null}
+                  {isBestMatch ? (
+                    <span className="rounded-full border border-violet-300 bg-violet-50 px-3 py-2 text-violet-800">
+                      Best match
                     </span>
                   ) : null}
                   {localOnly ? (

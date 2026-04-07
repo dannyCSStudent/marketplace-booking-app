@@ -23,6 +23,17 @@ type RequestBodyFor<Path extends KnownPath, Method extends keyof ApiOperations[P
   ApiOperations[Path][Method] extends { requestBody: infer Body } ? Body : never;
 
 export type Listing = ApiSchemaMap["ListingRead"];
+export type ListingType = ApiSchemaMap["ListingType"];
+export type ListingPricingScopeCount = ApiSchemaMap["ListingPricingScopeCount"];
+export type PlatformFeeRateRead = ApiSchemaMap["PlatformFeeRateRead"];
+export type PlatformFeeRateCreate = ApiSchemaMap["PlatformFeeRateCreate"];
+export type PlatformFeeHistoryPoint = ApiSchemaMap["PlatformFeeHistoryPoint"];
+export type CategoryRead = {
+  id: string;
+  name: string;
+  slug: string;
+  parent_id?: string | null;
+};
 export type ListingImage = ApiSchemaMap["ListingImageRead"];
 export type ListingResponse = ApiSchemaMap["ListingListResponse"];
 export type Booking = ApiSchemaMap["BookingRead"];
@@ -128,6 +139,8 @@ export type ListingUpdateInput = ApiSchemaMap["ListingUpdate"];
 export type ListingAiAssistRequest = ApiSchemaMap["ListingAiAssistRequest"];
 export type ListingAiAssistSuggestion = ApiSchemaMap["ListingAiAssistSuggestion"];
 export type ListingAiAssistResponse = ApiSchemaMap["ListingAiAssistResponse"];
+export type ListingPromotionSummary = ApiSchemaMap["ListingPromotionSummary"];
+export type ListingPromotionEvent = ApiSchemaMap["ListingPromotionEvent"];
 export type ListingPriceInsight = ApiSchemaMap["ListingPriceInsight"];
 export type OrderCreateInput = ApiSchemaMap["OrderCreate"];
 export type OrderStatusUpdateInput = ApiSchemaMap["OrderStatusUpdate"];
@@ -207,11 +220,19 @@ export const apiRoutes = {
   reviewReport: (reviewId: string) => `/reviews/${reviewId}/report`,
   reviewVisibility: (reviewId: string) => `/reviews/${reviewId}/visibility`,
   listingById: (listingId: string) => `/listings/${listingId}`,
+  categories: "/categories",
   listingImages: (listingId: string) => `/listings/${listingId}/images`,
   listingImageUpload: (listingId: string) => `/listings/${listingId}/images/upload`,
   listingPriceInsight: (listingId: string) => `/listings/${listingId}/price-insights`,
+  promotedListings: "/admin/listings/promoted",
+  promotionSummary: "/admin/listings/promotions/summary",
+  promotionEvents: "/admin/listings/promotions/events",
+  platformFeeHistory: (days?: number) =>
+    `/admin/platform-fees/history${days ? `?days=${days}` : ""}`,
+  listingPromotion: (listingId: string) => `/admin/listings/${listingId}/promotion`,
   orderById: (orderId: string) => `/orders/${orderId}`,
   bookingById: (bookingId: string) => `/bookings/${bookingId}`,
+  platformFees: "/platform-fees",
 } as const;
 
 export function createApiClient(baseUrl: string) {
@@ -298,6 +319,10 @@ export function createApiClient(baseUrl: string) {
     return get<SellerProfile>(apiRoutes.sellerBySlug(slug), options);
   }
 
+  function listCategories(options?: RequestConfig) {
+    return get<CategoryRead[]>(apiRoutes.categories, options);
+  }
+
   function getSellerReviewsBySlug(slug: string, options?: RequestConfig) {
     return get<ReviewRead[]>(apiRoutes.sellerReviewsBySlug(slug), options);
   }
@@ -327,6 +352,14 @@ export function createApiClient(baseUrl: string) {
 
   function getBookingById(bookingId: string, options?: RequestConfig) {
     return get<Booking>(apiRoutes.bookingById(bookingId), options);
+  }
+
+  function getPlatformFees(options?: RequestConfig) {
+    return get<PlatformFeeRateRead>(apiRoutes.platformFees, options);
+  }
+
+  function createPlatformFeeRate(body: PlatformFeeRateCreate, options?: RequestConfig) {
+    return post<PlatformFeeRateRead>(apiRoutes.platformFees, body, options);
   }
 
   function updateOrderStatus(
@@ -383,6 +416,40 @@ export function createApiClient(baseUrl: string) {
     options: RequestConfig,
   ) {
     return patch<Listing>(apiRoutes.listingById(listingId), body, options);
+  }
+
+  function promoteListing(
+    listingId: string,
+    body: { is_promoted: boolean },
+    options: RequestConfig,
+  ) {
+    return patch<Listing>(apiRoutes.listingPromotion(listingId), body, options);
+  }
+
+  function listPromotedListings(options?: RequestConfig) {
+    return get<Listing[]>(apiRoutes.promotedListings, options);
+  }
+
+  function listPromotionSummary(options?: RequestConfig) {
+    return get<ListingPromotionSummary[]>(apiRoutes.promotionSummary, options);
+  }
+
+  function listPromotionEvents(options?: RequestConfig) {
+    return get<ListingPromotionEvent[]>(apiRoutes.promotionEvents, options);
+  }
+
+  function listPlatformFeeHistory(
+    days?: number,
+    options?: RequestConfig,
+  ) {
+    return get<PlatformFeeHistoryPoint[]>(
+      apiRoutes.platformFeeHistory(days),
+      options,
+    );
+  }
+
+  function listPricingScopeSummary(options?: RequestConfig) {
+    return get<ListingPricingScopeCount[]>("/admin/listings/pricing-scope-summary", options);
   }
 
   function getListingPriceInsight(listingId: string, options: RequestConfig) {
@@ -602,12 +669,15 @@ export function createApiClient(baseUrl: string) {
     post,
     patch,
     getSellerBySlug,
+    listCategories,
     getSellerReviewsBySlug,
     getMyReviewLookup,
     getListingById,
     getListingPriceInsight,
     getOrderById,
     getBookingById,
+    getPlatformFees,
+    createPlatformFeeRate,
     updateOrderStatus,
     updateBookingStatus,
     updateAdminOrderSupport,
@@ -617,6 +687,7 @@ export function createApiClient(baseUrl: string) {
     createSellerProfile,
     createListing,
     updateListing,
+    promoteListing,
     assistListing,
     addListingImage,
     uploadListingImage,
@@ -631,6 +702,11 @@ export function createApiClient(baseUrl: string) {
     loadPublicListings,
     loadBuyerDashboard,
     loadSellerWorkspace,
+    listPromotedListings,
+    listPromotionSummary,
+    listPromotionEvents,
+    listPlatformFeeHistory,
+    listPricingScopeSummary,
     loadAdminTransactions,
     loadAdminNotificationDeliveries,
     loadMyNotificationDeliveries,
