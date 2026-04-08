@@ -9,7 +9,14 @@ from app.schemas.listings import (
     ListingPromotionEvent,
     ListingRead,
 )
-from app.schemas.platform_fees import PlatformFeeHistoryPoint
+from app.schemas.platform_fees import DeliveryFeeHistoryPoint, PlatformFeeHistoryPoint
+from app.schemas.subscriptions import (
+    SellerSubscriptionAssign,
+    SellerSubscriptionEventRead,
+    SellerSubscriptionRead,
+    SubscriptionTierCreate,
+    SubscriptionTierRead,
+)
 from app.services.admin import list_admin_users
 from app.services.listings import (
     list_pricing_scope_counts,
@@ -18,7 +25,15 @@ from app.services.listings import (
     list_promotion_events,
     set_listing_promotion,
 )
+from app.services.delivery_fees import list_delivery_fee_history
 from app.services.platform_fees import list_platform_fee_history
+from app.services.subscriptions import (
+    assign_seller_subscription,
+    create_subscription_tier,
+    list_seller_subscriptions,
+    list_subscription_events,
+    list_subscription_tiers,
+)
 
 router = APIRouter()
 
@@ -82,3 +97,67 @@ def read_platform_fee_history(
 ) -> list[PlatformFeeHistoryPoint]:
     rows = list_platform_fee_history(days=days)
     return [PlatformFeeHistoryPoint(**row) for row in rows]
+
+
+@router.get(
+    "/delivery-fees/history",
+    response_model=list[DeliveryFeeHistoryPoint],
+)
+def read_delivery_fee_history(
+    days: int = Query(14, ge=1, le=60),
+    current_user=Depends(require_admin_user),
+) -> list[DeliveryFeeHistoryPoint]:
+    rows = list_delivery_fee_history(days=days)
+    return [DeliveryFeeHistoryPoint(**row) for row in rows]
+
+
+@router.get(
+    "/subscription-tiers",
+    response_model=list[SubscriptionTierRead],
+)
+def read_subscription_tiers(current_user=Depends(require_admin_user)) -> list[SubscriptionTierRead]:
+    return list_subscription_tiers()
+
+
+@router.post(
+    "/subscription-tiers",
+    response_model=SubscriptionTierRead,
+)
+def create_admin_subscription_tier(
+    payload: SubscriptionTierCreate,
+    current_user=Depends(require_admin_user),
+) -> SubscriptionTierRead:
+    return create_subscription_tier(payload)
+
+
+@router.get(
+    "/seller-subscriptions",
+    response_model=list[SellerSubscriptionRead],
+)
+def read_seller_subscriptions(
+    limit: int = Query(100, ge=1, le=200),
+    current_user=Depends(require_admin_user),
+) -> list[SellerSubscriptionRead]:
+    return list_seller_subscriptions(limit=limit)
+
+
+@router.get(
+    "/seller-subscription-events",
+    response_model=list[SellerSubscriptionEventRead],
+)
+def read_seller_subscription_events(
+    limit: int = Query(100, ge=1, le=200),
+    current_user=Depends(require_admin_user),
+) -> list[SellerSubscriptionEventRead]:
+    return list_subscription_events(limit=limit)
+
+
+@router.post(
+    "/seller-subscriptions",
+    response_model=SellerSubscriptionRead,
+)
+def assign_admin_seller_subscription(
+    payload: SellerSubscriptionAssign,
+    current_user=Depends(require_admin_user),
+) -> SellerSubscriptionRead:
+    return assign_seller_subscription(payload, actor_user_id=current_user.id)

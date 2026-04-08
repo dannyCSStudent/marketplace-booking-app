@@ -383,6 +383,97 @@
         }
       }
     },
+    "/sellers/me/subscription": {
+      "get": {
+        "tags": [
+          "sellers"
+        ],
+        "summary": "Read My Seller Subscription",
+        "operationId": "read_my_seller_subscription_sellers_me_subscription_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SellerSubscriptionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sellers/{slug}/subscription": {
+      "get": {
+        "tags": [
+          "sellers"
+        ],
+        "summary": "Read Seller Subscription By Slug",
+        "operationId": "read_seller_subscription_by_slug_sellers__slug__subscription_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SellerSubscriptionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sellers/{slug}": {
       "get": {
         "tags": [
@@ -3384,6 +3475,368 @@
         }
       }
     },
+    "/admin/delivery-fees/history": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Delivery Fee History",
+        "operationId": "read_delivery_fee_history_admin_delivery_fees_history_get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 60,
+              "minimum": 1,
+              "default": 14,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryFeeHistoryPoint"
+                  },
+                  "title": "Response Read Delivery Fee History Admin Delivery Fees History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/subscription-tiers": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Subscription Tiers",
+        "operationId": "read_subscription_tiers_admin_subscription_tiers_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubscriptionTierRead"
+                  },
+                  "title": "Response Read Subscription Tiers Admin Subscription Tiers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create Admin Subscription Tier",
+        "operationId": "create_admin_subscription_tier_admin_subscription_tiers_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionTierCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionTierRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/seller-subscriptions": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Seller Subscriptions",
+        "operationId": "read_seller_subscriptions_admin_seller_subscriptions_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerSubscriptionRead"
+                  },
+                  "title": "Response Read Seller Subscriptions Admin Seller Subscriptions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Assign Admin Seller Subscription",
+        "operationId": "assign_admin_seller_subscription_admin_seller_subscriptions_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SellerSubscriptionAssign"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SellerSubscriptionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/seller-subscription-events": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Seller Subscription Events",
+        "operationId": "read_seller_subscription_events_admin_seller_subscription_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerSubscriptionEventRead"
+                  },
+                  "title": "Response Read Seller Subscription Events Admin Seller Subscription Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/platform-fees": {
       "get": {
         "tags": [
@@ -3427,6 +3880,84 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PlatformFeeRateRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/delivery-fees": {
+      "get": {
+        "tags": [
+          "delivery-fees"
+        ],
+        "summary": "Read Delivery Fee Settings",
+        "operationId": "read_delivery_fee_settings_delivery_fees_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryFeeSettingsRead"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "delivery-fees"
+        ],
+        "summary": "Create Delivery Fee Settings Record",
+        "operationId": "create_delivery_fee_settings_record_delivery_fees_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryFeeSettingsCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryFeeSettingsRead"
                 }
               }
             }
@@ -4175,6 +4706,110 @@
           "slug"
         ],
         "title": "CategoryRead"
+      },
+      "DeliveryFeeHistoryPoint": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "delivery_fee_cents": {
+            "type": "integer",
+            "title": "Delivery Fee Cents"
+          },
+          "shipping_fee_cents": {
+            "type": "integer",
+            "title": "Shipping Fee Cents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "delivery_fee_cents",
+          "shipping_fee_cents"
+        ],
+        "title": "DeliveryFeeHistoryPoint"
+      },
+      "DeliveryFeeSettingsCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "delivery_fee_cents": {
+            "type": "integer",
+            "title": "Delivery Fee Cents",
+            "default": 0
+          },
+          "shipping_fee_cents": {
+            "type": "integer",
+            "title": "Shipping Fee Cents",
+            "default": 0
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DeliveryFeeSettingsCreate"
+      },
+      "DeliveryFeeSettingsRead": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "delivery_fee_cents": {
+            "type": "integer",
+            "title": "Delivery Fee Cents",
+            "default": 0
+          },
+          "shipping_fee_cents": {
+            "type": "integer",
+            "title": "Shipping Fee Cents",
+            "default": 0
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DeliveryFeeSettingsRead"
       },
       "HTTPValidationError": {
         "properties": {
@@ -7250,6 +7885,377 @@
         ],
         "title": "SellerRead"
       },
+      "SellerSubscriptionAssign": {
+        "properties": {
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "tier_id": {
+            "type": "string",
+            "title": "Tier Id"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "trial_conversion",
+              "manual_upgrade",
+              "retention_save",
+              "support_adjustment",
+              "plan_reset"
+            ],
+            "title": "Reason Code"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_slug",
+          "tier_id",
+          "reason_code"
+        ],
+        "title": "SellerSubscriptionAssign"
+      },
+      "SellerSubscriptionEventRead": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Display Name"
+          },
+          "seller_subscription_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Subscription Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "actor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Name"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "trial_conversion",
+                  "manual_upgrade",
+                  "retention_save",
+                  "support_adjustment",
+                  "plan_reset"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "from_tier_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Tier Id"
+          },
+          "from_tier_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Tier Code"
+          },
+          "from_tier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Tier Name"
+          },
+          "to_tier_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Tier Id"
+          },
+          "to_tier_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Tier Code"
+          },
+          "to_tier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Tier Name"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "actor_user_id",
+          "action"
+        ],
+        "title": "SellerSubscriptionEventRead"
+      },
+      "SellerSubscriptionRead": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Display Name"
+          },
+          "tier_id": {
+            "type": "string",
+            "title": "Tier Id"
+          },
+          "tier_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier Code"
+          },
+          "tier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier Name"
+          },
+          "monthly_price_cents": {
+            "type": "integer",
+            "title": "Monthly Price Cents",
+            "default": 0
+          },
+          "perks_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perks Summary"
+          },
+          "analytics_enabled": {
+            "type": "boolean",
+            "title": "Analytics Enabled",
+            "default": false
+          },
+          "priority_visibility": {
+            "type": "boolean",
+            "title": "Priority Visibility",
+            "default": false
+          },
+          "premium_storefront": {
+            "type": "boolean",
+            "title": "Premium Storefront",
+            "default": false
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "tier_id"
+        ],
+        "title": "SellerSubscriptionRead"
+      },
       "SellerUpdate": {
         "properties": {
           "display_name": {
@@ -7332,6 +8338,137 @@
         },
         "type": "object",
         "title": "SellerUpdate"
+      },
+      "SubscriptionTierCreate": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "monthly_price_cents": {
+            "type": "integer",
+            "title": "Monthly Price Cents",
+            "default": 0
+          },
+          "perks_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perks Summary"
+          },
+          "analytics_enabled": {
+            "type": "boolean",
+            "title": "Analytics Enabled",
+            "default": false
+          },
+          "priority_visibility": {
+            "type": "boolean",
+            "title": "Priority Visibility",
+            "default": false
+          },
+          "premium_storefront": {
+            "type": "boolean",
+            "title": "Premium Storefront",
+            "default": false
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name"
+        ],
+        "title": "SubscriptionTierCreate"
+      },
+      "SubscriptionTierRead": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "monthly_price_cents": {
+            "type": "integer",
+            "title": "Monthly Price Cents",
+            "default": 0
+          },
+          "perks_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perks Summary"
+          },
+          "analytics_enabled": {
+            "type": "boolean",
+            "title": "Analytics Enabled",
+            "default": false
+          },
+          "priority_visibility": {
+            "type": "boolean",
+            "title": "Priority Visibility",
+            "default": false
+          },
+          "premium_storefront": {
+            "type": "boolean",
+            "title": "Premium Storefront",
+            "default": false
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name"
+        ],
+        "title": "SubscriptionTierRead"
       },
       "ValidationError": {
         "properties": {

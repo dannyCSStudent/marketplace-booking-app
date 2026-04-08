@@ -20,6 +20,12 @@ export type {
   ListingPriceInsight,
   ListingPricingScopeCount,
   ListingResponse,
+  DeliveryFeeSettingsRead,
+  DeliveryFeeSettingsCreate,
+  DeliveryFeeHistoryPoint,
+  SellerSubscriptionAssign,
+  SellerSubscriptionEventRead,
+  SellerSubscriptionRead,
   PlatformFeeRateRead,
   NotificationItem,
   NotificationDelivery,
@@ -44,6 +50,8 @@ export type {
   ListingPromotionSummary,
   ListingPromotionEvent,
   PlatformFeeHistoryPoint,
+  SubscriptionTierCreate,
+  SubscriptionTierRead,
 } from "@repo/api-client";
 
 type MarketplaceData = {
@@ -55,6 +63,7 @@ type MarketplaceData = {
 
 export type SellerStorefrontData = {
   seller: SellerProfile | null;
+  subscription: SellerSubscriptionRead | null;
   listings: Listing[];
   reviews: ReviewRead[];
   apiBaseUrl: string;
@@ -106,22 +115,25 @@ export async function getSellerStorefrontData(slug: string): Promise<SellerStore
   if (!seller) {
     return {
       seller: null,
+      subscription: null,
       listings: [],
       reviews: [],
       apiBaseUrl: getApiBaseUrl(),
     };
   }
 
-  const [listings, reviews] = await Promise.all([
+  const [listings, reviews, subscription] = await Promise.all([
     api
       .get<{ items: Listing[]; total: number }>("/listings", { cache: "no-store" })
       .then((response) => response.items.filter((listing) => listing.seller_id === seller.id))
       .catch(() => []),
     api.getSellerReviewsBySlug(slug, { cache: "no-store" }).catch(() => []),
+    api.getSellerSubscriptionBySlug(slug, { cache: "no-store" }).catch(() => null),
   ]);
 
   return {
     seller,
+    subscription,
     listings,
     reviews,
     apiBaseUrl: getApiBaseUrl(),

@@ -612,6 +612,61 @@ function toSupportBooking(booking: BookingAdmin): SupportItem {
   };
 }
 
+function renderOrderFeeSummary(order: OrderAdmin) {
+  const feeRows: Array<{ label: string; value: string }> = [
+    {
+      label: "Subtotal",
+      value: formatCurrency(order.subtotal_cents, order.currency),
+    },
+  ];
+
+  if (order.fulfillment === "delivery" || order.fulfillment === "shipping") {
+    feeRows.push({
+      label:
+        order.fulfillment === "shipping"
+          ? "Platform-added shipping fee"
+          : "Platform-added delivery fee",
+      value: formatCurrency(order.delivery_fee_cents, order.currency),
+    });
+  }
+
+  feeRows.push(
+    {
+      label: "Platform fee",
+      value: formatCurrency(order.platform_fee_cents, order.currency),
+    },
+    {
+      label: "Total",
+      value: formatCurrency(order.total_cents, order.currency),
+    },
+  );
+
+  return (
+    <div className="space-y-2">
+      {feeRows.map((row) => (
+        <div key={row.label} className="flex items-center justify-between gap-3 text-sm">
+          <span className="text-foreground/60">{row.label}</span>
+          <span className="font-medium text-foreground">{row.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatOrderFeeSummaryLabel(order: OrderAdmin) {
+  const parts: string[] = [];
+  if (
+    (order.fulfillment === "delivery" || order.fulfillment === "shipping") &&
+    (order.delivery_fee_cents ?? 0) > 0
+  ) {
+    parts.push(`Surcharge ${formatCurrency(order.delivery_fee_cents, order.currency)}`);
+  }
+  if ((order.platform_fee_cents ?? 0) > 0) {
+    parts.push(`Platform ${formatCurrency(order.platform_fee_cents, order.currency)}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "No added fees";
+}
+
 function isOpenItem(item: SupportItem) {
   if (item.kind === "order") {
     return OPEN_ORDER_STATUSES.has(item.status);
@@ -3444,7 +3499,11 @@ export function TransactionSupportPanel() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            <div
+              className={`mt-4 grid gap-4 ${
+                focusedItem.kind === "order" ? "xl:grid-cols-3" : "xl:grid-cols-2"
+              }`}
+            >
               <div className="rounded-[1.25rem] border border-border bg-background p-4">
                 <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">
                   Support Snapshot
@@ -3506,6 +3565,14 @@ export function TransactionSupportPanel() {
                   </p>
                 </div>
               </div>
+              {focusedItem.kind === "order" ? (
+                <div className="rounded-[1.25rem] border border-border bg-background p-4">
+                  <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">
+                    Fee Breakdown
+                  </p>
+                  <div className="mt-3">{renderOrderFeeSummary(focusedItem.raw)}</div>
+                </div>
+              ) : null}
               <div className="rounded-[1.25rem] border border-border bg-background p-4">
                 <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">
                   Support History
@@ -3783,11 +3850,21 @@ export function TransactionSupportPanel() {
                     </div>
                   ) : null}
 
-                    <div className="grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-4">
+                    <div
+                      className={`grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 ${
+                        item.kind === "order" ? "xl:grid-cols-5" : "xl:grid-cols-4"
+                      }`}
+                    >
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">Amount</p>
                       <p className="mt-1 font-medium text-foreground">{item.amountLabel}</p>
                     </div>
+                    {item.kind === "order" ? (
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">Fees</p>
+                        <p className="mt-1 text-foreground">{formatOrderFeeSummaryLabel(item.raw)}</p>
+                      </div>
+                    ) : null}
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/42">Buyer</p>
                       <p className="mt-1 font-mono text-xs text-foreground">{truncateId(item.buyer_id)}</p>

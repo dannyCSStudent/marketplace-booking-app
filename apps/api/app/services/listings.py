@@ -454,6 +454,68 @@ def _attach_recent_transaction_counts(rows: list[dict[str, object]], supabase) -
         row["recent_transaction_count"] = counts.get(row.get("id"), 0)
 
 
+def _collect_priority_visibility_seller_ids(
+    seller_ids: list[str],
+    supabase,
+) -> set[str]:
+    if not seller_ids:
+        return set()
+
+    quoted_ids = ",".join(f'"{seller_id}"' for seller_id in seller_ids)
+    try:
+        rows = supabase.select(
+            "seller_subscriptions",
+            query={
+                "select": "seller_id,subscription_tiers(priority_visibility)",
+                "seller_id": f"in.({quoted_ids})",
+                "is_active": "eq.true",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        return set()
+
+    priority_seller_ids: set[str] = set()
+    for row in rows:
+        seller_id = row.get("seller_id")
+        tier = row.get("subscription_tiers") or {}
+        if seller_id and tier.get("priority_visibility") is True:
+            priority_seller_ids.add(seller_id)
+
+    return priority_seller_ids
+
+
+def _attach_priority_visibility(rows: list[dict[str, object]], supabase) -> None:
+    seller_ids = [str(row["seller_id"]) for row in rows if row.get("seller_id")]
+    priority_seller_ids = _collect_priority_visibility_seller_ids(seller_ids, supabase)
+    for row in rows:
+        row["priority_visibility_enabled"] = row.get("seller_id") in priority_seller_ids
+
+
+def _listing_sort_key(row: dict[str, object]) -> tuple[object, ...]:
+    recent_count = row.get("recent_transaction_count")
+    if not isinstance(recent_count, int):
+        recent_count = 0
+
+    created_at = row.get("created_at")
+    created_at_timestamp = 0.0
+    if isinstance(created_at, datetime):
+        created_at_timestamp = created_at.timestamp()
+    elif isinstance(created_at, str):
+        parsed = _parse_iso_datetime(created_at)
+        if parsed:
+            created_at_timestamp = parsed.timestamp()
+
+    return (
+        0 if row.get("is_promoted") else 1,
+        0 if row.get("priority_visibility_enabled") else 1,
+        -recent_count,
+        0 if row.get("available_today") else 1,
+        0 if row.get("is_new_listing") else 1,
+        -created_at_timestamp,
+    )
+
+
 def _build_price_insight(
     listing: ListingRead,
     prices: list[int],
@@ -567,6 +629,8 @@ def list_public_listings(params: ListingQueryParams) -> ListingListResponse:
     _attach_available_today(rows, supabase)
     _attach_recent_transaction_counts(rows, supabase)
     _attach_new_listing_flag(rows, reference_time)
+    _attach_priority_visibility(rows, supabase)
+    rows.sort(key=_listing_sort_key)
     items = [_to_listing_read(row) for row in rows]
     return ListingListResponse(items=items, total=len(items))
 

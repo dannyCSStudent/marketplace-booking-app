@@ -28,6 +28,14 @@ export type ListingPricingScopeCount = ApiSchemaMap["ListingPricingScopeCount"];
 export type PlatformFeeRateRead = ApiSchemaMap["PlatformFeeRateRead"];
 export type PlatformFeeRateCreate = ApiSchemaMap["PlatformFeeRateCreate"];
 export type PlatformFeeHistoryPoint = ApiSchemaMap["PlatformFeeHistoryPoint"];
+export type DeliveryFeeSettingsRead = ApiSchemaMap["DeliveryFeeSettingsRead"];
+export type DeliveryFeeSettingsCreate = ApiSchemaMap["DeliveryFeeSettingsCreate"];
+export type DeliveryFeeHistoryPoint = ApiSchemaMap["DeliveryFeeHistoryPoint"];
+export type SubscriptionTierRead = ApiSchemaMap["SubscriptionTierRead"];
+export type SubscriptionTierCreate = ApiSchemaMap["SubscriptionTierCreate"];
+export type SellerSubscriptionRead = ApiSchemaMap["SellerSubscriptionRead"];
+export type SellerSubscriptionAssign = ApiSchemaMap["SellerSubscriptionAssign"];
+export type SellerSubscriptionEventRead = ApiSchemaMap["SellerSubscriptionEventRead"];
 export type CategoryRead = {
   id: string;
   name: string;
@@ -163,6 +171,7 @@ export type BuyerDashboardData = {
 };
 export type SellerWorkspaceData = {
   seller: SellerProfile;
+  subscription: SellerSubscriptionRead | null;
   listings: Listing[];
   orders: Order[];
   bookings: Booking[];
@@ -215,6 +224,8 @@ export function authHeaders(accessToken: string) {
 export const apiRoutes = {
   sellerBySlug: (slug: string) => `/sellers/${slug}`,
   sellerReviewsBySlug: (slug: string) => `/sellers/${slug}/reviews`,
+  sellerSubscriptionBySlug: (slug: string) => `/sellers/${slug}/subscription`,
+  mySellerSubscription: "/sellers/me/subscription",
   myReviewLookup: (query: string) => `/reviews/me/lookup?${query}`,
   reviewSellerResponse: (reviewId: string) => `/reviews/${reviewId}/seller-response`,
   reviewReport: (reviewId: string) => `/reviews/${reviewId}/report`,
@@ -229,6 +240,12 @@ export const apiRoutes = {
   promotionEvents: "/admin/listings/promotions/events",
   platformFeeHistory: (days?: number) =>
     `/admin/platform-fees/history${days ? `?days=${days}` : ""}`,
+  deliveryFeeHistory: (days?: number) =>
+    `/admin/delivery-fees/history${days ? `?days=${days}` : ""}`,
+  subscriptionTiers: "/admin/subscription-tiers",
+  sellerSubscriptions: "/admin/seller-subscriptions",
+  sellerSubscriptionEvents: "/admin/seller-subscription-events",
+  deliveryFees: "/delivery-fees",
   listingPromotion: (listingId: string) => `/admin/listings/${listingId}/promotion`,
   orderById: (orderId: string) => `/orders/${orderId}`,
   bookingById: (bookingId: string) => `/bookings/${bookingId}`,
@@ -327,6 +344,14 @@ export function createApiClient(baseUrl: string) {
     return get<ReviewRead[]>(apiRoutes.sellerReviewsBySlug(slug), options);
   }
 
+  function getSellerSubscriptionBySlug(slug: string, options?: RequestConfig) {
+    return get<SellerSubscriptionRead>(apiRoutes.sellerSubscriptionBySlug(slug), options);
+  }
+
+  function getMySellerSubscription(options: RequestConfig) {
+    return get<SellerSubscriptionRead>(apiRoutes.mySellerSubscription, options);
+  }
+
   function getMyReviewLookup(
     params: { orderId?: string; bookingId?: string },
     accessToken: string,
@@ -358,8 +383,16 @@ export function createApiClient(baseUrl: string) {
     return get<PlatformFeeRateRead>(apiRoutes.platformFees, options);
   }
 
+  function getDeliveryFees(options?: RequestConfig) {
+    return get<DeliveryFeeSettingsRead>(apiRoutes.deliveryFees, options);
+  }
+
   function createPlatformFeeRate(body: PlatformFeeRateCreate, options?: RequestConfig) {
     return post<PlatformFeeRateRead>(apiRoutes.platformFees, body, options);
+  }
+
+  function createDeliveryFees(body: DeliveryFeeSettingsCreate, options: RequestConfig) {
+    return post<DeliveryFeeSettingsRead>(apiRoutes.deliveryFees, body, options);
   }
 
   function updateOrderStatus(
@@ -446,6 +479,36 @@ export function createApiClient(baseUrl: string) {
       apiRoutes.platformFeeHistory(days),
       options,
     );
+  }
+
+  function listDeliveryFeeHistory(
+    days?: number,
+    options?: RequestConfig,
+  ) {
+    return get<DeliveryFeeHistoryPoint[]>(
+      apiRoutes.deliveryFeeHistory(days),
+      options,
+    );
+  }
+
+  function listSubscriptionTiers(options?: RequestConfig) {
+    return get<SubscriptionTierRead[]>(apiRoutes.subscriptionTiers, options);
+  }
+
+  function createSubscriptionTier(body: SubscriptionTierCreate, options: RequestConfig) {
+    return post<SubscriptionTierRead>(apiRoutes.subscriptionTiers, body, options);
+  }
+
+  function listSellerSubscriptions(options?: RequestConfig) {
+    return get<SellerSubscriptionRead[]>(apiRoutes.sellerSubscriptions, options);
+  }
+
+  function listSellerSubscriptionEvents(options?: RequestConfig) {
+    return get<SellerSubscriptionEventRead[]>(apiRoutes.sellerSubscriptionEvents, options);
+  }
+
+  function assignSellerSubscription(body: SellerSubscriptionAssign, options: RequestConfig) {
+    return post<SellerSubscriptionRead>(apiRoutes.sellerSubscriptions, body, options);
   }
 
   function listPricingScopeSummary(options?: RequestConfig) {
@@ -562,15 +625,22 @@ export function createApiClient(baseUrl: string) {
       return null;
     }
 
-    const [listings, orders, bookings, reviews] = await Promise.all([
+    const [listings, orders, bookings, reviews, subscription] = await Promise.all([
       get<Listing[]>("/listings/me", { accessToken }),
       get<Order[]>("/orders/seller", { accessToken }),
       get<Booking[]>("/bookings/seller", { accessToken }),
       getSellerReviewsBySlug(seller.slug, { accessToken }).catch(() => []),
+      getMySellerSubscription({ accessToken }).catch((error) => {
+        if (error instanceof ApiError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }),
     ]);
 
     return {
       seller,
+      subscription,
       listings,
       orders,
       bookings,
@@ -671,13 +741,17 @@ export function createApiClient(baseUrl: string) {
     getSellerBySlug,
     listCategories,
     getSellerReviewsBySlug,
+    getSellerSubscriptionBySlug,
+    getMySellerSubscription,
     getMyReviewLookup,
     getListingById,
     getListingPriceInsight,
     getOrderById,
     getBookingById,
     getPlatformFees,
+    getDeliveryFees,
     createPlatformFeeRate,
+    createDeliveryFees,
     updateOrderStatus,
     updateBookingStatus,
     updateAdminOrderSupport,
@@ -706,6 +780,12 @@ export function createApiClient(baseUrl: string) {
     listPromotionSummary,
     listPromotionEvents,
     listPlatformFeeHistory,
+    listDeliveryFeeHistory,
+    listSubscriptionTiers,
+    createSubscriptionTier,
+    listSellerSubscriptions,
+    listSellerSubscriptionEvents,
+    assignSellerSubscription,
     listPricingScopeSummary,
     loadAdminTransactions,
     loadAdminNotificationDeliveries,

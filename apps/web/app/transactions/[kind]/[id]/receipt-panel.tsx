@@ -456,6 +456,16 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
             ["Order ID", order.id],
             ["Status", order.status.replaceAll("_", " ")],
             ["Fulfillment", order.fulfillment],
+            ["Subtotal", formatCurrency(order.subtotal_cents, order.currency)],
+            ...(order.fulfillment === "delivery" || order.fulfillment === "shipping"
+              ? [[
+                  order.fulfillment === "shipping"
+                    ? "Platform-added shipping fee"
+                    : "Platform-added delivery fee",
+                  formatCurrency(order.delivery_fee_cents, order.currency),
+                ] as [string, string]]
+              : []),
+            ["Platform fee", formatCurrency(order.platform_fee_cents, order.currency)],
             ["Total", formatCurrency(order.total_cents, order.currency)],
             ["Seller update", order.seller_response_note ?? "No seller note yet"],
             ["Notes", order.notes ?? "No notes added"],

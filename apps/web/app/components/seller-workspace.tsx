@@ -30,12 +30,14 @@ import type {
   ReviewRead,
   SellerCreateInput,
   SellerProfile,
+  SellerSubscriptionRead,
   SellerWorkspaceData,
 } from "@/app/lib/api";
 import type { NotificationDeliveryBulkRetryResult } from "@repo/api-client";
 
 type WorkspaceState = {
   seller: SellerProfile;
+  subscription: SellerSubscriptionRead | null;
   listings: Listing[];
   orders: Order[];
   bookings: Booking[];
@@ -257,6 +259,58 @@ function formatSellerRating(rating?: number, reviewCount?: number) {
   }
 
   return `${safeRating.toFixed(1)} stars · ${safeReviewCount} review${safeReviewCount === 1 ? "" : "s"}`;
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatSubscriptionPlanLabel(subscription: SellerSubscriptionRead | null) {
+  if (!subscription) {
+    return "No active plan";
+  }
+
+  return subscription.tier_name || subscription.tier_code || "Active plan";
+}
+
+function getSubscriptionCapabilityPills(subscription: SellerSubscriptionRead | null) {
+  if (!subscription) {
+    return [];
+  }
+
+  const capabilities = [
+    subscription.analytics_enabled ? "Analytics enabled" : "Analytics locked",
+    subscription.priority_visibility ? "Priority visibility" : "Standard visibility",
+    subscription.premium_storefront ? "Premium storefront" : "Standard storefront",
+  ];
+
+  return capabilities;
+}
+
+function getPremiumStorefrontRecommendations(listing: Listing) {
+  const recommendations: string[] = [];
+
+  if ((listing.images?.length ?? 0) === 0) {
+    recommendations.push("Add a primary image so the storefront hero has stronger visual pull.");
+  }
+
+  if ((listing.description?.trim().length ?? 0) < 90) {
+    recommendations.push("Expand the description with process, pickup detail, or service outcome.");
+  }
+
+  if ((listing.recent_transaction_count ?? 0) >= 3 && !listing.is_promoted) {
+    recommendations.push("This listing already has traction. Consider promoting it for more shelf space.");
+  }
+
+  if (!listing.available_today && listing.type !== "product") {
+    recommendations.push("Add same-day availability windows to convert storefront traffic faster.");
+  }
+
+  if (!listing.is_local_only) {
+    recommendations.push("Tighten the local positioning so nearby buyers understand the fulfillment fit.");
+  }
+
+  return recommendations.slice(0, 3);
 }
 
 function titleCaseWorkspaceLabel(value: string) {
@@ -3052,6 +3106,108 @@ export function SellerWorkspace() {
       ).length,
     [workspace?.bookings, workspace?.orders],
   );
+  const sellerAnalyticsSnapshot = useMemo(() => {
+    if (!workspace) {
+      return null;
+    }
+
+    const orders = workspace.orders ?? [];
+    const bookings = workspace.bookings ?? [];
+    const reviews = workspace.reviews ?? [];
+    const transactions = [...orders, ...bookings];
+    const totalRevenueCents = transactions.reduce(
+      (sum, transaction) => sum + (transaction.total_cents ?? 0),
+      0,
+    );
+    const averageTicketCents =
+      transactions.length > 0 ? Math.round(totalRevenueCents / transactions.length) : 0;
+    const recentTransactions = transactions.filter((transaction) =>
+      isRecentTransactionEvent(transaction.status_history, 7),
+    );
+    const totalFollowOn = sameSellerFollowOnConversionsCount + crossSellerFollowOnConversionsCount;
+    const repeatShare = totalFollowOn > 0 ? sameSellerFollowOnConversionsCount / totalFollowOn : 0;
+    const reviewAverage =
+      reviews.length > 0
+        ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
+        : workspace.seller.average_rating ?? 0;
+
+    return {
+      totalRevenueCents,
+      averageTicketCents,
+      recentTransactionsCount: recentTransactions.length,
+      repeatShare,
+      reviewAverage,
+    };
+  }, [
+    crossSellerFollowOnConversionsCount,
+    sameSellerFollowOnConversionsCount,
+    workspace,
+  ]);
+  const sellerAnalyticsListingInsights = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    const transactions = [...workspace.orders, ...workspace.bookings];
+
+    return workspace.listings
+      .map((listing) => {
+        const listingTransactions = transactions.filter(
+          (transaction) => getTransactionListingId(transaction) === listing.id,
+        );
+        const revenueCents = listingTransactions.reduce(
+          (sum, transaction) => sum + (transaction.total_cents ?? 0),
+          0,
+        );
+        const retention = listingFollowOnBreakdownById[listing.id];
+        const totalFollowOn =
+          (retention?.sameSellerCount ?? 0) + (retention?.crossSellerCount ?? 0);
+        const repeatShare =
+          totalFollowOn > 0 ? (retention?.sameSellerCount ?? 0) / totalFollowOn : 0;
+        const recoveryDelta = listingRecoveryDeltaById[listing.id] ?? 0;
+        const deliveryPressure = listingDeliveryPressureById[listing.id] ?? {
+          failed: 0,
+          queued: 0,
+        };
+        const attentionScore =
+          deliveryPressure.failed * 3 +
+          deliveryPressure.queued * 2 +
+          (retention &&
+          getListingRetentionTrendKey({
+            sameSellerCount: retention.sameSellerCount,
+            crossSellerCount: retention.crossSellerCount,
+            sameSellerRecentCount: retention.sameSellerRecentCount,
+            crossSellerRecentCount: retention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
+          }) === "softening"
+            ? 3
+            : 0);
+
+        return {
+          listing,
+          revenueCents,
+          repeatShare,
+          recoveryDelta,
+          attentionScore,
+        };
+      })
+      .filter((entry) => entry.revenueCents > 0 || entry.attentionScore > 0 || entry.repeatShare > 0)
+      .sort((left, right) => {
+        if (left.revenueCents !== right.revenueCents) {
+          return right.revenueCents - left.revenueCents;
+        }
+        if (left.repeatShare !== right.repeatShare) {
+          return right.repeatShare - left.repeatShare;
+        }
+        return left.listing.title.localeCompare(right.listing.title);
+      });
+  }, [
+    listingDeliveryPressureById,
+    listingFollowOnBreakdownById,
+    listingRecoveryDeltaById,
+    workspace,
+  ]);
   const listingFollowOnBreakdown = useMemo(() => {
     if (!workspace) {
       return [];
@@ -5164,6 +5320,175 @@ export function SellerWorkspace() {
               <MiniStat label="Bookings" value={String(workspace.bookings.length)} />
               <MiniStat label="Reviews" value={String(workspace.reviews.length)} />
             </div>
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Subscription plan
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    {formatSubscriptionPlanLabel(workspace.subscription)}
+                  </p>
+                </div>
+                {workspace.subscription ? (
+                  <span className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+                    {formatCurrency(workspace.subscription.monthly_price_cents, "USD")}/mo
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                    Unassigned
+                  </span>
+                )}
+              </div>
+              <p className="mt-3 text-sm text-foreground/64">
+                {workspace.subscription
+                  ? `Started ${workspace.subscription.started_at ? new Date(workspace.subscription.started_at).toLocaleDateString() : "recently"}`
+                  : "No seller subscription has been assigned yet. Admin can assign one from Monetization."}
+              </p>
+              {workspace.subscription?.perks_summary ? (
+                <p className="mt-2 text-sm leading-6 text-foreground/68">
+                  {workspace.subscription.perks_summary}
+                </p>
+              ) : null}
+              <div className="mt-4 flex flex-wrap gap-2">
+                {getSubscriptionCapabilityPills(workspace.subscription).map((pill) => {
+                  const isLocked = pill.includes("locked") || pill.includes("Standard");
+                  return (
+                    <span
+                      key={pill}
+                      className={`rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                        isLocked
+                          ? "border border-border bg-background text-foreground/62"
+                          : "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                      }`}
+                    >
+                      {pill}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Seller analytics
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    {workspace.subscription?.analytics_enabled
+                      ? "Plan-enabled performance snapshot"
+                      : "Upgrade to unlock seller analytics"}
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                    workspace.subscription?.analytics_enabled
+                      ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border border-border bg-background text-foreground/62"
+                  }`}
+                >
+                  {workspace.subscription?.analytics_enabled ? "Unlocked" : "Locked"}
+                </span>
+              </div>
+              {workspace.subscription?.analytics_enabled && sellerAnalyticsSnapshot ? (
+                <>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <MiniStat
+                      label="Revenue"
+                      value={formatCurrency(sellerAnalyticsSnapshot.totalRevenueCents, "USD")}
+                      accent="olive"
+                    />
+                    <MiniStat
+                      label="Average Ticket"
+                      value={formatCurrency(sellerAnalyticsSnapshot.averageTicketCents, "USD")}
+                      accent="sky"
+                    />
+                    <MiniStat
+                      label="Transactions 7d"
+                      value={String(sellerAnalyticsSnapshot.recentTransactionsCount)}
+                      accent="amber"
+                    />
+                    <MiniStat
+                      label="Repeat Share"
+                      value={formatPercent(sellerAnalyticsSnapshot.repeatShare)}
+                      accent="rose"
+                    />
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[1.2rem] border border-border bg-background px-4 py-3 text-sm text-foreground/68">
+                    <p>
+                      Review average{" "}
+                      <span className="font-semibold text-foreground">
+                        {sellerAnalyticsSnapshot.reviewAverage > 0
+                          ? sellerAnalyticsSnapshot.reviewAverage.toFixed(1)
+                          : "No rating yet"}
+                      </span>
+                    </p>
+                    <p>
+                      Follow-on retention is based on same-seller vs cross-seller browse context already
+                      captured in your workspace.
+                    </p>
+                  </div>
+                  {sellerAnalyticsListingInsights.length > 0 ? (
+                    <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                      <AnalyticsListingCard
+                        title="Top revenue listing"
+                        listing={sellerAnalyticsListingInsights[0]?.listing ?? null}
+                        detail={
+                          sellerAnalyticsListingInsights[0]
+                            ? formatCurrency(sellerAnalyticsListingInsights[0].revenueCents, "USD")
+                            : "No sales yet"
+                        }
+                        note="Highest combined order and booking revenue so far."
+                        tone="olive"
+                      />
+                      <AnalyticsListingCard
+                        title="Best repeat-share"
+                        listing={
+                          [...sellerAnalyticsListingInsights]
+                            .sort((left, right) => right.repeatShare - left.repeatShare)[0]?.listing ?? null
+                        }
+                        detail={
+                          formatPercent(
+                            [...sellerAnalyticsListingInsights].sort(
+                              (left, right) => right.repeatShare - left.repeatShare,
+                            )[0]?.repeatShare ?? 0,
+                          )
+                        }
+                        note="Same-seller follow-on share among tracked repeat traffic."
+                        tone="sky"
+                      />
+                      <AnalyticsListingCard
+                        title="Needs attention"
+                        listing={
+                          [...sellerAnalyticsListingInsights]
+                            .sort((left, right) => right.attentionScore - left.attentionScore)[0]?.listing ?? null
+                        }
+                        detail={
+                          (() => {
+                            const attentionEntry = [...sellerAnalyticsListingInsights].sort(
+                              (left, right) => right.attentionScore - left.attentionScore,
+                            )[0];
+                            if (!attentionEntry || attentionEntry.attentionScore <= 0) {
+                              return "No urgent issues";
+                            }
+                            return attentionEntry.recoveryDelta < 0
+                              ? "Delivery drag"
+                              : "Retention softening";
+                          })()
+                        }
+                        note="Highlights the listing with the strongest operational or retention drag signal."
+                        tone="rose"
+                      />
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p className="mt-4 text-sm leading-6 text-foreground/66">
+                  Plans with analytics show revenue, average ticket size, recent transaction pace,
+                  and repeat-share retention here for day-to-day seller decisions.
+                </p>
+              )}
+            </div>
             <div className="mt-4 space-y-2">
               <MiniStat
                 label="Active platform fee"
@@ -6595,6 +6920,7 @@ export function SellerWorkspace() {
                           currency: priceInsightState.insight.currency,
                         })
                       : null;
+                    const premiumRecommendations = getPremiumStorefrontRecommendations(listing);
 
                     return (
                       <div
@@ -6895,6 +7221,55 @@ export function SellerWorkspace() {
                             </p>
                           </label>
                         </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-border bg-background/40 px-4 py-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                              Premium storefront optimization
+                            </p>
+                            <p className="text-sm text-foreground/64">
+                              {workspace.subscription?.premium_storefront
+                                ? "Merchandising recommendations for stronger storefront conversion."
+                                : "Upgrade to unlock premium storefront recommendations for each listing."}
+                            </p>
+                          </div>
+                          <span
+                            className={`rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                              workspace.subscription?.premium_storefront
+                                ? "border border-[#0f5f62]/20 bg-[#e4f1ed] text-[#0f5f62]"
+                                : "border border-border bg-white text-foreground/62"
+                            }`}
+                          >
+                            {workspace.subscription?.premium_storefront ? "Unlocked" : "Locked"}
+                          </span>
+                        </div>
+                        {workspace.subscription?.premium_storefront ? (
+                          premiumRecommendations.length > 0 ? (
+                            <div className="mt-3 space-y-2">
+                              {premiumRecommendations.map((recommendation) => (
+                                <div
+                                  key={recommendation}
+                                  className="rounded-[1rem] border border-[#0f5f62]/12 bg-white px-3 py-3 text-sm leading-6 text-foreground/72"
+                                >
+                                  {recommendation}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="mt-3 text-sm leading-6 text-foreground/66">
+                              This listing is in strong shape for the storefront right now. Keep the
+                              images fresh and monitor traction before changing positioning.
+                            </p>
+                          )
+                        ) : (
+                          <p className="mt-3 text-sm leading-6 text-foreground/66">
+                            Premium storefront plans turn listing data into merchandising guidance,
+                            including image coverage, description depth, traction-based promotion cues,
+                            and local-fit recommendations.
+                          </p>
+                        )}
                       </div>
 
                       <div
@@ -7599,6 +7974,9 @@ export function SellerWorkspace() {
                             )}
                           </div>
                         </FocusedTransactionDetailCard>
+                        <FocusedTransactionDetailCard title="Fee Breakdown">
+                          <FocusedOrderFeeBreakdown order={focusedOrder} />
+                        </FocusedTransactionDetailCard>
                       </div>
 
                       <FocusedTransactionDetailCard className="mt-4" title="Full Timeline">
@@ -7711,7 +8089,7 @@ export function SellerWorkspace() {
                         primaryLine={null}
                         recoveryDelta={orderRecoveryDelta}
                         rightPrimary={formatCurrency(order.total_cents, order.currency)}
-                        rightSecondary={null}
+                        rightSecondary={formatCompactOrderFeeSummary(order)}
                         secondaryLine={order.notes ?? "No buyer notes"}
                         sellerNote={order.seller_response_note ?? null}
                         statusLabel={order.status.replaceAll("_", " ")}
@@ -7933,6 +8311,37 @@ function MiniStat({
     >
       {content}
     </button>
+  );
+}
+
+function AnalyticsListingCard({
+  title,
+  listing,
+  detail,
+  note,
+  tone,
+}: {
+  title: string;
+  listing: Listing | null;
+  detail: string;
+  note: string;
+  tone: "olive" | "sky" | "rose";
+}) {
+  const toneStyles = {
+    olive: "border-lime-200 bg-lime-50/70 text-lime-900",
+    sky: "border-sky-200 bg-sky-50/70 text-sky-900",
+    rose: "border-rose-200 bg-rose-50/70 text-rose-900",
+  } satisfies Record<string, string>;
+
+  return (
+    <div className={`rounded-[1.3rem] border px-4 py-4 ${toneStyles[tone]}`}>
+      <p className="font-mono text-[11px] uppercase tracking-[0.2em] opacity-70">{title}</p>
+      <p className="mt-2 text-lg font-semibold tracking-[-0.03em]">
+        {listing?.title ?? "No listing yet"}
+      </p>
+      <p className="mt-2 text-sm font-semibold">{detail}</p>
+      <p className="mt-2 text-sm leading-6 opacity-80">{note}</p>
+    </div>
   );
 }
 
@@ -8200,6 +8609,82 @@ function FocusedTransactionDetailCard({
       {children}
     </div>
   );
+}
+
+function FocusedOrderFeeBreakdown({
+  order,
+}: {
+  order: {
+    subtotal_cents: number;
+    delivery_fee_cents?: number | null;
+    platform_fee_cents?: number | null;
+    total_cents: number;
+    currency?: string | null;
+    fulfillment: string;
+  };
+}) {
+  const rows: Array<{ label: string; value: string }> = [
+    {
+      label: "Subtotal",
+      value: formatCurrency(order.subtotal_cents, order.currency ?? "USD"),
+    },
+  ];
+
+  if (order.fulfillment === "delivery" || order.fulfillment === "shipping") {
+    rows.push({
+      label:
+        order.fulfillment === "shipping"
+          ? "Platform-added shipping fee"
+          : "Platform-added delivery fee",
+      value: formatCurrency(order.delivery_fee_cents ?? 0, order.currency ?? "USD"),
+    });
+  }
+
+  rows.push(
+    {
+      label: "Platform fee",
+      value: formatCurrency(order.platform_fee_cents ?? 0, order.currency ?? "USD"),
+    },
+    {
+      label: "Total",
+      value: formatCurrency(order.total_cents, order.currency ?? "USD"),
+    },
+  );
+
+  return (
+    <div className="mt-3 space-y-2">
+      {rows.map((row) => (
+        <div key={row.label} className="flex items-center justify-between gap-3 text-sm">
+          <span className="text-foreground/60">{row.label}</span>
+          <span className="font-medium text-foreground">{row.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatCompactOrderFeeSummary(order: {
+  fulfillment: string;
+  delivery_fee_cents?: number | null;
+  platform_fee_cents?: number | null;
+  currency?: string | null;
+}) {
+  const parts: string[] = [];
+  if (
+    (order.fulfillment === "delivery" || order.fulfillment === "shipping") &&
+    (order.delivery_fee_cents ?? 0) > 0
+  ) {
+    parts.push(
+      `${order.fulfillment === "shipping" ? "Shipping" : "Delivery"} ${formatCurrency(
+        order.delivery_fee_cents ?? 0,
+        order.currency ?? "USD",
+      )}`,
+    );
+  }
+  if ((order.platform_fee_cents ?? 0) > 0) {
+    parts.push(`Platform ${formatCurrency(order.platform_fee_cents ?? 0, order.currency ?? "USD")}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function QueueTransactionCardHeader({

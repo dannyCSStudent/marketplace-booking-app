@@ -609,6 +609,24 @@ export default function TransactionReceiptScreen() {
           <ReceiptRow label="Order ID" value={resolvedOrder.id} />
           <ReceiptRow label="Status" value={resolvedOrder.status.replaceAll('_', ' ')} />
           <ReceiptRow label="Fulfillment" value={resolvedOrder.fulfillment} />
+          <ReceiptRow
+            label="Subtotal"
+            value={formatCurrency(resolvedOrder.subtotal_cents, resolvedOrder.currency)}
+          />
+          {(resolvedOrder.fulfillment === 'delivery' || resolvedOrder.fulfillment === 'shipping') ? (
+            <ReceiptRow
+              label={
+                resolvedOrder.fulfillment === 'shipping'
+                  ? 'Platform-added shipping fee'
+                  : 'Platform-added delivery fee'
+              }
+              value={formatCurrency(resolvedOrder.delivery_fee_cents, resolvedOrder.currency)}
+            />
+          ) : null}
+          <ReceiptRow
+            label="Platform fee"
+            value={formatCurrency(resolvedOrder.platform_fee_cents, resolvedOrder.currency)}
+          />
           <ReceiptRow label="Total" value={formatCurrency(resolvedOrder.total_cents, resolvedOrder.currency)} />
           <ReceiptRow
             label="Seller update"

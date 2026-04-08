@@ -121,6 +121,27 @@ export type CategoryRead = {
     parent_id?: string | null;
   };
 
+export type DeliveryFeeHistoryPoint = {
+    date: string;
+    delivery_fee_cents: number;
+    shipping_fee_cents: number;
+  };
+
+export type DeliveryFeeSettingsCreate = {
+    name: string;
+    delivery_fee_cents?: number;
+    shipping_fee_cents?: number;
+    effective_at?: string | null;
+  };
+
+export type DeliveryFeeSettingsRead = {
+    id?: string | null;
+    name: string;
+    delivery_fee_cents?: number;
+    shipping_fee_cents?: number;
+    effective_at?: string | null;
+  };
+
 export type HTTPValidationError = {
     detail?: ValidationError[];
   };
@@ -618,6 +639,52 @@ export type SellerRead = {
     review_count?: number;
   };
 
+export type SellerSubscriptionAssign = {
+    seller_slug: string;
+    tier_id: string;
+    reason_code: "trial_conversion" | "manual_upgrade" | "retention_save" | "support_adjustment" | "plan_reset";
+    note?: string | null;
+  };
+
+export type SellerSubscriptionEventRead = {
+    id?: string | null;
+    seller_id: string;
+    seller_slug?: string | null;
+    seller_display_name?: string | null;
+    seller_subscription_id?: string | null;
+    actor_user_id: string;
+    actor_name?: string | null;
+    action: string;
+    reason_code?: "trial_conversion" | "manual_upgrade" | "retention_save" | "support_adjustment" | "plan_reset" | null;
+    from_tier_id?: string | null;
+    from_tier_code?: string | null;
+    from_tier_name?: string | null;
+    to_tier_id?: string | null;
+    to_tier_code?: string | null;
+    to_tier_name?: string | null;
+    note?: string | null;
+    created_at?: string | null;
+  };
+
+export type SellerSubscriptionRead = {
+    id?: string | null;
+    seller_id: string;
+    seller_slug?: string | null;
+    seller_display_name?: string | null;
+    tier_id: string;
+    tier_code?: string | null;
+    tier_name?: string | null;
+    monthly_price_cents?: number;
+    perks_summary?: string | null;
+    analytics_enabled?: boolean;
+    priority_visibility?: boolean;
+    premium_storefront?: boolean;
+    started_at?: string | null;
+    ended_at?: string | null;
+    is_active?: boolean;
+    created_at?: string | null;
+  };
+
 export type SellerUpdate = {
     display_name?: string | null;
     slug?: string | null;
@@ -626,6 +693,30 @@ export type SellerUpdate = {
     state?: string | null;
     country?: string | null;
     accepts_custom_orders?: boolean | null;
+  };
+
+export type SubscriptionTierCreate = {
+    code: string;
+    name: string;
+    monthly_price_cents?: number;
+    perks_summary?: string | null;
+    analytics_enabled?: boolean;
+    priority_visibility?: boolean;
+    premium_storefront?: boolean;
+    is_active?: boolean;
+  };
+
+export type SubscriptionTierRead = {
+    id?: string | null;
+    code: string;
+    name: string;
+    monthly_price_cents?: number;
+    perks_summary?: string | null;
+    analytics_enabled?: boolean;
+    priority_visibility?: boolean;
+    premium_storefront?: boolean;
+    is_active?: boolean;
+    created_at?: string | null;
   };
 
 export type ValidationError = {
@@ -650,6 +741,9 @@ export type ApiSchemaMap = {
   BookingStatusEventRead: BookingStatusEventRead;
   BookingStatusUpdate: BookingStatusUpdate;
   CategoryRead: CategoryRead;
+  DeliveryFeeHistoryPoint: DeliveryFeeHistoryPoint;
+  DeliveryFeeSettingsCreate: DeliveryFeeSettingsCreate;
+  DeliveryFeeSettingsRead: DeliveryFeeSettingsRead;
   HTTPValidationError: HTTPValidationError;
   ListingAiAssistRequest: ListingAiAssistRequest;
   ListingAiAssistResponse: ListingAiAssistResponse;
@@ -702,11 +796,21 @@ export type ApiSchemaMap = {
   ReviewVisibilityUpdate: ReviewVisibilityUpdate;
   SellerCreate: SellerCreate;
   SellerRead: SellerRead;
+  SellerSubscriptionAssign: SellerSubscriptionAssign;
+  SellerSubscriptionEventRead: SellerSubscriptionEventRead;
+  SellerSubscriptionRead: SellerSubscriptionRead;
   SellerUpdate: SellerUpdate;
+  SubscriptionTierCreate: SubscriptionTierCreate;
+  SubscriptionTierRead: SubscriptionTierRead;
   ValidationError: ValidationError;
 };
 
 export type ApiOperations = {
+  "/admin/delivery-fees/history": {
+    get: {
+      response: DeliveryFeeHistoryPoint[];
+    };
+  };
   "/admin/listings/pricing-scope-summary": {
     get: {
       response: ListingPricingScopeCount[];
@@ -735,6 +839,29 @@ export type ApiOperations = {
   "/admin/platform-fees/history": {
     get: {
       response: PlatformFeeHistoryPoint[];
+    };
+  };
+  "/admin/seller-subscription-events": {
+    get: {
+      response: SellerSubscriptionEventRead[];
+    };
+  };
+  "/admin/seller-subscriptions": {
+    get: {
+      response: SellerSubscriptionRead[];
+    };
+    post: {
+      requestBody: SellerSubscriptionAssign;
+      response: SellerSubscriptionRead;
+    };
+  };
+  "/admin/subscription-tiers": {
+    get: {
+      response: SubscriptionTierRead[];
+    };
+    post: {
+      requestBody: SubscriptionTierCreate;
+      response: SubscriptionTierRead;
     };
   };
   "/admin/users": {
@@ -787,6 +914,15 @@ export type ApiOperations = {
   "/categories": {
     get: {
       response: CategoryRead[];
+    };
+  };
+  "/delivery-fees": {
+    get: {
+      response: DeliveryFeeSettingsRead;
+    };
+    post: {
+      requestBody: DeliveryFeeSettingsCreate;
+      response: DeliveryFeeSettingsRead;
     };
   };
   "/health": {
@@ -1008,6 +1144,11 @@ export type ApiOperations = {
       response: SellerRead;
     };
   };
+  "/sellers/me/subscription": {
+    get: {
+      response: SellerSubscriptionRead;
+    };
+  };
   "/sellers/{slug}": {
     get: {
       response: SellerRead;
@@ -1016,6 +1157,11 @@ export type ApiOperations = {
   "/sellers/{slug}/reviews": {
     get: {
       response: ReviewRead[];
+    };
+  };
+  "/sellers/{slug}/subscription": {
+    get: {
+      response: SellerSubscriptionRead;
     };
   };
 };

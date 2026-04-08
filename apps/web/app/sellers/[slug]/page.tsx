@@ -27,7 +27,7 @@ export default async function SellerStorefrontPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const { seller, listings, reviews } = await getSellerStorefrontData(slug);
+  const { seller, subscription, listings, reviews } = await getSellerStorefrontData(slug);
 
   if (!seller) {
     notFound();
@@ -36,11 +36,23 @@ export default async function SellerStorefrontPage({
   const productCount = listings.filter((listing) => listing.type === "product").length;
   const serviceCount = listings.filter((listing) => listing.type === "service").length;
   const hybridCount = listings.filter((listing) => listing.type === "hybrid").length;
+  const hasPremiumStorefront = Boolean(subscription?.premium_storefront);
+  const highlightedPerks = [
+    subscription?.analytics_enabled ? "Seller analytics included" : null,
+    subscription?.priority_visibility ? "Priority discovery placement" : null,
+    subscription?.premium_storefront ? "Premium storefront presentation" : null,
+  ].filter(Boolean) as string[];
 
   return (
     <main className="grain min-h-screen px-5 py-6 sm:px-8 lg:px-12">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <section className="card-shadow overflow-hidden rounded-[2rem] border border-border bg-surface-strong">
+        <section
+          className={`card-shadow overflow-hidden rounded-[2rem] border border-border ${
+            hasPremiumStorefront
+              ? "bg-[radial-gradient(circle_at_top_left,_rgba(15,95,98,0.18),_transparent_38%),linear-gradient(135deg,#fffaf1_0%,#f5efe2_45%,#eef7f4_100%)]"
+              : "bg-surface-strong"
+          }`}
+        >
           <div className="grid gap-6 px-6 py-8 sm:px-8 lg:grid-cols-[1.2fr_0.8fr] lg:px-10 lg:py-10">
             <div className="space-y-5">
               <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.28em] text-accent-deep/75">
@@ -48,6 +60,11 @@ export default async function SellerStorefrontPage({
                   Seller Storefront
                 </span>
                 <span>Local marketplace + booking</span>
+                {hasPremiumStorefront ? (
+                  <span className="rounded-full border border-[#0f5f62]/20 bg-[#0f5f62] px-3 py-1 text-white">
+                    Premium
+                  </span>
+                ) : null}
               </div>
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
@@ -71,12 +88,29 @@ export default async function SellerStorefrontPage({
                   {seller.bio ??
                     "This seller is live in the marketplace. Browse listings, service offers, and hybrid local commerce inventory below."}
                 </p>
+                {subscription?.perks_summary ? (
+                  <p className="max-w-2xl rounded-[1.2rem] border border-border/70 bg-white/70 px-4 py-3 text-sm leading-6 text-foreground/68">
+                    {subscription.perks_summary}
+                  </p>
+                ) : null}
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
                 <MetricCard label="Live Listings" value={String(listings.length)} tone="accent" />
                 <MetricCard label="Products" value={String(productCount)} tone="olive" />
                 <MetricCard label="Services + Hybrid" value={String(serviceCount + hybridCount)} tone="gold" />
               </div>
+              {highlightedPerks.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {highlightedPerks.map((perk) => (
+                    <span
+                      key={perk}
+                      className="rounded-full border border-[#0f5f62]/15 bg-[#e4f1ed] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#0f5f62]"
+                    >
+                      {perk}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="card-shadow rounded-[1.6rem] border border-border bg-[#fff8ed] p-5">
@@ -106,6 +140,10 @@ export default async function SellerStorefrontPage({
                 <InfoRow
                   label="Custom Orders"
                   value={seller.accepts_custom_orders ? "Enabled" : "Disabled"}
+                />
+                <InfoRow
+                  label="Storefront tier"
+                  value={subscription?.tier_name ?? "Standard"}
                 />
                 <InfoRow label="Products" value={String(productCount)} />
                 <InfoRow label="Services" value={String(serviceCount)} />

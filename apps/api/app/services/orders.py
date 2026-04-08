@@ -19,6 +19,7 @@ from app.schemas.orders import (
     OrderStatusEventRead,
     OrderStatusUpdate,
 )
+from app.services.delivery_fees import get_platform_added_delivery_fee_cents
 from app.services.platform_fees import (
     calculate_platform_fee,
     get_active_platform_fee_rate_value,
@@ -442,9 +443,10 @@ def create_order(current_user: CurrentUser, payload: OrderCreate) -> OrderRead:
             }
         )
 
+    delivery_fee_cents = get_platform_added_delivery_fee_cents(payload.fulfillment)
     platform_fee_rate = get_active_platform_fee_rate_value()
     platform_fee_cents = calculate_platform_fee(subtotal, platform_fee_rate)
-    total_cents = subtotal + platform_fee_cents
+    total_cents = subtotal + delivery_fee_cents + platform_fee_cents
 
     try:
         rows = supabase.insert(
@@ -458,6 +460,7 @@ def create_order(current_user: CurrentUser, payload: OrderCreate) -> OrderRead:
                 "currency": currency,
                 "notes": payload.notes,
                 "buyer_browse_context": payload.buyer_browse_context,
+                "delivery_fee_cents": delivery_fee_cents,
                 "platform_fee_cents": platform_fee_cents,
                 "platform_fee_rate": str(platform_fee_rate),
             },

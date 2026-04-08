@@ -347,6 +347,10 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
   const [notes, setNotes] = useState("Buyer flow test from web.");
   const [bookingDayOffset, setBookingDayOffset] = useState("1");
   const [platformFeeRate, setPlatformFeeRate] = useState(0);
+  const [deliveryFeeCents, setDeliveryFeeCents] = useState({
+    delivery: 0,
+    shipping: 0,
+  });
   const [selectedFulfillment, setSelectedFulfillment] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -480,21 +484,39 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
   const sanitizedQuantity = Math.max(1, Number(quantity) || 1);
   const unitPrice = listing.price_cents ?? 0;
   const subtotal = unitPrice * sanitizedQuantity;
+  const deliveryFeeAmount =
+    selectedFulfillment === "delivery"
+      ? deliveryFeeCents.delivery
+      : selectedFulfillment === "shipping"
+        ? deliveryFeeCents.shipping
+        : 0;
   const platformFeeAmount = Math.round(subtotal * platformFeeRate);
-  const totalWithFee = subtotal + platformFeeAmount;
+  const totalWithFee = subtotal + deliveryFeeAmount + platformFeeAmount;
   const platformFeePercentLabel = `${(platformFeeRate * 100).toFixed(2).replace(/\.00$/, "")} %`;
+  const deliveryFeeLabel =
+    selectedFulfillment === "shipping"
+      ? "Platform-added shipping fee"
+      : "Platform-added delivery fee";
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const response = await api.getPlatformFees({ cache: "no-store" });
+        const [platformFeeResponse, deliveryFeeResponse] = await Promise.all([
+          api.getPlatformFees({ cache: "no-store" }),
+          api.getDeliveryFees({ cache: "no-store" }),
+        ]);
         if (!cancelled) {
-          setPlatformFeeRate(Number(response.rate ?? 0));
+          setPlatformFeeRate(Number(platformFeeResponse.rate ?? 0));
+          setDeliveryFeeCents({
+            delivery: deliveryFeeResponse.delivery_fee_cents ?? 0,
+            shipping: deliveryFeeResponse.shipping_fee_cents ?? 0,
+          });
         }
       } catch {
         if (!cancelled) {
           setPlatformFeeRate(0);
+          setDeliveryFeeCents({ delivery: 0, shipping: 0 });
         }
       }
     })();
@@ -995,6 +1017,12 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
             <span>Subtotal</span>
             <span>{formatCurrency(subtotal, listing.currency)}</span>
           </div>
+          {selectedFulfillment === "delivery" || selectedFulfillment === "shipping" ? (
+            <div className="mt-2 flex items-center justify-between">
+              <span>{deliveryFeeLabel}</span>
+              <span>{formatCurrency(deliveryFeeAmount, listing.currency)}</span>
+            </div>
+          ) : null}
           <div className="mt-2 flex items-center justify-between">
             <span>Platform fee ({platformFeePercentLabel})</span>
             <span>{formatCurrency(platformFeeAmount, listing.currency)}</span>
@@ -1003,6 +1031,9 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
             <span className="font-semibold">Total</span>
             <span className="font-semibold">{formatCurrency(totalWithFee, listing.currency)}</span>
           </div>
+          <p className="mt-3 text-xs text-white/58">
+            Delivery and shipping orders can include a platform-added surcharge before tax.
+          </p>
         </div>
       ) : null}
     </div>

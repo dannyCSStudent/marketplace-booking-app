@@ -10,6 +10,7 @@ from app.routers.bookings import router as bookings_router
 from app.routers.notifications import router as notifications_router
 from app.routers.reviews import router as reviews_router
 from app.routers.admin import router as admin_router
+from app.routers.delivery_fees import router as delivery_fees_router
 from app.routers.platform_fees import router as platform_fees_router
 
 api_router = APIRouter()
@@ -25,3 +26,4 @@ api_router.include_router(notifications_router, prefix="/notifications", tags=["
 api_router.include_router(reviews_router, prefix="/reviews", tags=["reviews"])
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
 api_router.include_router(platform_fees_router, prefix="/platform-fees", tags=["platform-fees"])
+api_router.include_router(delivery_fees_router, prefix="/delivery-fees", tags=["delivery-fees"])

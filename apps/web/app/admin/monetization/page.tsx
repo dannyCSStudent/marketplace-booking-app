@@ -1,10 +1,16 @@
 import { createApiClient } from "@/app/lib/api";
+import DeliveryFeeForm from "@/app/admin/monetization/delivery-fee-form";
+import DeliveryFeeHistory from "@/app/admin/monetization/delivery-fee-history";
 import PlatformFeeForm from "@/app/admin/monetization/platform-fee-form";
 import PlatformFeeSummary from "@/app/admin/monetization/platform-fee-summary";
 import PlatformFeeHistory from "@/app/admin/monetization/platform-fee-history";
+import SellerSubscriptionsPanel from "@/app/admin/monetization/seller-subscriptions-panel";
+import SubscriptionHistoryPanel from "@/app/admin/monetization/subscription-history-panel";
 import PromotedListingsPanel from "@/app/admin/monetization/promoted-listings-panel";
 import PromotionEventsPanel from "@/app/admin/monetization/promotion-events-panel";
 import PromotionHeatmap from "@/app/admin/monetization/promotion-heatmap";
+import SubscriptionSummaryPanel from "@/app/admin/monetization/subscription-summary-panel";
+import SubscriptionTiersPanel from "@/app/admin/monetization/subscription-tiers-panel";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 
@@ -18,7 +24,10 @@ function getClientApiBaseUrl() {
 
 export default async function AdminMonetizationPage() {
   const api = createApiClient(getServerApiBaseUrl());
-  const activeFee = await api.getPlatformFees({ cache: "no-store" });
+  const [activeFee, activeDeliveryFees] = await Promise.all([
+    api.getPlatformFees({ cache: "no-store" }),
+    api.getDeliveryFees({ cache: "no-store" }),
+  ]);
   return (
     <main className="grain min-h-screen px-5 py-6 sm:px-8 lg:px-12">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
@@ -42,10 +51,18 @@ export default async function AdminMonetizationPage() {
         <PromotionHeatmap />
         <PlatformFeeSummary />
         <PlatformFeeHistory />
+        <DeliveryFeeHistory />
+        <SubscriptionSummaryPanel />
+        <SubscriptionHistoryPanel />
+        <SubscriptionTiersPanel />
+        <SellerSubscriptionsPanel />
         <PromotedListingsPanel />
         <PromotionEventsPanel />
         <section className="rounded-[2rem] border border-border bg-white p-6">
           <PlatformFeeForm activeFee={activeFee} apiBaseUrl={getClientApiBaseUrl()} />
+        </section>
+        <section className="rounded-[2rem] border border-border bg-white p-6">
+          <DeliveryFeeForm activeFees={activeDeliveryFees} apiBaseUrl={getClientApiBaseUrl()} />
         </section>
       </div>
     </main>
