@@ -214,7 +214,14 @@ class SubscriptionServiceTests(unittest.TestCase):
                         "from_tier": {"code": "free", "name": "Free"},
                         "to_tier": {"code": "starter", "name": "Starter"},
                     }
-                ]
+                ],
+                [
+                    {
+                        "id": "admin-user-1",
+                        "full_name": "Monetization Admin",
+                        "username": "money-admin",
+                    }
+                ],
             ],
             insert_results=[],
         )
@@ -226,6 +233,7 @@ class SubscriptionServiceTests(unittest.TestCase):
         self.assertEqual(events[0].action, "upgrade")
         self.assertEqual(events[0].reason_code, "manual_upgrade")
         self.assertEqual(events[0].to_tier_name, "Starter")
+        self.assertEqual(events[0].actor_name, "Monetization Admin")
 
 
 class _FakeSupabase:

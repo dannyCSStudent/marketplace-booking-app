@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 class ProfileCreate(BaseModel):
     full_name: str | None = None
@@ -11,6 +13,8 @@ class ProfileCreate(BaseModel):
     push_notifications_enabled: bool = True
     marketing_notifications_enabled: bool = False
     expo_push_token: str | None = None
+    admin_monetization_preferences: dict[str, Any] = Field(default_factory=dict)
+    admin_delivery_ops_preferences: dict[str, Any] = Field(default_factory=dict)
 
 class ProfileUpdate(BaseModel):
     full_name: str | None = None
@@ -23,6 +27,8 @@ class ProfileUpdate(BaseModel):
     push_notifications_enabled: bool | None = None
     marketing_notifications_enabled: bool | None = None
     expo_push_token: str | None = None
+    admin_monetization_preferences: dict[str, Any] | None = None
+    admin_delivery_ops_preferences: dict[str, Any] | None = None
 
 class ProfileRead(BaseModel):
     id: str
@@ -36,3 +42,5 @@ class ProfileRead(BaseModel):
     push_notifications_enabled: bool = True
     marketing_notifications_enabled: bool = False
     expo_push_token: str | None = None
+    admin_monetization_preferences: dict[str, Any] = Field(default_factory=dict)
+    admin_delivery_ops_preferences: dict[str, Any] = Field(default_factory=dict)

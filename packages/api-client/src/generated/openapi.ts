@@ -356,6 +356,34 @@ export type NotificationDeliveryRead = {
     created_at: string;
   };
 
+export type NotificationDeliverySummaryRead = {
+    total_deliveries: number;
+    queued_deliveries: number;
+    failed_deliveries: number;
+    sent_deliveries: number;
+    email_deliveries: number;
+    push_deliveries: number;
+    order_deliveries: number;
+    booking_deliveries: number;
+    failed_last_24h: number;
+    queued_older_than_1h: number;
+    oldest_queued_created_at?: string | null;
+    latest_failure_created_at?: string | null;
+  };
+
+export type NotificationWorkerHealthRead = {
+    email_provider: string;
+    push_provider: string;
+    worker_poll_seconds: number;
+    batch_size: number;
+    max_attempts: number;
+    due_queued_deliveries: number;
+    processing_deliveries: number;
+    stuck_processing_deliveries: number;
+    recent_failure_deliveries: number;
+    oldest_due_queued_created_at?: string | null;
+  };
+
 export type OrderAdminEventRead = {
     id: string;
     actor_user_id: string;
@@ -502,6 +530,12 @@ export type ProfileCreate = {
     push_notifications_enabled?: boolean;
     marketing_notifications_enabled?: boolean;
     expo_push_token?: string | null;
+    admin_monetization_preferences?: {
+      [key: string]: unknown;
+    };
+    admin_delivery_ops_preferences?: {
+      [key: string]: unknown;
+    };
   };
 
 export type ProfileRead = {
@@ -516,6 +550,12 @@ export type ProfileRead = {
     push_notifications_enabled?: boolean;
     marketing_notifications_enabled?: boolean;
     expo_push_token?: string | null;
+    admin_monetization_preferences?: {
+      [key: string]: unknown;
+    };
+    admin_delivery_ops_preferences?: {
+      [key: string]: unknown;
+    };
   };
 
 export type ProfileUpdate = {
@@ -529,6 +569,12 @@ export type ProfileUpdate = {
     push_notifications_enabled?: boolean | null;
     marketing_notifications_enabled?: boolean | null;
     expo_push_token?: string | null;
+    admin_monetization_preferences?: {
+      [key: string]: unknown;
+    } | null;
+    admin_delivery_ops_preferences?: {
+      [key: string]: unknown;
+    } | null;
   };
 
 export type ReviewCreate = {
@@ -622,6 +668,16 @@ export type SellerCreate = {
     state?: string | null;
     country?: string | null;
     accepts_custom_orders?: boolean;
+  };
+
+export type SellerLookupRead = {
+    id: string;
+    display_name: string;
+    slug: string;
+    is_verified?: boolean;
+    city?: string | null;
+    state?: string | null;
+    country?: string | null;
   };
 
 export type SellerRead = {
@@ -765,6 +821,8 @@ export type ApiSchemaMap = {
   NotificationDeliveryBulkRetryRequest: NotificationDeliveryBulkRetryRequest;
   NotificationDeliveryBulkRetryResult: NotificationDeliveryBulkRetryResult;
   NotificationDeliveryRead: NotificationDeliveryRead;
+  NotificationDeliverySummaryRead: NotificationDeliverySummaryRead;
+  NotificationWorkerHealthRead: NotificationWorkerHealthRead;
   OrderAdminEventRead: OrderAdminEventRead;
   OrderAdminRead: OrderAdminRead;
   OrderAdminSupportUpdate: OrderAdminSupportUpdate;
@@ -795,6 +853,7 @@ export type ApiSchemaMap = {
   ReviewSellerResponseUpdate: ReviewSellerResponseUpdate;
   ReviewVisibilityUpdate: ReviewVisibilityUpdate;
   SellerCreate: SellerCreate;
+  SellerLookupRead: SellerLookupRead;
   SellerRead: SellerRead;
   SellerSubscriptionAssign: SellerSubscriptionAssign;
   SellerSubscriptionEventRead: SellerSubscriptionEventRead;
@@ -853,6 +912,11 @@ export type ApiOperations = {
     post: {
       requestBody: SellerSubscriptionAssign;
       response: SellerSubscriptionRead;
+    };
+  };
+  "/admin/sellers": {
+    get: {
+      response: SellerLookupRead[];
     };
   };
   "/admin/subscription-tiers": {
@@ -1002,6 +1066,16 @@ export type ApiOperations = {
     post: {
       requestBody: NotificationDeliveryBulkRetryRequest;
       response: NotificationDeliveryBulkRetryResult;
+    };
+  };
+  "/notifications/admin/summary": {
+    get: {
+      response: NotificationDeliverySummaryRead;
+    };
+  };
+  "/notifications/admin/worker-health": {
+    get: {
+      response: NotificationWorkerHealthRead;
     };
   };
   "/notifications/admin/{delivery_id}/retry": {

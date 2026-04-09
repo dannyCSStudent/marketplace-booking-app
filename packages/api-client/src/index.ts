@@ -33,6 +33,7 @@ export type DeliveryFeeSettingsCreate = ApiSchemaMap["DeliveryFeeSettingsCreate"
 export type DeliveryFeeHistoryPoint = ApiSchemaMap["DeliveryFeeHistoryPoint"];
 export type SubscriptionTierRead = ApiSchemaMap["SubscriptionTierRead"];
 export type SubscriptionTierCreate = ApiSchemaMap["SubscriptionTierCreate"];
+export type SellerLookupRead = ApiSchemaMap["SellerLookupRead"];
 export type SellerSubscriptionRead = ApiSchemaMap["SellerSubscriptionRead"];
 export type SellerSubscriptionAssign = ApiSchemaMap["SellerSubscriptionAssign"];
 export type SellerSubscriptionEventRead = ApiSchemaMap["SellerSubscriptionEventRead"];
@@ -162,6 +163,8 @@ export type NotificationDeliveryBulkRetryRequest =
   ApiSchemaMap["NotificationDeliveryBulkRetryRequest"];
 export type NotificationDeliveryBulkRetryResult =
   ApiSchemaMap["NotificationDeliveryBulkRetryResult"];
+export type NotificationDeliverySummary = ApiSchemaMap["NotificationDeliverySummaryRead"];
+export type NotificationWorkerHealth = ApiSchemaMap["NotificationWorkerHealthRead"];
 export type ApiSchemas = ApiSchemaMap;
 export type BuyerDashboardData = {
   listings: Listing[];
@@ -188,6 +191,8 @@ export type AdminTransactionsData = {
 export type AdminDeliveriesData = {
   admins: AdminUser[];
   deliveries: NotificationDelivery[];
+  summary: NotificationDeliverySummary | null;
+  workerHealth: NotificationWorkerHealth | null;
 };
 export type OrderAdminSupportUpdateInput = ApiSchemaMap["OrderAdminSupportUpdate"];
 export type BookingAdminSupportUpdateInput = ApiSchemaMap["BookingAdminSupportUpdate"];
@@ -242,9 +247,22 @@ export const apiRoutes = {
     `/admin/platform-fees/history${days ? `?days=${days}` : ""}`,
   deliveryFeeHistory: (days?: number) =>
     `/admin/delivery-fees/history${days ? `?days=${days}` : ""}`,
+  adminSellers: (query?: string, limit?: number) => {
+    const searchParams = new URLSearchParams();
+    if (query) {
+      searchParams.set("query", query);
+    }
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    const suffix = searchParams.toString();
+    return `/admin/sellers${suffix ? `?${suffix}` : ""}`;
+  },
   subscriptionTiers: "/admin/subscription-tiers",
   sellerSubscriptions: "/admin/seller-subscriptions",
   sellerSubscriptionEvents: "/admin/seller-subscription-events",
+  notificationDeliverySummary: "/notifications/admin/summary",
+  notificationWorkerHealth: "/notifications/admin/worker-health",
   deliveryFees: "/delivery-fees",
   listingPromotion: (listingId: string) => `/admin/listings/${listingId}/promotion`,
   orderById: (orderId: string) => `/orders/${orderId}`,
@@ -495,6 +513,10 @@ export function createApiClient(baseUrl: string) {
     return get<SubscriptionTierRead[]>(apiRoutes.subscriptionTiers, options);
   }
 
+  function listAdminSellers(query?: string, limit?: number, options?: RequestConfig) {
+    return get<SellerLookupRead[]>(apiRoutes.adminSellers(query, limit), options);
+  }
+
   function createSubscriptionTier(body: SubscriptionTierCreate, options: RequestConfig) {
     return post<SubscriptionTierRead>(apiRoutes.subscriptionTiers, body, options);
   }
@@ -667,14 +689,28 @@ export function createApiClient(baseUrl: string) {
   }
 
   async function loadAdminNotificationDeliveries(accessToken: string): Promise<AdminDeliveriesData> {
-    const [admins, deliveries] = await Promise.all([
+    const [admins, deliveries, summary, workerHealth] = await Promise.all([
       get<AdminUser[]>("/admin/users", { accessToken }),
       get<NotificationDelivery[]>("/notifications/admin", { accessToken }),
+      get<NotificationDeliverySummary>("/notifications/admin/summary", { accessToken }).catch((error) => {
+        if (error instanceof ApiError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }),
+      get<NotificationWorkerHealth>("/notifications/admin/worker-health", { accessToken }).catch((error) => {
+        if (error instanceof ApiError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }),
     ]);
 
     return {
       admins,
       deliveries,
+      summary,
+      workerHealth,
     };
   }
 
@@ -781,6 +817,7 @@ export function createApiClient(baseUrl: string) {
     listPromotionEvents,
     listPlatformFeeHistory,
     listDeliveryFeeHistory,
+    listAdminSellers,
     listSubscriptionTiers,
     createSubscriptionTier,
     listSellerSubscriptions,

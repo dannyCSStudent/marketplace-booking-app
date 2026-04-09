@@ -2357,6 +2357,104 @@
         }
       }
     },
+    "/notifications/admin/summary": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Notification Delivery Summary",
+        "operationId": "read_admin_notification_delivery_summary_notifications_admin_summary_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliverySummaryRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/worker-health": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Notification Worker Health",
+        "operationId": "read_admin_notification_worker_health_notifications_admin_worker_health_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationWorkerHealthRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications/admin/bulk-retry": {
       "post": {
         "tags": [
@@ -3102,6 +3200,88 @@
                     "$ref": "#/components/schemas/AdminUserRead"
                   },
                   "title": "Response Read Admin Users Admin Users Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/sellers": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Admin Sellers",
+        "operationId": "read_admin_sellers_admin_sellers_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 25,
+              "minimum": 1,
+              "default": 8,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerLookupRead"
+                  },
+                  "title": "Response Read Admin Sellers Admin Sellers Get"
                 }
               }
             }
@@ -6144,6 +6324,165 @@
         ],
         "title": "NotificationDeliveryRead"
       },
+      "NotificationDeliverySummaryRead": {
+        "properties": {
+          "total_deliveries": {
+            "type": "integer",
+            "title": "Total Deliveries"
+          },
+          "queued_deliveries": {
+            "type": "integer",
+            "title": "Queued Deliveries"
+          },
+          "failed_deliveries": {
+            "type": "integer",
+            "title": "Failed Deliveries"
+          },
+          "sent_deliveries": {
+            "type": "integer",
+            "title": "Sent Deliveries"
+          },
+          "email_deliveries": {
+            "type": "integer",
+            "title": "Email Deliveries"
+          },
+          "push_deliveries": {
+            "type": "integer",
+            "title": "Push Deliveries"
+          },
+          "order_deliveries": {
+            "type": "integer",
+            "title": "Order Deliveries"
+          },
+          "booking_deliveries": {
+            "type": "integer",
+            "title": "Booking Deliveries"
+          },
+          "failed_last_24h": {
+            "type": "integer",
+            "title": "Failed Last 24H"
+          },
+          "queued_older_than_1h": {
+            "type": "integer",
+            "title": "Queued Older Than 1H"
+          },
+          "oldest_queued_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Queued Created At"
+          },
+          "latest_failure_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Failure Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_deliveries",
+          "queued_deliveries",
+          "failed_deliveries",
+          "sent_deliveries",
+          "email_deliveries",
+          "push_deliveries",
+          "order_deliveries",
+          "booking_deliveries",
+          "failed_last_24h",
+          "queued_older_than_1h"
+        ],
+        "title": "NotificationDeliverySummaryRead"
+      },
+      "NotificationWorkerHealthRead": {
+        "properties": {
+          "email_provider": {
+            "type": "string",
+            "title": "Email Provider"
+          },
+          "push_provider": {
+            "type": "string",
+            "title": "Push Provider"
+          },
+          "worker_poll_seconds": {
+            "type": "integer",
+            "title": "Worker Poll Seconds"
+          },
+          "batch_size": {
+            "type": "integer",
+            "title": "Batch Size"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "title": "Max Attempts"
+          },
+          "due_queued_deliveries": {
+            "type": "integer",
+            "title": "Due Queued Deliveries"
+          },
+          "processing_deliveries": {
+            "type": "integer",
+            "title": "Processing Deliveries"
+          },
+          "stuck_processing_deliveries": {
+            "type": "integer",
+            "title": "Stuck Processing Deliveries"
+          },
+          "recent_failure_deliveries": {
+            "type": "integer",
+            "title": "Recent Failure Deliveries"
+          },
+          "oldest_due_queued_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Due Queued Created At"
+          },
+          "oldest_stuck_processing_last_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Stuck Processing Last Attempt At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email_provider",
+          "push_provider",
+          "worker_poll_seconds",
+          "batch_size",
+          "max_attempts",
+          "due_queued_deliveries",
+          "processing_deliveries",
+          "stuck_processing_deliveries",
+          "recent_failure_deliveries"
+        ],
+        "title": "NotificationWorkerHealthRead"
+      },
       "OrderAdminEventRead": {
         "properties": {
           "id": {
@@ -6992,6 +7331,16 @@
               }
             ],
             "title": "Expo Push Token"
+          },
+          "admin_monetization_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Monetization Preferences"
+          },
+          "admin_delivery_ops_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Delivery Ops Preferences"
           }
         },
         "type": "object",
@@ -7094,6 +7443,16 @@
               }
             ],
             "title": "Expo Push Token"
+          },
+          "admin_monetization_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Monetization Preferences"
+          },
+          "admin_delivery_ops_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Delivery Ops Preferences"
           }
         },
         "type": "object",
@@ -7213,6 +7572,30 @@
               }
             ],
             "title": "Expo Push Token"
+          },
+          "admin_monetization_preferences": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Monetization Preferences"
+          },
+          "admin_delivery_ops_preferences": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Delivery Ops Preferences"
           }
         },
         "type": "object",
@@ -7792,6 +8175,67 @@
           "slug"
         ],
         "title": "SellerCreate"
+      },
+      "SellerLookupRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "is_verified": {
+            "type": "boolean",
+            "title": "Is Verified",
+            "default": false
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "slug"
+        ],
+        "title": "SellerLookupRead"
       },
       "SellerRead": {
         "properties": {

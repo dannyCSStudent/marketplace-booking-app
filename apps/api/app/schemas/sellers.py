@@ -31,3 +31,13 @@ class SellerRead(BaseModel):
     accepts_custom_orders: bool = True
     average_rating: float = 0
     review_count: int = 0
+
+
+class SellerLookupRead(BaseModel):
+    id: str
+    display_name: str
+    slug: str
+    is_verified: bool = False
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None

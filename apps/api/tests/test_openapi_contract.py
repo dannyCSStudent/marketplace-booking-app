@@ -32,6 +32,8 @@ class OpenAPIContractTests(unittest.TestCase):
             "/bookings/bulk-status",
             "/notifications/me",
             "/notifications/admin",
+            "/notifications/admin/summary",
+            "/notifications/admin/worker-health",
             "/notifications/admin/bulk-retry",
             "/notifications/admin/{delivery_id}/retry",
             "/notifications/{delivery_id}/retry",
@@ -56,6 +58,8 @@ class OpenAPIContractTests(unittest.TestCase):
             "BookingRead",
             "BookingBulkStatusUpdateResult",
             "NotificationDeliveryRead",
+            "NotificationDeliverySummaryRead",
+            "NotificationWorkerHealthRead",
             "NotificationDeliveryBulkRetryResult",
             "AdminUserRead",
         ]:
@@ -70,6 +74,10 @@ class OpenAPIContractTests(unittest.TestCase):
 
         self.assertIn("expo_push_token", profile_read)
         self.assertIn("expo_push_token", profile_update)
+        self.assertIn("admin_monetization_preferences", profile_read)
+        self.assertIn("admin_monetization_preferences", profile_update)
+        self.assertIn("admin_delivery_ops_preferences", profile_read)
+        self.assertIn("admin_delivery_ops_preferences", profile_update)
 
     def test_marketplace_routes_have_expected_methods(self):
         schema = app.openapi()
@@ -84,6 +92,8 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("post", paths["/bookings/bulk-status"])
         self.assertIn("post", paths["/notifications/bulk-retry"])
         self.assertIn("get", paths["/notifications/admin"])
+        self.assertIn("get", paths["/notifications/admin/summary"])
+        self.assertIn("get", paths["/notifications/admin/worker-health"])
         self.assertIn("post", paths["/notifications/admin/bulk-retry"])
         self.assertIn("post", paths["/notifications/admin/{delivery_id}/retry"])
         self.assertIn("get", paths["/admin/users"])

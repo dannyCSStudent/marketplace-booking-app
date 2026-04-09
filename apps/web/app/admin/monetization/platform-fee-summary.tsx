@@ -10,7 +10,7 @@ const CLIENT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.
 export default function PlatformFeeSummary() {
   const [totalOrderFees, setTotalOrderFees] = useState(0);
   const [totalBookingFees, setTotalBookingFees] = useState(0);
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("loading");
+  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
 
@@ -68,7 +68,9 @@ export default function PlatformFeeSummary() {
           <p>Bookings collected: {formatCurrency(totalBookingFees, "USD")}</p>
         </div>
       </div>
-      {status === "loading" ? (
+      {!lastFetchedAt && !error ? (
+        <p className="mt-4 text-sm text-foreground/66">Awaiting latest totals…</p>
+      ) : status === "loading" ? (
         <p className="mt-4 text-sm text-foreground/66">Loading latest totals…</p>
       ) : status === "error" ? (
         <p className="mt-4 text-sm text-rose-600">{error}</p>

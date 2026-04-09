@@ -10,7 +10,7 @@ def get_my_profile(current_user: CurrentUser) -> ProfileRead:
     profile_select = (
         "id,full_name,username,phone,city,state,country,"
         "email_notifications_enabled,push_notifications_enabled,marketing_notifications_enabled,"
-        "expo_push_token"
+        "expo_push_token,admin_monetization_preferences,admin_delivery_ops_preferences"
     )
     try:
         row = supabase.select(
@@ -46,6 +46,8 @@ def create_profile(current_user: CurrentUser, payload: ProfileCreate) -> Profile
                 "push_notifications_enabled": payload.push_notifications_enabled,
                 "marketing_notifications_enabled": payload.marketing_notifications_enabled,
                 "expo_push_token": payload.expo_push_token,
+                "admin_monetization_preferences": payload.admin_monetization_preferences,
+                "admin_delivery_ops_preferences": payload.admin_delivery_ops_preferences,
             },
             access_token=current_user.access_token,
         )
@@ -69,7 +71,8 @@ def update_my_profile(current_user: CurrentUser, payload: ProfileUpdate) -> Prof
                 "select": (
                     "id,full_name,username,phone,city,state,country,"
                     "email_notifications_enabled,push_notifications_enabled,"
-                    "marketing_notifications_enabled,expo_push_token"
+                    "marketing_notifications_enabled,expo_push_token,"
+                    "admin_monetization_preferences,admin_delivery_ops_preferences"
                 ),
             },
             access_token=current_user.access_token,

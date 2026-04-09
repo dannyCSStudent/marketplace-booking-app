@@ -8,18 +8,32 @@ import {
   formatCurrency,
   type DeliveryFeeHistoryPoint,
 } from "@/app/lib/api";
+import {
+  MONETIZATION_EXPORT_EVENT,
+  type MonetizationExportDetail,
+} from "@/app/admin/monetization/monetization-export-events";
+import { highlightMonetizationSection } from "@/app/admin/monetization/monetization-navigation";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 
 const CLIENT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
-const HISTORY_DAYS = 14;
+const WINDOW_OPTIONS = [7, 14, 30] as const;
+
+function escapeCsvValue(value: string | number | null | undefined) {
+  const normalized = String(value ?? "");
+  if (normalized.includes(",") || normalized.includes('"') || normalized.includes("\n")) {
+    return `"${normalized.replaceAll('"', '""')}"`;
+  }
+  return normalized;
+}
 
 export default function DeliveryFeeHistory() {
   const [history, setHistory] = useState<DeliveryFeeHistoryPoint[]>([]);
+  const [windowDays, setWindowDays] = useState<(typeof WINDOW_OPTIONS)[number]>(14);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
-  const fetchHistory = async () => {
+  const fetchHistory = async (days: number) => {
     setStatus("loading");
     setError(null);
 
@@ -32,7 +46,7 @@ export default function DeliveryFeeHistory() {
       }
 
       const api = createApiClient(CLIENT_API_BASE_URL);
-      const data = await api.listDeliveryFeeHistory(HISTORY_DAYS, {
+      const data = await api.listDeliveryFeeHistory(days, {
         accessToken: session.access_token,
       });
       setHistory(data);
@@ -47,9 +61,9 @@ export default function DeliveryFeeHistory() {
   useEffect(() => {
     void (async () => {
       await Promise.resolve();
-      await fetchHistory();
+      await fetchHistory(windowDays);
     })();
-  }, []);
+  }, [windowDays]);
 
   const totalCollected = useMemo(
     () =>
@@ -60,7 +74,49 @@ export default function DeliveryFeeHistory() {
     [history],
   );
 
+  const exportCsv = () => {
+    if (history.length === 0) {
+      return;
+    }
+    const rows = history.map((point) => [
+      point.date,
+      (point.delivery_fee_cents / 100).toFixed(2),
+      (point.shipping_fee_cents / 100).toFixed(2),
+      ((point.delivery_fee_cents + point.shipping_fee_cents) / 100).toFixed(2),
+    ]);
+    const csv = [["date", "delivery_fees_usd", "shipping_fees_usd", "total_fees_usd"], ...rows]
+      .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `delivery-fee-history-${windowDays}d.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    const handleExportEvent = (event: Event) => {
+      const detail = (event as CustomEvent<MonetizationExportDetail>).detail;
+      if (detail?.target !== "delivery_fee_history") {
+        return;
+      }
+      highlightMonetizationSection("delivery-fee-history-panel");
+      exportCsv();
+    };
+
+    window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
+    return () => {
+      window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
+    };
+  }, [history, windowDays]);
+
   const renderBody = () => {
+    if (!lastUpdated && !error && history.length === 0) {
+      return <p className="text-sm text-foreground/66">Awaiting delivery fee history…</p>;
+    }
+
     if (status === "loading") {
       return <p className="text-sm text-foreground/66">Loading delivery fee history…</p>;
     }
@@ -118,32 +174,57 @@ export default function DeliveryFeeHistory() {
   };
 
   return (
-    <section className="rounded-[2rem] border border-border bg-white p-6">
+    <section id="delivery-fee-history-panel" className="rounded-[2rem] border border-border bg-white p-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.24em] text-foreground/52">
             Delivery fee history
           </p>
-          <h2 className="mt-1 text-xl font-semibold text-foreground">Last {HISTORY_DAYS} days</h2>
+          <h2 className="mt-1 text-xl font-semibold text-foreground">Last {windowDays} days</h2>
           <p className="text-xs text-foreground/56">
             {lastUpdated ? `Last updated ${lastUpdated}` : "Awaiting fee data…"}
           </p>
         </div>
-        <div className="text-right text-sm text-foreground/66">
-          <p className="text-xs uppercase tracking-[0.18em] text-foreground/50">Surcharges collected</p>
-          <p className="text-lg font-semibold text-foreground">{formatCurrency(totalCollected, "USD")}</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="rounded-full border border-border bg-background p-1">
+            {WINDOW_OPTIONS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] transition ${
+                  windowDays === option
+                    ? "bg-foreground text-background"
+                    : "text-foreground/66 hover:text-foreground"
+                }`}
+                onClick={() => setWindowDays(option)}
+              >
+                {option}d
+              </button>
+            ))}
+          </div>
           <button
             type="button"
-            disabled={status === "loading"}
-            className="mt-2 rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90 disabled:border-border/30 disabled:text-foreground/40"
-            onClick={() => {
-              if (status !== "loading") {
-                void fetchHistory();
-              }
-            }}
+            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
+            onClick={exportCsv}
           >
-            {status === "loading" ? "Refreshing…" : "Refresh"}
+            Export CSV
           </button>
+          <div className="text-right text-sm text-foreground/66">
+            <p className="text-xs uppercase tracking-[0.18em] text-foreground/50">Surcharges collected</p>
+            <p className="text-lg font-semibold text-foreground">{formatCurrency(totalCollected, "USD")}</p>
+            <button
+              type="button"
+              disabled={status === "loading"}
+              className="mt-2 rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90 disabled:border-border/30 disabled:text-foreground/40"
+              onClick={() => {
+                if (status !== "loading") {
+                  void fetchHistory(windowDays);
+                }
+              }}
+            >
+              {status === "loading" ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
         </div>
       </div>
       <div className="mt-4">{renderBody()}</div>

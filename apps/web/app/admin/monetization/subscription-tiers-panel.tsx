@@ -4,14 +4,10 @@ import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
 
 import {
   ApiError,
-  createApiClient,
   formatCurrency,
   type SubscriptionTierCreate,
-  type SubscriptionTierRead,
 } from "@/app/lib/api";
-import { restoreAdminSession } from "@/app/lib/admin-auth";
-
-const CLIENT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+import { useSubscriptionAnalytics } from "@/app/admin/monetization/subscription-analytics-context";
 
 type Status = "idle" | "loading" | "error";
 
@@ -27,41 +23,10 @@ const EMPTY_FORM: SubscriptionTierCreate = {
 };
 
 export default function SubscriptionTiersPanel() {
-  const [tiers, setTiers] = useState<SubscriptionTierRead[]>([]);
   const [form, setForm] = useState<SubscriptionTierCreate>(EMPTY_FORM);
-  const [status, setStatus] = useState<Status>("loading");
   const [message, setMessage] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const api = useMemo(() => createApiClient(CLIENT_API_BASE_URL), []);
-
-  const fetchTiers = async () => {
-    setStatus("loading");
-    setMessage(null);
-    try {
-      const session = await restoreAdminSession();
-      if (!session) {
-        setStatus("error");
-        setMessage("Sign in as an admin to manage subscription tiers.");
-        return;
-      }
-
-      const data = await api.listSubscriptionTiers({ accessToken: session.access_token });
-      setTiers(data);
-      setLastUpdated(new Date().toLocaleString());
-      setStatus("idle");
-    } catch (caught) {
-      setStatus("error");
-      setMessage(caught instanceof ApiError ? caught.message : "Unable to load subscription tiers.");
-    }
-  };
-
-  useEffect(() => {
-    void (async () => {
-      await Promise.resolve();
-      await fetchTiers();
-    })();
-  }, []);
+  const { tiers, status, error, lastUpdated, refresh, createTier } = useSubscriptionAnalytics();
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -79,24 +44,16 @@ export default function SubscriptionTiersPanel() {
       }
 
       try {
-        const session = await restoreAdminSession();
-        if (!session) {
-          setMessage("Sign in as an admin to create subscription tiers.");
-          return;
-        }
-
-        await api.createSubscriptionTier(
+        await createTier(
           {
             ...form,
             code: normalizedCode,
             name: form.name.trim(),
             perks_summary: form.perks_summary?.trim() || null,
           },
-          { accessToken: session.access_token },
         );
         setForm(EMPTY_FORM);
         setMessage("Subscription tier saved.");
-        await fetchTiers();
       } catch (caught) {
         setMessage(caught instanceof ApiError ? caught.message : "Unable to create subscription tier.");
       }
@@ -119,7 +76,7 @@ export default function SubscriptionTiersPanel() {
           className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90 disabled:border-border/30 disabled:text-foreground/40"
           onClick={() => {
             if (status !== "loading") {
-              void fetchTiers();
+              void refresh();
             }
           }}
         >
@@ -213,7 +170,7 @@ export default function SubscriptionTiersPanel() {
             Save tier
           </button>
           {message ? (
-            <p className={`text-sm ${status === "error" ? "text-rose-600" : "text-foreground/60"}`}>{message}</p>
+            <p className={`text-sm ${error ? "text-rose-600" : "text-foreground/60"}`}>{message}</p>
           ) : null}
         </form>
 

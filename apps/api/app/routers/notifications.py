@@ -6,9 +6,13 @@ from app.schemas.notifications import (
     NotificationDeliveryBulkRetryRequest,
     NotificationDeliveryBulkRetryResult,
     NotificationDeliveryRead,
+    NotificationDeliverySummaryRead,
+    NotificationWorkerHealthRead,
 )
 from app.services.notification_deliveries import (
     get_admin_notification_deliveries,
+    get_admin_notification_delivery_summary,
+    get_admin_notification_worker_health,
     get_my_notification_deliveries,
     retry_admin_notification_deliveries,
     retry_admin_notification_delivery,
@@ -31,6 +35,20 @@ def read_admin_notification_deliveries(
     current_user=Depends(require_admin_user),
 ) -> list[NotificationDeliveryRead]:
     return get_admin_notification_deliveries()
+
+
+@router.get("/admin/summary", response_model=NotificationDeliverySummaryRead)
+def read_admin_notification_delivery_summary(
+    current_user=Depends(require_admin_user),
+) -> NotificationDeliverySummaryRead:
+    return get_admin_notification_delivery_summary()
+
+
+@router.get("/admin/worker-health", response_model=NotificationWorkerHealthRead)
+def read_admin_notification_worker_health(
+    current_user=Depends(require_admin_user),
+) -> NotificationWorkerHealthRead:
+    return get_admin_notification_worker_health()
 
 
 @router.post("/admin/bulk-retry", response_model=NotificationDeliveryBulkRetryResult)

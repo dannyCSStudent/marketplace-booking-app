@@ -25,7 +25,6 @@ SUBSCRIPTION_SELECT = (
 SUBSCRIPTION_EVENT_SELECT = (
     "id,seller_id,seller_subscription_id,actor_user_id,action,reason_code,from_tier_id,to_tier_id,note,created_at,"
     "seller_profiles(display_name,slug),"
-    "profiles!seller_subscription_events_actor_user_id_fkey(full_name,username),"
     "from_tier:subscription_tiers!seller_subscription_events_from_tier_id_fkey(code,name),"
     "to_tier:subscription_tiers!seller_subscription_events_to_tier_id_fkey(code,name)"
 )
@@ -75,12 +74,13 @@ def _format_subscription(row: dict | None) -> dict | None:
     }
 
 
-def _format_subscription_event(row: dict | None) -> dict | None:
+def _format_subscription_event(row: dict | None, actor_profiles_by_id: dict[str, dict] | None = None) -> dict | None:
     if not row:
         return None
 
     seller_row = row.get("seller_profiles") or {}
-    actor_row = row.get("profiles") or {}
+    actor_profiles_by_id = actor_profiles_by_id or {}
+    actor_row = actor_profiles_by_id.get(str(row.get("actor_user_id") or ""), {})
     from_tier = row.get("from_tier") or {}
     to_tier = row.get("to_tier") or {}
     return {
@@ -102,6 +102,26 @@ def _format_subscription_event(row: dict | None) -> dict | None:
         "note": row.get("note"),
         "created_at": row.get("created_at"),
     }
+
+
+def _list_actor_profiles(actor_user_ids: list[str]) -> dict[str, dict]:
+    if not actor_user_ids:
+        return {}
+
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "profiles",
+            query={
+                "select": "id,full_name,username",
+                "id": f"in.({','.join(actor_user_ids)})",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        return {}
+
+    return {str(row.get("id")): row for row in rows if row.get("id")}
 
 
 def list_subscription_tiers() -> list[SubscriptionTierRead]:
@@ -160,7 +180,13 @@ def list_subscription_events(limit: int = 24) -> list[SellerSubscriptionEventRea
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    return [SellerSubscriptionEventRead(**formatted) for row in rows if (formatted := _format_subscription_event(row))]
+    actor_user_ids = sorted({str(row.get("actor_user_id")) for row in rows if row.get("actor_user_id")})
+    actor_profiles_by_id = _list_actor_profiles(actor_user_ids)
+    return [
+        SellerSubscriptionEventRead(**formatted)
+        for row in rows
+        if (formatted := _format_subscription_event(row, actor_profiles_by_id))
+    ]
 
 
 def _get_seller_by_slug(slug: str) -> dict:

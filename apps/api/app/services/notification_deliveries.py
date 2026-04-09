@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 
+from app.core.config import get_settings
 from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
@@ -10,6 +11,8 @@ from app.schemas.notifications import (
     NotificationDeliveryBulkRetryRequest,
     NotificationDeliveryBulkRetryResult,
     NotificationDeliveryRead,
+    NotificationDeliverySummaryRead,
+    NotificationWorkerHealthRead,
 )
 
 
@@ -56,6 +59,157 @@ def get_admin_notification_deliveries() -> list[NotificationDeliveryRead]:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return [NotificationDeliveryRead(**row) for row in rows]
+
+
+def get_admin_notification_delivery_summary() -> NotificationDeliverySummaryRead:
+    supabase = get_supabase_client()
+
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "channel,delivery_status,transaction_kind,created_at",
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    now = datetime.now(timezone.utc)
+    queued_timestamps: list[datetime] = []
+    failed_timestamps: list[datetime] = []
+
+    total_deliveries = len(rows)
+    queued_deliveries = 0
+    failed_deliveries = 0
+    sent_deliveries = 0
+    email_deliveries = 0
+    push_deliveries = 0
+    order_deliveries = 0
+    booking_deliveries = 0
+    failed_last_24h = 0
+    queued_older_than_1h = 0
+
+    for row in rows:
+        status = row.get("delivery_status")
+        channel = row.get("channel")
+        transaction_kind = row.get("transaction_kind")
+        created_at = row.get("created_at")
+        parsed_created_at: datetime | None = None
+
+        if isinstance(created_at, str):
+            try:
+                parsed_created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except ValueError:
+                parsed_created_at = None
+
+        if status == "queued":
+            queued_deliveries += 1
+            if parsed_created_at is not None:
+                queued_timestamps.append(parsed_created_at)
+                if now - parsed_created_at > timedelta(hours=1):
+                    queued_older_than_1h += 1
+        elif status == "failed":
+            failed_deliveries += 1
+            if parsed_created_at is not None:
+                failed_timestamps.append(parsed_created_at)
+                if now - parsed_created_at <= timedelta(hours=24):
+                    failed_last_24h += 1
+        elif status == "sent":
+            sent_deliveries += 1
+
+        if channel == "email":
+            email_deliveries += 1
+        elif channel == "push":
+            push_deliveries += 1
+
+        if transaction_kind == "order":
+            order_deliveries += 1
+        elif transaction_kind == "booking":
+            booking_deliveries += 1
+
+    return NotificationDeliverySummaryRead(
+        total_deliveries=total_deliveries,
+        queued_deliveries=queued_deliveries,
+        failed_deliveries=failed_deliveries,
+        sent_deliveries=sent_deliveries,
+        email_deliveries=email_deliveries,
+        push_deliveries=push_deliveries,
+        order_deliveries=order_deliveries,
+        booking_deliveries=booking_deliveries,
+        failed_last_24h=failed_last_24h,
+        queued_older_than_1h=queued_older_than_1h,
+        oldest_queued_created_at=min(queued_timestamps) if queued_timestamps else None,
+        latest_failure_created_at=max(failed_timestamps) if failed_timestamps else None,
+    )
+
+
+def get_admin_notification_worker_health() -> NotificationWorkerHealthRead:
+    supabase = get_supabase_client()
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "delivery_status,created_at,next_attempt_at,last_attempt_at",
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    due_queued_timestamps: list[datetime] = []
+    stuck_processing_timestamps: list[datetime] = []
+    processing_deliveries = 0
+    stuck_processing_deliveries = 0
+    recent_failure_deliveries = 0
+
+    for row in rows:
+        status = row.get("delivery_status")
+        created_at = _parse_timestamp(row.get("created_at"))
+        next_attempt_at = _parse_timestamp(row.get("next_attempt_at"))
+        last_attempt_at = _parse_timestamp(row.get("last_attempt_at"))
+
+        if status == "queued" and (next_attempt_at is None or next_attempt_at <= now):
+            if created_at is not None:
+                due_queued_timestamps.append(created_at)
+        if status == "processing":
+            processing_deliveries += 1
+            if last_attempt_at is None or now - last_attempt_at > timedelta(minutes=10):
+                stuck_processing_deliveries += 1
+                if last_attempt_at is not None:
+                    stuck_processing_timestamps.append(last_attempt_at)
+        if status == "failed" and created_at is not None and now - created_at <= timedelta(hours=24):
+            recent_failure_deliveries += 1
+
+    return NotificationWorkerHealthRead(
+        email_provider=settings.notification_email_provider,
+        push_provider=settings.notification_push_provider,
+        worker_poll_seconds=settings.notification_worker_poll_seconds,
+        batch_size=settings.notification_worker_batch_size,
+        max_attempts=settings.notification_max_attempts,
+        due_queued_deliveries=len(due_queued_timestamps),
+        processing_deliveries=processing_deliveries,
+        stuck_processing_deliveries=stuck_processing_deliveries,
+        recent_failure_deliveries=recent_failure_deliveries,
+        oldest_due_queued_created_at=min(due_queued_timestamps) if due_queued_timestamps else None,
+        oldest_stuck_processing_last_attempt_at=min(stuck_processing_timestamps)
+        if stuck_processing_timestamps
+        else None,
+    )
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def retry_admin_notification_delivery(delivery_id: str) -> NotificationDeliveryRead:

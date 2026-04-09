@@ -10,6 +10,7 @@ from app.schemas.listings import (
     ListingRead,
 )
 from app.schemas.platform_fees import DeliveryFeeHistoryPoint, PlatformFeeHistoryPoint
+from app.schemas.sellers import SellerLookupRead
 from app.schemas.subscriptions import (
     SellerSubscriptionAssign,
     SellerSubscriptionEventRead,
@@ -27,6 +28,7 @@ from app.services.listings import (
 )
 from app.services.delivery_fees import list_delivery_fee_history
 from app.services.platform_fees import list_platform_fee_history
+from app.services.sellers import search_sellers
 from app.services.subscriptions import (
     assign_seller_subscription,
     create_subscription_tier,
@@ -41,6 +43,15 @@ router = APIRouter()
 @router.get("/users", response_model=list[AdminUserRead])
 def read_admin_users(current_user=Depends(require_admin_user)) -> list[AdminUserRead]:
     return list_admin_users()
+
+
+@router.get("/sellers", response_model=list[SellerLookupRead])
+def read_admin_sellers(
+    query: str | None = Query(None, min_length=1),
+    limit: int = Query(8, ge=1, le=25),
+    current_user=Depends(require_admin_user),
+) -> list[SellerLookupRead]:
+    return search_sellers(query_text=query, limit=limit)
 
 
 @router.get(

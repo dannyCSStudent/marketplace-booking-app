@@ -4,7 +4,7 @@ from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
 from app.schemas.reviews import ReviewRead
-from app.schemas.sellers import SellerCreate, SellerRead, SellerUpdate
+from app.schemas.sellers import SellerCreate, SellerLookupRead, SellerRead, SellerUpdate
 
 SELLER_SELECT = (
     "id,user_id,display_name,slug,bio,is_verified,accepts_custom_orders,"
@@ -116,3 +116,27 @@ def get_seller_reviews_by_slug(slug: str, limit: int = 5) -> list[ReviewRead]:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return [ReviewRead(**row) for row in rows]
+
+
+def search_sellers(query_text: str | None = None, limit: int = 8) -> list[SellerLookupRead]:
+    supabase = get_supabase_client()
+    query = {
+        "select": "id,display_name,slug,is_verified,city,state,country",
+        "order": "display_name.asc",
+        "limit": str(limit),
+    }
+    if query_text:
+        escaped_query = query_text.strip().replace(",", r"\,")
+        if escaped_query:
+            query["or"] = f"display_name.ilike.*{escaped_query}*,slug.ilike.*{escaped_query}*"
+
+    try:
+        rows = supabase.select(
+            "seller_profiles",
+            query=query,
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [SellerLookupRead(**row) for row in rows]

@@ -3143,71 +3143,6 @@ export function SellerWorkspace() {
     sameSellerFollowOnConversionsCount,
     workspace,
   ]);
-  const sellerAnalyticsListingInsights = useMemo(() => {
-    if (!workspace) {
-      return [];
-    }
-
-    const transactions = [...workspace.orders, ...workspace.bookings];
-
-    return workspace.listings
-      .map((listing) => {
-        const listingTransactions = transactions.filter(
-          (transaction) => getTransactionListingId(transaction) === listing.id,
-        );
-        const revenueCents = listingTransactions.reduce(
-          (sum, transaction) => sum + (transaction.total_cents ?? 0),
-          0,
-        );
-        const retention = listingFollowOnBreakdownById[listing.id];
-        const totalFollowOn =
-          (retention?.sameSellerCount ?? 0) + (retention?.crossSellerCount ?? 0);
-        const repeatShare =
-          totalFollowOn > 0 ? (retention?.sameSellerCount ?? 0) / totalFollowOn : 0;
-        const recoveryDelta = listingRecoveryDeltaById[listing.id] ?? 0;
-        const deliveryPressure = listingDeliveryPressureById[listing.id] ?? {
-          failed: 0,
-          queued: 0,
-        };
-        const attentionScore =
-          deliveryPressure.failed * 3 +
-          deliveryPressure.queued * 2 +
-          (retention &&
-          getListingRetentionTrendKey({
-            sameSellerCount: retention.sameSellerCount,
-            crossSellerCount: retention.crossSellerCount,
-            sameSellerRecentCount: retention.sameSellerRecentCount,
-            crossSellerRecentCount: retention.crossSellerRecentCount,
-            sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
-            crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
-          }) === "softening"
-            ? 3
-            : 0);
-
-        return {
-          listing,
-          revenueCents,
-          repeatShare,
-          recoveryDelta,
-          attentionScore,
-        };
-      })
-      .filter((entry) => entry.revenueCents > 0 || entry.attentionScore > 0 || entry.repeatShare > 0)
-      .sort((left, right) => {
-        if (left.revenueCents !== right.revenueCents) {
-          return right.revenueCents - left.revenueCents;
-        }
-        if (left.repeatShare !== right.repeatShare) {
-          return right.repeatShare - left.repeatShare;
-        }
-        return left.listing.title.localeCompare(right.listing.title);
-      });
-  }, [
-    listingDeliveryPressureById,
-    listingFollowOnBreakdownById,
-    listingRecoveryDeltaById,
-    workspace,
-  ]);
   const listingFollowOnBreakdown = useMemo(() => {
     if (!workspace) {
       return [];
@@ -3299,6 +3234,71 @@ export function SellerWorkspace() {
       ),
     [listingFollowOnBreakdown],
   );
+  const sellerAnalyticsListingInsights = useMemo(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    const transactions = [...workspace.orders, ...workspace.bookings];
+
+    return workspace.listings
+      .map((listing) => {
+        const listingTransactions = transactions.filter(
+          (transaction) => getTransactionListingId(transaction) === listing.id,
+        );
+        const revenueCents = listingTransactions.reduce(
+          (sum, transaction) => sum + (transaction.total_cents ?? 0),
+          0,
+        );
+        const retention = listingFollowOnBreakdownById[listing.id];
+        const totalFollowOn =
+          (retention?.sameSellerCount ?? 0) + (retention?.crossSellerCount ?? 0);
+        const repeatShare =
+          totalFollowOn > 0 ? (retention?.sameSellerCount ?? 0) / totalFollowOn : 0;
+        const recoveryDelta = listingRecoveryDeltaById[listing.id] ?? 0;
+        const deliveryPressure = listingDeliveryPressureById[listing.id] ?? {
+          failed: 0,
+          queued: 0,
+        };
+        const attentionScore =
+          deliveryPressure.failed * 3 +
+          deliveryPressure.queued * 2 +
+          (retention &&
+          getListingRetentionTrendKey({
+            sameSellerCount: retention.sameSellerCount,
+            crossSellerCount: retention.crossSellerCount,
+            sameSellerRecentCount: retention.sameSellerRecentCount,
+            crossSellerRecentCount: retention.crossSellerRecentCount,
+            sameSellerPostAdjustmentCount: retention.sameSellerPostAdjustmentCount,
+            crossSellerPostAdjustmentCount: retention.crossSellerPostAdjustmentCount,
+          }) === "softening"
+            ? 3
+            : 0);
+
+        return {
+          listing,
+          revenueCents,
+          repeatShare,
+          recoveryDelta,
+          attentionScore,
+        };
+      })
+      .filter((entry) => entry.revenueCents > 0 || entry.attentionScore > 0 || entry.repeatShare > 0)
+      .sort((left, right) => {
+        if (left.revenueCents !== right.revenueCents) {
+          return right.revenueCents - left.revenueCents;
+        }
+        if (left.repeatShare !== right.repeatShare) {
+          return right.repeatShare - left.repeatShare;
+        }
+        return left.listing.title.localeCompare(right.listing.title);
+      });
+  }, [
+    listingDeliveryPressureById,
+    listingFollowOnBreakdownById,
+    listingRecoveryDeltaById,
+    workspace,
+  ]);
   const supportWatchListingIds = useMemo(() => {
     if (!workspace) {
       return [];

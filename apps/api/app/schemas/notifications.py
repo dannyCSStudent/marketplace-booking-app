@@ -19,6 +19,35 @@ class NotificationDeliveryRead(BaseModel):
     created_at: datetime
 
 
+class NotificationDeliverySummaryRead(BaseModel):
+    total_deliveries: int
+    queued_deliveries: int
+    failed_deliveries: int
+    sent_deliveries: int
+    email_deliveries: int
+    push_deliveries: int
+    order_deliveries: int
+    booking_deliveries: int
+    failed_last_24h: int
+    queued_older_than_1h: int
+    oldest_queued_created_at: datetime | None = None
+    latest_failure_created_at: datetime | None = None
+
+
+class NotificationWorkerHealthRead(BaseModel):
+    email_provider: str
+    push_provider: str
+    worker_poll_seconds: int
+    batch_size: int
+    max_attempts: int
+    due_queued_deliveries: int
+    processing_deliveries: int
+    stuck_processing_deliveries: int
+    recent_failure_deliveries: int
+    oldest_due_queued_created_at: datetime | None = None
+    oldest_stuck_processing_last_attempt_at: datetime | None = None
+
+
 class NotificationDeliveryBulkRetryRequest(BaseModel):
     delivery_ids: list[str]
     execution_mode: str = "best_effort"
