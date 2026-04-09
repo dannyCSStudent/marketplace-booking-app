@@ -78,6 +78,8 @@ type DeliveryOpsActivityEntry = {
   watchlistTarget?: "delivery-watchlist" | null;
   watchlistSeverityFilter?: DeliveryWatchlistSeverityFilter | null;
   watchlistNewOnly?: boolean;
+  activityFilterSnapshot?: DeliveryActivityFilter | null;
+  activityEntryLimitSnapshot?: 6 | 10;
 };
 type DeliveryActivityFilter = "all" | "views" | "operations" | "watchlist";
 type ListingAdjustmentType = "pricing" | "local-fit" | "booking" | "fulfillment" | "other";
@@ -230,11 +232,42 @@ function normalizeDeliveryOpsPreferences(value: unknown): DeliveryOpsPreferences
                 (entry as DeliveryOpsActivityEntry).transactionKind === "booking") &&
               (typeof (entry as DeliveryOpsActivityEntry).transactionId === "undefined" ||
                 (entry as DeliveryOpsActivityEntry).transactionId === null ||
-                typeof (entry as DeliveryOpsActivityEntry).transactionId === "string"),
+                typeof (entry as DeliveryOpsActivityEntry).transactionId === "string") &&
+              (typeof (entry as DeliveryOpsActivityEntry).activityFilterSnapshot === "undefined" ||
+                (entry as DeliveryOpsActivityEntry).activityFilterSnapshot === null ||
+                (entry as DeliveryOpsActivityEntry).activityFilterSnapshot === "all" ||
+                (entry as DeliveryOpsActivityEntry).activityFilterSnapshot === "views" ||
+                (entry as DeliveryOpsActivityEntry).activityFilterSnapshot === "operations" ||
+                (entry as DeliveryOpsActivityEntry).activityFilterSnapshot === "watchlist") &&
+              (typeof (entry as DeliveryOpsActivityEntry).activityEntryLimitSnapshot === "undefined" ||
+                (entry as DeliveryOpsActivityEntry).activityEntryLimitSnapshot === 6 ||
+                (entry as DeliveryOpsActivityEntry).activityEntryLimitSnapshot === 10),
           )
           .slice(0, 8)
       : [],
   };
+}
+
+function escapeCsvValue(value: string | number | boolean | null | undefined) {
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+
+  const normalized = String(value).replaceAll('"', '""');
+  return `"${normalized}"`;
+}
+
+function downloadCsv(filename: string, rows: Array<Array<string | number | boolean | null | undefined>>) {
+  const csv = rows.map((row) => row.map((value) => escapeCsvValue(value)).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -1316,6 +1349,11 @@ export function DeliveryOpsPanel() {
     });
     setSearchQuery(transactionId);
   }
+  function reopenActivityLane(entry: Pick<DeliveryOpsActivityEntry, "activityFilterSnapshot" | "activityEntryLimitSnapshot">) {
+    setActivityFilter(entry.activityFilterSnapshot ?? "all");
+    setActivityEntryLimit(entry.activityEntryLimitSnapshot ?? 6);
+    scrollToDeliverySection("delivery-activity-log");
+  }
 
   function togglePinnedPreset(presetId: DeliverySavedPresetId) {
     setPinnedPresetIds((current) =>
@@ -2234,6 +2272,81 @@ export function DeliveryOpsPanel() {
     }
     return parts.length > 0 ? parts.join(" · ") : "all active alerts";
   }, [watchlistNewOnly, watchlistSeverityFilter]);
+  function exportActivityLogCsv() {
+    if (filteredActivityLog.length === 0) {
+      return;
+    }
+
+    const rows: Array<Array<string | number | boolean | null | undefined>> = [
+      [
+        "label",
+        "lane",
+        "subtype",
+        "summary",
+        "tone",
+        "created_at",
+        "preset_id",
+        "transaction_kind",
+        "transaction_id",
+        "watchlist_slice",
+      ],
+      ...filteredActivityLog.map((entry) => [
+        entry.label,
+        entry.watchlistTarget ? "watchlist" : isSavedViewActivity(entry) ? "view" : "operation",
+        entry.watchlistTarget
+          ? formatWatchlistBadgeLabel(entry)
+          : isSavedViewActivity(entry)
+            ? getSavedViewActivityLabel(entry)
+            : getOperationActivityLabel(entry),
+        entry.summary,
+        entry.tone,
+        entry.createdAt,
+        entry.presetId ?? "",
+        entry.transactionKind ?? "",
+        entry.transactionId ?? "",
+        entry.watchlistTarget ? formatWatchlistActivityLabel(entry) : "",
+      ]),
+    ];
+
+    downloadCsv(`delivery-activity-${activityFilter}-${activityEntryLimit}.csv`, rows);
+    recordActivity({
+      label: "Export delivery activity CSV",
+      summary: `Exported ${filteredActivityLog.length} delivery activity entr${filteredActivityLog.length === 1 ? "y" : "ies"} from the ${activityFilter} lane view.`,
+      tone: "neutral",
+      activityFilterSnapshot: activityFilter,
+      activityEntryLimitSnapshot: activityEntryLimit,
+    });
+  }
+  function exportWatchlistCsv() {
+    if (filteredWatchlistAlerts.length === 0) {
+      return;
+    }
+
+    const rows: Array<Array<string | number | boolean | null | undefined>> = [
+      ["title", "severity", "status", "detail", "action_label", "current_filter"],
+      ...filteredWatchlistAlerts.map((alert) => [
+        alert.title,
+        alert.severity,
+        alert.isNewSinceVisit ? "new_since_review" : "ongoing",
+        alert.detail,
+        alert.actionLabel,
+        watchlistFilterSummary,
+      ]),
+    ];
+
+    downloadCsv(
+      `delivery-watchlist-${watchlistSeverityFilter}-${watchlistNewOnly ? "new" : "all"}.csv`,
+      rows,
+    );
+    recordActivity({
+      label: "Export delivery watchlist CSV",
+      summary: `Exported ${filteredWatchlistAlerts.length} watchlist alert${filteredWatchlistAlerts.length === 1 ? "" : "s"} from the ${watchlistFilterSummary} slice.`,
+      tone: "neutral",
+      watchlistTarget: "delivery-watchlist",
+      watchlistSeverityFilter,
+      watchlistNewOnly,
+    });
+  }
   const hasActiveWatchlistFilters = watchlistSeverityFilter !== "all" || watchlistNewOnly;
   const watchlistCounts = useMemo(
     () => ({
@@ -2700,6 +2813,21 @@ export function DeliveryOpsPanel() {
       </div>
     );
   }
+  function renderDashedStatePanel({
+    key,
+    message,
+    className = "bg-background/60 px-4 py-4 text-sm text-foreground/62",
+  }: {
+    key: string;
+    message: React.ReactNode;
+    className?: string;
+  }) {
+    return (
+      <div key={key} className={`rounded-[1.5rem] border border-dashed border-border ${className}`}>
+        {message}
+      </div>
+    );
+  }
   function renderFeedbackBanner({
     key,
     tone,
@@ -2844,6 +2972,43 @@ export function DeliveryOpsPanel() {
       </div>
     );
   }
+  function renderSurfaceCardSection({
+    key,
+    id,
+    className = "",
+    children,
+  }: {
+    key?: string;
+    id?: string;
+    className?: string;
+    children: React.ReactNode;
+  }) {
+    return (
+      <section
+        key={key}
+        id={id}
+        className={`card-shadow rounded-[2rem] border border-border bg-surface p-5${className ? ` ${className}` : ""}`}
+      >
+        {children}
+      </section>
+    );
+  }
+  function renderSurfaceStateCard(
+    message: React.ReactNode,
+    tone: "neutral" | "danger" = "neutral",
+  ) {
+    return (
+      <section
+        className={`card-shadow rounded-[2rem] border p-6 text-sm ${
+          tone === "danger"
+            ? "border-danger/30 bg-danger/8 text-danger"
+            : "border-border bg-surface text-foreground/66"
+        }`}
+      >
+        {message}
+      </section>
+    );
+  }
   function renderSavedPresetCard({
     presetDefinition,
     statusBadges,
@@ -2914,6 +3079,68 @@ export function DeliveryOpsPanel() {
             ) : null}
           </div>
         </div>
+      </div>
+    );
+  }
+  function renderDeliveryQueueHeader(visibleCount: number) {
+    return (
+      <div className="flex items-center justify-between gap-3 border-b border-border pb-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.24em] text-foreground/48">Delivery Queue</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-foreground">
+            {visibleCount} visible deliver{visibleCount === 1 ? "y" : "ies"}
+          </h2>
+        </div>
+        <p className="max-w-md text-right text-sm text-foreground/64">
+          This queue is for communication failures, retries, and channel-specific delivery triage.
+        </p>
+      </div>
+    );
+  }
+  function renderQueuePresetStrip(
+    activePreset: DeliveryPreset,
+    onSelect: (preset: DeliveryPreset) => void,
+  ) {
+    return (
+      <div className="mb-4 flex flex-wrap gap-2 border-b border-border pb-4">
+        {[
+          { label: "Needs Attention", value: "needs_attention" as DeliveryPreset },
+          { label: "Failed Only", value: "failed_only" as DeliveryPreset },
+          { label: "Queued Only", value: "queued_only" as DeliveryPreset },
+          { label: "Push Failures", value: "push_failures" as DeliveryPreset },
+          { label: "Trust-Driven", value: "trust_driven" as DeliveryPreset },
+        ].map((option) =>
+          renderSegmentedFilterButton(
+            option.value,
+            option.label,
+            activePreset === option.value,
+            () => onSelect(option.value),
+          ),
+        )}
+      </div>
+    );
+  }
+  function renderQueueSearchField(value: string, onChange: (nextValue: string) => void) {
+    return (
+      <label className="flex min-w-[240px] flex-1 flex-col gap-2 text-sm text-foreground/72">
+        Search
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Search by transaction, recipient, payload, or failure"
+          className="rounded-2xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-foreground/30"
+        />
+      </label>
+    );
+  }
+  function renderMetricGrid(
+    key: string,
+    className: string,
+    children: React.ReactNode,
+  ) {
+    return (
+      <div key={key} className={className}>
+        {children}
       </div>
     );
   }
@@ -3053,6 +3280,224 @@ export function DeliveryOpsPanel() {
       <article key={key} className={`rounded-[1.5rem] border p-4 ${className}`}>
         {children}
       </article>
+    );
+  }
+  function renderDeliveryRowHeader({
+    delivery,
+    trustSummary,
+  }: {
+    delivery: NotificationDelivery;
+    trustSummary: ReturnType<typeof getSellerTrustSummary>;
+  }) {
+    return (
+      <>
+        <div className="flex flex-wrap items-center gap-2">
+          {renderDeliveryRowPill(
+            `delivery-channel-${delivery.id}`,
+            delivery.channel,
+            "surface",
+            "tracking-[0.22em]",
+          )}
+          {renderDeliveryRowPill(`delivery-kind-${delivery.id}`, delivery.transaction_kind)}
+          {renderDeliveryRowPill(
+            `delivery-status-${delivery.id}`,
+            delivery.delivery_status.replaceAll("_", " "),
+            delivery.delivery_status === "failed"
+              ? "status_failed"
+              : delivery.delivery_status === "queued"
+                ? "status_queued"
+                : "status_sent",
+          )}
+          <span className="text-xs text-foreground/48">#{truncateId(delivery.id)}</span>
+        </div>
+
+        <div className="grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-5">
+          {renderLabeledValueBlock({
+            key: `delivery-transaction-${delivery.id}`,
+            label: "Transaction",
+            value: truncateId(delivery.transaction_id),
+            valueClassName: "mt-1 font-mono text-xs text-foreground",
+          })}
+          {renderLabeledValueBlock({
+            key: `delivery-recipient-${delivery.id}`,
+            label: "Recipient",
+            value: truncateId(delivery.recipient_user_id),
+            valueClassName: "mt-1 font-mono text-xs text-foreground",
+          })}
+          {renderLabeledValueBlock({
+            key: `delivery-attempts-${delivery.id}`,
+            label: "Attempts",
+            value: delivery.attempts,
+          })}
+          {renderLabeledValueBlock({
+            key: `delivery-created-${delivery.id}`,
+            label: "Created",
+            value: formatDateTime(delivery.created_at),
+          })}
+          {renderLabeledValueBlock({
+            key: `delivery-age-${delivery.id}`,
+            label: "Age",
+            value: formatAgeLabel(delivery.created_at),
+          })}
+        </div>
+
+        {trustSummary.total > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {renderDeliveryRowPill(`trust-flags-${delivery.id}`, "Seller Trust Flags", "danger")}
+            {renderDeliveryRowPill(`trust-open-${delivery.id}`, `${trustSummary.open} open`)}
+            {renderDeliveryRowPill(`trust-escalated-${delivery.id}`, `${trustSummary.escalated} escalated`)}
+            {renderDeliveryRowPill(`trust-hidden-${delivery.id}`, `${trustSummary.hidden} hidden`)}
+          </div>
+        ) : null}
+      </>
+    );
+  }
+  function renderListingOpsContextPanel({
+    deliveryId,
+    listingOpsContext,
+    browseContext,
+  }: {
+    deliveryId: string;
+    listingOpsContext: ListingOpsContext | null;
+    browseContext: string | null | undefined;
+  }) {
+    if (!listingOpsContext) {
+      return null;
+    }
+
+    const tractionPill = getListingTractionPill(listingOpsContext.listing);
+    const comparisonScopeBadge = getListingComparisonScopeBadge(
+      listingOpsContext.listing.last_pricing_comparison_scope,
+    );
+    const browseSignals = [
+      isPriceDrivenBrowseContext(browseContext) ? "Price-led" : null,
+      isSearchDrivenBrowseContext(browseContext) ? "Search-led" : null,
+      isLocalDrivenBrowseContext(browseContext) ? "Local-fit" : null,
+    ].filter(Boolean);
+
+    return renderInsetPanel({
+      key: `listing-ops-context-${deliveryId}`,
+      padding: "md",
+      children: (
+        <>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-foreground/46">
+                Listing Ops Context
+              </p>
+              <p className="mt-1 text-sm font-medium text-foreground">
+                {listingOpsContext.listing.title}
+              </p>
+              <p className="mt-1 text-sm text-foreground/64">
+                {titleCaseFilterLabel(listingOpsContext.adjustmentType)} ·{" "}
+                <span className={getListingTrendToneClass(listingOpsContext.retentionTrendKey)}>
+                  {listingOpsContext.retentionTrendLabel}
+                </span>
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {listingOpsContext.listing.available_today
+                  ? renderMiniTonePill(
+                      `listing-available-today-${deliveryId}`,
+                      "Available today",
+                      "border-emerald-200 bg-emerald-50 text-emerald-700",
+                    )
+                  : null}
+                {tractionPill
+                  ? renderMiniTonePill(
+                      `listing-traction-${deliveryId}`,
+                      tractionPill.label,
+                      tractionPill.className,
+                    )
+                  : null}
+                {comparisonScopeBadge
+                  ? renderMiniTonePill(
+                      `listing-comparison-scope-${deliveryId}`,
+                      comparisonScopeBadge.label,
+                      comparisonScopeBadge.className,
+                    )
+                  : null}
+              </div>
+            </div>
+            <div className="text-right text-xs text-foreground/50">
+              <p>
+                {listingOpsContext.adjustmentAt
+                  ? `Adjusted ${formatAgeLabel(listingOpsContext.adjustmentAt)} ago`
+                  : "No adjustment timestamp"}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-4">
+            {renderLabeledValueBlock({
+              key: `listing-last-change-${deliveryId}`,
+              label: "Last Change",
+              value:
+                listingOpsContext.adjustmentSummary?.trim() || "No operating adjustment recorded",
+            })}
+            {renderLabeledValueBlock({
+              key: `listing-since-change-${deliveryId}`,
+              label: "Since Change",
+              value: `${listingOpsContext.sameSellerPostAdjustmentCount} retained · ${listingOpsContext.crossSellerPostAdjustmentCount} branched`,
+            })}
+            {renderLabeledValueBlock({
+              key: `listing-follow-on-${deliveryId}`,
+              label: "Follow-On Mix",
+              value: `${listingOpsContext.sameSellerCount} same-seller · ${listingOpsContext.crossSellerCount} cross-seller`,
+            })}
+            {renderLabeledValueBlock({
+              key: `listing-browse-pressure-${deliveryId}`,
+              label: "Browse Pressure",
+              value: browseSignals.length > 0 ? browseSignals.join(" · ") : "No browse signal",
+            })}
+          </div>
+        </>
+      ),
+    });
+  }
+  function renderDeliveryRowDetailStack({
+    delivery,
+    transactionKey,
+  }: {
+    delivery: NotificationDelivery;
+    transactionKey: string;
+  }) {
+    return (
+      <>
+        {delivery.failure_reason
+          ? renderDangerMessagePanel(`delivery-failure-reason-${delivery.id}`, delivery.failure_reason)
+          : null}
+
+        {renderInsetPanel({
+          key: `payload-${delivery.id}`,
+          title: "Payload",
+          padding: "sm",
+          bodyClassName: "text-xs text-foreground/62",
+          children: (
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono leading-6">
+              {JSON.stringify(delivery.payload, null, 2)}
+            </pre>
+          ),
+        })}
+
+        {renderInsetPanel({
+          key: `support-note-${delivery.id}`,
+          title: "Support Note",
+          subtitle: "Travels with assign and escalate actions",
+          padding: "sm",
+          children: (
+            <textarea
+              value={noteDrafts[transactionKey] ?? ""}
+              onChange={(event) =>
+                setNoteDrafts((current) => ({
+                  ...current,
+                  [transactionKey]: event.target.value,
+                }))
+              }
+              placeholder="Add support context before assigning or escalating this transaction"
+              className="mt-3 min-h-[96px] w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-foreground outline-none transition focus:border-foreground/30"
+            />
+          ),
+        })}
+      </>
     );
   }
   function renderMiniTonePill(
@@ -3448,6 +3893,173 @@ export function DeliveryOpsPanel() {
     });
   }
 
+  function renderDeliveryRowActions({
+    delivery,
+    transactionHref,
+    listingLaneHref,
+    transactionKey,
+    trustSummary,
+    assignActionKey,
+    trustEscalationActionKey,
+    escalateActionKey,
+    saveNoteActionKey,
+  }: {
+    delivery: NotificationDelivery;
+    transactionHref: string;
+    listingLaneHref: string | null;
+    transactionKey: string;
+    trustSummary: ReturnType<typeof getSellerTrustSummary>;
+    assignActionKey: string;
+    trustEscalationActionKey: string;
+    escalateActionKey: string;
+    saveNoteActionKey: string;
+  }) {
+    return (
+      <div className="flex flex-col gap-2 lg:min-w-[220px]">
+        {renderQueueLinkAction(`open-transaction-${delivery.id}`, transactionHref, "Open Transaction")}
+        {listingLaneHref
+          ? renderQueueLinkAction(`open-listing-lane-${delivery.id}`, listingLaneHref, "Open Listing Lane")
+          : null}
+        {currentAdminUserId
+          ? renderQueueActionButton({
+              key: `assign-transaction-${delivery.id}`,
+              label: "Assign Transaction To Me",
+              onClick: () =>
+                void updateLinkedTransactionSupport(
+                  delivery,
+                  getSupportPayload(delivery, { admin_assignee_user_id: currentAdminUserId }),
+                  "Assignment",
+                ),
+              disabled: supportUpdatingKey === assignActionKey,
+            })
+          : null}
+        {trustSummary.total > 0 && trustAdmin
+          ? renderQueueActionButton({
+              key: `trust-escalation-${delivery.id}`,
+              label: "Escalate To Trust",
+              onClick: () => void escalateLinkedTransactionToTrust(delivery),
+              disabled: supportUpdatingKey === trustEscalationActionKey,
+              tone: "danger",
+            })
+          : null}
+        {renderQueueActionButton({
+          key: `escalate-transaction-${delivery.id}`,
+          label: "Escalate Transaction",
+          onClick: () =>
+            void updateLinkedTransactionSupport(
+              delivery,
+              getSupportPayload(delivery, { admin_is_escalated: true }),
+              "Escalation",
+            ),
+          disabled: supportUpdatingKey === escalateActionKey,
+          tone: "danger",
+        })}
+        {delivery.delivery_status === "failed" || delivery.delivery_status === "queued"
+          ? renderQueueActionButton({
+              key: `retry-delivery-${delivery.id}`,
+              label: "Retry Delivery",
+              onClick: () => void retryDelivery(delivery),
+              disabled: retryingId === delivery.id,
+              tone: "danger",
+            })
+          : null}
+        {renderQueueActionButton({
+          key: `save-support-note-${delivery.id}`,
+          label: "Save Support Note",
+          onClick: () =>
+            void updateLinkedTransactionSupport(
+              delivery,
+              { admin_note: noteDrafts[transactionKey].trim() },
+              "Support Note",
+            ),
+          disabled: supportUpdatingKey === saveNoteActionKey || !(noteDrafts[transactionKey]?.trim()),
+        })}
+        {renderInfoSummaryPanel({
+          key: `delivery-summary-${delivery.id}`,
+          lines: [
+            `Sent: ${delivery.sent_at ? formatDateTime(delivery.sent_at) : "Not yet sent"}`,
+            `Recommended owner: ${supportAdmin ? formatAdminLabel(supportAdmin) : "Support lane not labeled"}`,
+          ],
+        })}
+      </div>
+    );
+  }
+  function renderReliabilityOverview() {
+    return (
+      <section className={`card-shadow rounded-[2rem] border p-5 ${reliabilityStatus.toneClass}`}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.24em]">Reliability status</p>
+            <h2 className="mt-2 text-lg font-semibold">{reliabilityStatus.label}</h2>
+            <p className="mt-1 text-sm leading-6 text-current/90">{reliabilityStatus.summary}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              {reliabilityStatus.newIssueCount > 0
+                ? renderReliabilityPill(
+                    "reliability-new-issues",
+                    `New since review: ${reliabilityStatus.newIssueCount}`,
+                    openNewWatchlistAlerts,
+                  )
+                : renderReliabilityPill("reliability-no-new-issues", "No new regressions since review")}
+              {watchlistBaselineAt
+                ? renderReliabilityPill(
+                    "reliability-baseline",
+                    `Baseline: ${formatDateTime(watchlistBaselineAt)}`,
+                    undefined,
+                    "muted",
+                  )
+                : null}
+            </div>
+            <p className="mt-3 text-sm leading-6 text-current/85">{reliabilityStatus.sinceReviewSummary}</p>
+            <ul className="mt-3 space-y-2 text-sm text-current/90">
+              {reliabilityStatus.drivers.map((driver) => (
+                <li key={driver} className="flex items-start gap-2">
+                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-current/80" />
+                  <span>{driver}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="flex max-w-md flex-col items-start gap-3">
+            <div className="flex flex-wrap gap-2 text-xs">
+              {renderReliabilityPill(
+                "reliability-failed-pill",
+                `Failed: ${deliverySummary?.failed_deliveries ?? 0}`,
+                () => openWatchlistSeverityFilter("high"),
+              )}
+              {renderReliabilityPill(
+                "reliability-queued-pill",
+                `Queued >1h: ${deliverySummary?.queued_older_than_1h ?? 0}`,
+                () => openWatchlistSeverityFilter("medium"),
+              )}
+              {renderReliabilityPill(
+                "reliability-stuck-pill",
+                `Stuck processing: ${workerHealth?.stuck_processing_deliveries ?? 0}`,
+                () => openWatchlistSeverityFilter("high"),
+              )}
+              {renderReliabilityPill(
+                "reliability-trust-pill",
+                `Trust unassigned: ${counts.trustDrivenUnassigned}`,
+                () => openWatchlistSeverityFilter("high"),
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {reliabilityStatus.newIssueCount > 0 && watchlistAlerts.length > 0
+                ? renderReliabilityActionButton("review-new-alerts", "Review new alerts", reviewNewAlerts)
+                : null}
+              {reliabilityStatus.primaryAction
+                ? renderReliabilityActionButton(
+                    "reliability-primary-action",
+                    reliabilityStatus.primaryAction.label,
+                    reliabilityStatus.primaryAction.onClick,
+                  )
+                : null}
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   const activeSliceSummary = useMemo(() => {
     const parts: string[] = [];
 
@@ -3698,182 +4310,110 @@ export function DeliveryOpsPanel() {
   }
 
   if (loading) {
-    return (
-      <section className="card-shadow rounded-[2rem] border border-border bg-surface p-6 text-sm text-foreground/66">
-        Loading delivery operations queue...
-      </section>
-    );
+    return renderSurfaceStateCard("Loading delivery operations queue...");
   }
 
   if (error) {
-    return (
-      <section className="card-shadow rounded-[2rem] border border-danger/30 bg-danger/8 p-6 text-sm text-danger">
-        {error}
-      </section>
-    );
+    return renderSurfaceStateCard(error, "danger");
   }
 
   return (
     <section className="flex flex-col gap-5">
-      <section className={`card-shadow rounded-[2rem] border p-5 ${reliabilityStatus.toneClass}`}>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="font-mono text-xs uppercase tracking-[0.24em]">Reliability status</p>
-            <h2 className="mt-2 text-lg font-semibold">{reliabilityStatus.label}</h2>
-            <p className="mt-1 text-sm leading-6 text-current/90">{reliabilityStatus.summary}</p>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              {reliabilityStatus.newIssueCount > 0 ? (
-                renderReliabilityPill(
-                  "reliability-new-issues",
-                  `New since review: ${reliabilityStatus.newIssueCount}`,
-                  openNewWatchlistAlerts,
-                )
-              ) : (
-                renderReliabilityPill(
-                  "reliability-no-new-issues",
-                  "No new regressions since review",
-                )
-              )}
-              {watchlistBaselineAt ? (
-                renderReliabilityPill(
-                  "reliability-baseline",
-                  `Baseline: ${formatDateTime(watchlistBaselineAt)}`,
-                  undefined,
-                  "muted",
-                )
-              ) : null}
-            </div>
-            <p className="mt-3 text-sm leading-6 text-current/85">{reliabilityStatus.sinceReviewSummary}</p>
-            <ul className="mt-3 space-y-2 text-sm text-current/90">
-              {reliabilityStatus.drivers.map((driver) => (
-                <li key={driver} className="flex items-start gap-2">
-                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-current/80" />
-                  <span>{driver}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="flex max-w-md flex-col items-start gap-3">
-            <div className="flex flex-wrap gap-2 text-xs">
-              {renderReliabilityPill(
-                "reliability-failed-pill",
-                `Failed: ${deliverySummary?.failed_deliveries ?? 0}`,
-                () => openWatchlistSeverityFilter("high"),
-              )}
-              {renderReliabilityPill(
-                "reliability-queued-pill",
-                `Queued >1h: ${deliverySummary?.queued_older_than_1h ?? 0}`,
-                () => openWatchlistSeverityFilter("medium"),
-              )}
-              {renderReliabilityPill(
-                "reliability-stuck-pill",
-                `Stuck processing: ${workerHealth?.stuck_processing_deliveries ?? 0}`,
-                () => openWatchlistSeverityFilter("high"),
-              )}
-              {renderReliabilityPill(
-                "reliability-trust-pill",
-                `Trust unassigned: ${counts.trustDrivenUnassigned}`,
-                () => openWatchlistSeverityFilter("high"),
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {reliabilityStatus.newIssueCount > 0 && watchlistAlerts.length > 0 ? (
-                renderReliabilityActionButton(
-                  "review-new-alerts",
-                  "Review new alerts",
-                  reviewNewAlerts,
-                )
-              ) : null}
-              {reliabilityStatus.primaryAction ? (
-                renderReliabilityActionButton(
-                  "reliability-primary-action",
-                  reliabilityStatus.primaryAction.label,
-                  reliabilityStatus.primaryAction.onClick,
-                )
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </section>
+      {renderReliabilityOverview()}
 
       {pinnedPresets.length > 0 ? (
-        <section
-          id="delivery-watchlist"
-          className="card-shadow rounded-[2rem] border border-border bg-surface p-5"
-        >
-          {renderSurfaceSectionHeader({
-            eyebrow: "Quick access",
-            title: "Pinned delivery views",
-            description: "Re-open the delivery slices you use most without rebuilding the filter stack.",
-            meta: lastAppliedPresetId ? (
-              <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs text-sky-700">
-                Last used:{" "}
-                {DELIVERY_SAVED_PRESETS.find((preset) => preset.id === lastAppliedPresetId)?.label ?? "Saved view"}
-              </span>
-            ) : undefined,
-          })}
+        renderSurfaceCardSection({
+          id: "delivery-watchlist",
+          children: (
+            <>
+              {renderSurfaceSectionHeader({
+                eyebrow: "Quick access",
+                title: "Pinned delivery views",
+                description: "Re-open the delivery slices you use most without rebuilding the filter stack.",
+                meta: lastAppliedPresetId ? (
+                  <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs text-sky-700">
+                    Last used:{" "}
+                    {DELIVERY_SAVED_PRESETS.find((preset) => preset.id === lastAppliedPresetId)?.label ?? "Saved view"}
+                  </span>
+                ) : undefined,
+              })}
 
-          <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-            {pinnedPresets.map((presetDefinition) =>
-              renderSavedPresetCard({
-                presetDefinition,
-                statusBadges:
-                  lastAppliedPresetId === presetDefinition.id ? (
-                    renderCompactStatusBadge(
-                      `quick-access-active-${presetDefinition.id}`,
-                      "Active favorite",
-                      "sky",
-                    )
-                  ) : undefined,
-                primaryActionKey: `quick-access-open-${presetDefinition.id}`,
-                secondaryActionKey: `quick-access-pin-${presetDefinition.id}`,
-                secondaryActionLabel: "Unpin",
-              }),
-            )}
-          </div>
-        </section>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                {pinnedPresets.map((presetDefinition) =>
+                  renderSavedPresetCard({
+                    presetDefinition,
+                    statusBadges:
+                      lastAppliedPresetId === presetDefinition.id ? (
+                        renderCompactStatusBadge(
+                          `quick-access-active-${presetDefinition.id}`,
+                          "Active favorite",
+                          "sky",
+                        )
+                      ) : undefined,
+                    primaryActionKey: `quick-access-open-${presetDefinition.id}`,
+                    secondaryActionKey: `quick-access-pin-${presetDefinition.id}`,
+                    secondaryActionLabel: "Unpin",
+                  }),
+                )}
+              </div>
+            </>
+          ),
+        })
       ) : null}
 
-      <section className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
-        {renderSurfaceSectionHeader({
-          eyebrow: "Saved views",
-          title: "Delivery queue presets",
-          description: "Pin the queue slices you revisit most often so they stay one click away.",
-          meta: "Pinned presets appear in quick access and persist through your admin profile.",
-        })}
+      {renderSurfaceCardSection({
+        id: "delivery-activity-log",
+        children: (
+          <>
+            {renderSurfaceSectionHeader({
+              eyebrow: "Saved views",
+              title: "Delivery queue presets",
+              description: "Pin the queue slices you revisit most often so they stay one click away.",
+              meta: "Pinned presets appear in quick access and persist through your admin profile.",
+            })}
 
-        <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-          {DELIVERY_SAVED_PRESETS.map((presetDefinition) => {
-            const isPinned = pinnedPresetIds.includes(presetDefinition.id);
-            const isLastUsed = lastAppliedPresetId === presetDefinition.id;
-            return renderSavedPresetCard({
-              presetDefinition,
-              statusBadges: (
-                <>
-                  {isPinned ? (
-                    renderCompactStatusBadge(`saved-view-pinned-${presetDefinition.id}`, "Pinned", "emerald")
-                  ) : null}
-                  {isLastUsed ? (
-                    renderCompactStatusBadge(`saved-view-last-used-${presetDefinition.id}`, "Last used", "sky")
-                  ) : null}
-                </>
-              ),
-              primaryActionKey: `saved-view-open-${presetDefinition.id}`,
-              secondaryActionKey: `saved-view-pin-${presetDefinition.id}`,
-              secondaryActionLabel: isPinned ? "Unpin" : "Pin to quick access",
-            });
-          })}
-        </div>
-      </section>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+              {DELIVERY_SAVED_PRESETS.map((presetDefinition) => {
+                const isPinned = pinnedPresetIds.includes(presetDefinition.id);
+                const isLastUsed = lastAppliedPresetId === presetDefinition.id;
+                return renderSavedPresetCard({
+                  presetDefinition,
+                  statusBadges: (
+                    <>
+                      {isPinned ? (
+                        renderCompactStatusBadge(`saved-view-pinned-${presetDefinition.id}`, "Pinned", "emerald")
+                      ) : null}
+                      {isLastUsed ? (
+                        renderCompactStatusBadge(`saved-view-last-used-${presetDefinition.id}`, "Last used", "sky")
+                      ) : null}
+                    </>
+                  ),
+                  primaryActionKey: `saved-view-open-${presetDefinition.id}`,
+                  secondaryActionKey: `saved-view-pin-${presetDefinition.id}`,
+                  secondaryActionLabel: isPinned ? "Unpin" : "Pin to quick access",
+                });
+              })}
+            </div>
+          </>
+        ),
+      })}
 
-      <section className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
-        {renderSurfaceSectionHeader({
-          eyebrow: "Recent ops",
-          title: "Delivery activity log",
-          description:
-            "Recent watchlist reviews, saved-view changes, and queue operations for this admin workflow, prioritized in that order in the default feed.",
-          meta: (
-            <div className="flex flex-wrap items-center justify-end gap-2">
+      {renderSurfaceCardSection({
+        children: (
+          <>
+            {renderSurfaceSectionHeader({
+              eyebrow: "Recent ops",
+              title: "Delivery activity log",
+              description:
+                "Recent watchlist reviews, saved-view changes, and queue operations for this admin workflow, prioritized in that order in the default feed.",
+              meta: (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+              {renderActivityToolbarButton(
+                "export-activity-log",
+                "Export CSV",
+                exportActivityLogCsv,
+                filteredActivityLog.length === 0,
+              )}
               {latestWatchlistView ? (
                 <>
                   {renderActivityStatusBadge(
@@ -3949,28 +4489,30 @@ export function DeliveryOpsPanel() {
               {activityFilterOptions.map((option) =>
                 renderActivityFilterButton(option, option.label, "full"),
               )}
+                </div>
+              ),
+            })}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {activityFilterOptions.map((option) =>
+                renderActivityFilterButton(option, option.legendLabel, "compact"),
+              )}
             </div>
-          ),
-        })}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {activityFilterOptions.map((option) =>
-            renderActivityFilterButton(option, option.legendLabel, "compact"),
-          )}
-        </div>
 
-        <div className="mt-4 space-y-3">
-          {filteredActivityLog.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-dashed border-border bg-background/60 px-4 py-4 text-sm text-foreground/62">
-              {activityFilter === "views"
-                ? "No saved-view activity yet. Opening delivery presets and managing saved watchlist views will show up here."
-                : activityFilter === "watchlist"
-                  ? "No watchlist activity yet. Reviewing new alerts will show up here."
-                : activityFilter === "operations"
-                  ? "No delivery operations recorded yet. Retries and support actions will show up here."
-                  : "No delivery activity recorded yet. Watchlist reviews, saved-view changes, and queue operations will show up here."}
-            </div>
-          ) : (
-            groupedActivityLog.map((group) => (
+            <div className="mt-4 space-y-3">
+              {filteredActivityLog.length === 0 ? (
+                renderDashedStatePanel({
+                  key: "empty-activity-log",
+                  message:
+                    activityFilter === "views"
+                      ? "No saved-view activity yet. Opening delivery presets and managing saved watchlist views will show up here."
+                      : activityFilter === "watchlist"
+                        ? "No watchlist activity yet. Reviewing new alerts will show up here."
+                        : activityFilter === "operations"
+                          ? "No delivery operations recorded yet. Retries and support actions will show up here."
+                          : "No delivery activity recorded yet. Watchlist reviews, saved-view changes, and queue operations will show up here.",
+                })
+              ) : (
+                groupedActivityLog.map((group) => (
               <section key={group.label} className="space-y-3">
                 <div className="flex items-center gap-3">
                   <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/48">
@@ -3988,9 +4530,10 @@ export function DeliveryOpsPanel() {
                   </button>
                 </div>
                 {collapsedActivityGroups.includes(group.label) ? (
-                  <div className="rounded-[1.5rem] border border-dashed border-border bg-background/60 px-4 py-4 text-sm text-foreground/62">
-                    {group.entries.length} hidden activit{group.entries.length === 1 ? "y" : "ies"} in this day group.
-                  </div>
+                  renderDashedStatePanel({
+                    key: `collapsed-activity-group-${group.label}`,
+                    message: `${group.entries.length} hidden activit${group.entries.length === 1 ? "y" : "ies"} in this day group.`,
+                  })
                 ) : (
                   group.entries.map((entry) => (
                     <article
@@ -4061,6 +4604,13 @@ export function DeliveryOpsPanel() {
                                 () => reopenSavedPreset(entry.presetId!),
                               )
                             ) : null}
+                            {entry.activityFilterSnapshot ? (
+                              renderSurfaceActionButton(
+                                `reopen-activity-lane-${entry.id}`,
+                                `Re-open ${entry.activityFilterSnapshot} lane`,
+                                () => reopenActivityLane(entry),
+                              )
+                            ) : null}
                             {entry.transactionKind && entry.transactionId ? (
                               renderSurfaceActionButton(
                                 `focus-transaction-${entry.id}`,
@@ -4119,11 +4669,13 @@ export function DeliveryOpsPanel() {
                     </article>
                   ))
                 )}
-              </section>
-            ))
-          )}
-        </div>
-      </section>
+                </section>
+              ))
+            )}
+            </div>
+          </>
+        ),
+      })}
 
       {watchlistAlerts.length > 0 ? (
         <section
@@ -4138,6 +4690,12 @@ export function DeliveryOpsPanel() {
               : "Queue conditions that currently need admin attention.",
             meta: (
               <div className="flex flex-wrap justify-end gap-2 text-xs text-foreground/62">
+                {renderActivityToolbarButton(
+                  "export-watchlist-csv",
+                  "Export CSV",
+                  exportWatchlistCsv,
+                  filteredWatchlistAlerts.length === 0,
+                )}
                 {renderActivitySecondaryActionButton(
                   "toggle-watchlist-collapsed",
                   watchlistCollapsed ? "Expand" : "Collapse",
@@ -4154,10 +4712,15 @@ export function DeliveryOpsPanel() {
             Showing: {watchlistFilterSummary}
           </p>
           {watchlistCollapsed ? (
-            <div className="mt-4 rounded-[1.5rem] border border-dashed border-border bg-background/60 px-4 py-4">
-              <p className="text-sm text-foreground/62">
-                Watchlist collapsed. {filteredWatchlistAlerts.length} visible alert{filteredWatchlistAlerts.length === 1 ? "" : "s"} match the current delivery watchlist view.
-              </p>
+            <>{renderDashedStatePanel({
+              key: "collapsed-watchlist-summary",
+              className: "mt-4 bg-background/60 px-4 py-4",
+              message: (
+                <p className="text-sm text-foreground/62">
+                  Watchlist collapsed. {filteredWatchlistAlerts.length} visible alert{filteredWatchlistAlerts.length === 1 ? "" : "s"} match the current delivery watchlist view.
+                </p>
+              ),
+            })}
               {latestWatchlistView ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-foreground/62">
                   {renderActivityStatusBadge(
@@ -4226,7 +4789,7 @@ export function DeliveryOpsPanel() {
                   ),
                 )}
               </div>
-            </div>
+            </>
           ) : (
             <>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -4237,9 +4800,11 @@ export function DeliveryOpsPanel() {
 
               <div className="mt-4 grid gap-3 xl:grid-cols-2">
                 {filteredWatchlistAlerts.length === 0 ? (
-                  <div className="rounded-[1.5rem] border border-dashed border-border bg-background/60 px-4 py-4 text-sm text-foreground/62 xl:col-span-2">
-                    No {watchlistNewOnly ? "new " : ""}{watchlistSeverityFilter === "all" ? "" : `${watchlistSeverityFilter} `}alerts match the current watchlist filter.
-                  </div>
+                  renderDashedStatePanel({
+                    key: "empty-watchlist-alerts",
+                    className: "bg-background/60 px-4 py-4 text-sm text-foreground/62 xl:col-span-2",
+                    message: `No ${watchlistNewOnly ? "new " : ""}${watchlistSeverityFilter === "all" ? "" : `${watchlistSeverityFilter} `}alerts match the current watchlist filter.`,
+                  })
                 ) : (
                   filteredWatchlistAlerts.map((alert) => (
                     <article
@@ -4279,32 +4844,34 @@ export function DeliveryOpsPanel() {
       ) : null}
 
       {deliverySummary ? (
-        <section className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
-          {renderSurfaceSectionHeader({
-            eyebrow: "Queue health",
-            title: "Notification delivery summary",
-            description:
-              "Full queue counts across all notification deliveries, separate from the filtered working set below.",
-            meta: (
-              <>
-                <p>{summaryFetchedAt ?? "Awaiting queue summary..."}</p>
-                <p className="mt-1">
-                  Oldest queued:{" "}
-                  {deliverySummary.oldest_queued_created_at
-                    ? `${formatAgeLabel(deliverySummary.oldest_queued_created_at)} old`
-                    : "None"}
-                </p>
-                <p className="mt-1">
-                  Latest failure:{" "}
-                  {deliverySummary.latest_failure_created_at
-                    ? formatDateTime(deliverySummary.latest_failure_created_at)
-                    : "None"}
-                </p>
-              </>
-            ),
-          })}
+        renderSurfaceCardSection({
+          children: (
+            <>
+              {renderSurfaceSectionHeader({
+                eyebrow: "Queue health",
+                title: "Notification delivery summary",
+                description:
+                  "Full queue counts across all notification deliveries, separate from the filtered working set below.",
+                meta: (
+                  <>
+                    <p>{summaryFetchedAt ?? "Awaiting queue summary..."}</p>
+                    <p className="mt-1">
+                      Oldest queued:{" "}
+                      {deliverySummary.oldest_queued_created_at
+                        ? `${formatAgeLabel(deliverySummary.oldest_queued_created_at)} old`
+                        : "None"}
+                    </p>
+                    <p className="mt-1">
+                      Latest failure:{" "}
+                      {deliverySummary.latest_failure_created_at
+                        ? formatDateTime(deliverySummary.latest_failure_created_at)
+                        : "None"}
+                    </p>
+                  </>
+                ),
+              })}
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
               {
                 label: "Failed now",
@@ -4380,39 +4947,41 @@ export function DeliveryOpsPanel() {
                 detailSize: "xs",
               }),
             )}
-          </div>
+              </div>
 
-          <div className="mt-4 flex flex-wrap gap-2 text-xs text-foreground/60">
-            {renderInfoPill("summary-total-deliveries", `Total deliveries: ${deliverySummary.total_deliveries}`)}
-            {renderInfoPill("summary-sent-deliveries", `Sent: ${deliverySummary.sent_deliveries}`)}
-            {renderInfoPill("summary-failed-last-24h", `Failed last 24h: ${deliverySummary.failed_last_24h}`)}
-            {renderInfoPill("summary-queued-older-than-1h", `Queued older than 1h: ${deliverySummary.queued_older_than_1h}`)}
-          </div>
-        </section>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs text-foreground/60">
+                {renderInfoPill("summary-total-deliveries", `Total deliveries: ${deliverySummary.total_deliveries}`)}
+                {renderInfoPill("summary-sent-deliveries", `Sent: ${deliverySummary.sent_deliveries}`)}
+                {renderInfoPill("summary-failed-last-24h", `Failed last 24h: ${deliverySummary.failed_last_24h}`)}
+                {renderInfoPill("summary-queued-older-than-1h", `Queued older than 1h: ${deliverySummary.queued_older_than_1h}`)}
+              </div>
+            </>
+          ),
+        })
       ) : null}
 
       {workerHealth ? (
-        <section
-          id="delivery-worker-health"
-          className="card-shadow rounded-[2rem] border border-border bg-surface p-5"
-        >
-          {renderSurfaceSectionHeader({
-            eyebrow: "Worker health",
-            title: "Notification worker status",
-            description:
-              "Runtime-facing signal for whether queue pressure is likely coming from the worker loop or just queue volume.",
-            meta: (
-              <>
-                <p>Email provider: {workerHealth.email_provider}</p>
-                <p className="mt-1">Push provider: {workerHealth.push_provider}</p>
-                <p className="mt-1">
-                  Poll / batch: {workerHealth.worker_poll_seconds}s / {workerHealth.batch_size}
-                </p>
-              </>
-            ),
-          })}
+        renderSurfaceCardSection({
+          id: "delivery-worker-health",
+          children: (
+            <>
+              {renderSurfaceSectionHeader({
+                eyebrow: "Worker health",
+                title: "Notification worker status",
+                description:
+                  "Runtime-facing signal for whether queue pressure is likely coming from the worker loop or just queue volume.",
+                meta: (
+                  <>
+                    <p>Email provider: {workerHealth.email_provider}</p>
+                    <p className="mt-1">Push provider: {workerHealth.push_provider}</p>
+                    <p className="mt-1">
+                      Poll / batch: {workerHealth.worker_poll_seconds}s / {workerHealth.batch_size}
+                    </p>
+                  </>
+                ),
+              })}
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
               {
                 key: "worker-health-due-queued",
@@ -4451,19 +5020,23 @@ export function DeliveryOpsPanel() {
                 tone: card.tone,
               }),
             )}
-          </div>
-        </section>
+              </div>
+            </>
+          ),
+        })
       ) : null}
 
       {deliverySummary && failureDiagnostics.topReasons.length > 0 ? (
-        <section className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
-          {renderSurfaceSectionHeader({
-            eyebrow: "Failure diagnostics",
-            title: "What is breaking right now",
-            description:
-              "Top failure reasons across the queue, plus channel-specific breakdown for faster triage.",
-            meta: (
-              <div className="flex flex-wrap justify-end gap-2 text-xs text-foreground/62">
+        renderSurfaceCardSection({
+          children: (
+            <>
+              {renderSurfaceSectionHeader({
+                eyebrow: "Failure diagnostics",
+                title: "What is breaking right now",
+                description:
+                  "Top failure reasons across the queue, plus channel-specific breakdown for faster triage.",
+                meta: (
+                  <div className="flex flex-wrap justify-end gap-2 text-xs text-foreground/62">
                 {renderInfoPill("failure-diagnostics-email", `Email failures: ${failureDiagnostics.failedEmail}`, () =>
                   applyQueueState({
                     preset: "failed_only",
@@ -4487,11 +5060,11 @@ export function DeliveryOpsPanel() {
                   }),
                 )}
                 {renderInfoPill("failure-diagnostics-last-24h", `Last 24h: ${failureDiagnostics.recentFailures}`)}
-              </div>
-            ),
-          })}
+                  </div>
+                ),
+              })}
 
-          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              <div className="mt-4 grid gap-3 lg:grid-cols-3">
             {failureDiagnostics.topReasons.map((item) => (
               <article
                 key={item.reason}
@@ -4524,12 +5097,14 @@ export function DeliveryOpsPanel() {
                 </div>
               </article>
             ))}
-          </div>
-        </section>
+              </div>
+            </>
+          ),
+        })
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        {[
+      {renderMetricGrid("delivery-count-grid", "grid gap-3 sm:grid-cols-2 xl:grid-cols-6",
+        [
           {
             label: "All Deliveries",
             value: counts.total.toString(),
@@ -4624,11 +5199,11 @@ export function DeliveryOpsPanel() {
             onClick: card.onClick,
             tone: card.tone,
           }),
-        )}
-      </div>
+        )
+      )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        {[
+      {renderMetricGrid("trust-metric-grid", "grid gap-3 sm:grid-cols-2 xl:grid-cols-5",
+        [
           {
             label: "Trust-Driven Open",
             value: counts.trustDrivenOpen.toString(),
@@ -4712,11 +5287,11 @@ export function DeliveryOpsPanel() {
             detail: card.detail,
             onClick: card.onClick,
           }),
-        )}
-      </div>
+        )
+      )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {[
+      {renderMetricGrid("listing-health-grid", "grid gap-3 sm:grid-cols-2 xl:grid-cols-3",
+        [
           {
             label: "Softening Listings",
             value: listingHealthCounts.softening.toString(),
@@ -4777,11 +5352,11 @@ export function DeliveryOpsPanel() {
             onClick: card.onClick,
             tone: card.tone,
           }),
-        )}
-      </div>
+        )
+      )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {[
+      {renderMetricGrid("listing-diagnostic-grid", "grid gap-3 sm:grid-cols-2 xl:grid-cols-3",
+        [
           {
             label:
               listingHealthFilter === "all"
@@ -4851,11 +5426,11 @@ export function DeliveryOpsPanel() {
             onClick: card.onClick,
             tone: card.tone,
           }),
-        )}
-      </div>
+        )
+      )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
-        {[
+      {renderMetricGrid("trust-aging-grid", "grid gap-3 sm:grid-cols-2 xl:grid-cols-2",
+        [
           {
             label: "Oldest Trust-Driven Unassigned",
             detail: trustAgingSummary.oldestTrustDrivenUnassigned
@@ -4895,27 +5470,11 @@ export function DeliveryOpsPanel() {
             detail: card.detail,
             onClick: card.onClick,
           }),
-        )}
-      </div>
+        )
+      )}
 
       <div className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
-        <div className="mb-4 flex flex-wrap gap-2 border-b border-border pb-4">
-          {[
-            { label: "Needs Attention", value: "needs_attention" as DeliveryPreset },
-            { label: "Failed Only", value: "failed_only" as DeliveryPreset },
-            { label: "Queued Only", value: "queued_only" as DeliveryPreset },
-            { label: "Push Failures", value: "push_failures" as DeliveryPreset },
-            { label: "Trust-Driven", value: "trust_driven" as DeliveryPreset },
-          ].map((option) => {
-            const active = preset === option.value;
-            return renderSegmentedFilterButton(
-              option.value,
-              option.label,
-              active,
-              () => applyPreset(option.value),
-            );
-          })}
-        </div>
+        {renderQueuePresetStrip(preset, applyPreset)}
         {renderCurrentSlicePanel(() =>
           applyQueueState({
             preset: "needs_attention",
@@ -4930,15 +5489,7 @@ export function DeliveryOpsPanel() {
         )}
 
         <div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end">
-          <label className="flex min-w-[240px] flex-1 flex-col gap-2 text-sm text-foreground/72">
-            Search
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search by transaction, recipient, payload, or failure"
-              className="rounded-2xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-foreground/30"
-            />
-          </label>
+          {renderQueueSearchField(searchQuery, setSearchQuery)}
 
           {renderFilterGroup({
             key: "filter-status",
@@ -5080,17 +5631,7 @@ export function DeliveryOpsPanel() {
       </div>
 
       <section className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
-        <div className="flex items-center justify-between gap-3 border-b border-border pb-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-foreground/48">Delivery Queue</p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-foreground">
-              {filteredDeliveries.length} visible deliver{filteredDeliveries.length === 1 ? "y" : "ies"}
-            </h2>
-          </div>
-          <p className="max-w-md text-right text-sm text-foreground/64">
-            This queue is for communication failures, retries, and channel-specific delivery triage.
-          </p>
-        </div>
+        {renderDeliveryQueueHeader(filteredDeliveries.length)}
         {renderCurrentSlicePanel(() =>
           applyQueueState({
             preset: "needs_attention",
@@ -5164,9 +5705,11 @@ export function DeliveryOpsPanel() {
 
         <div className="mt-5 flex flex-col gap-4">
           {filteredDeliveries.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-dashed border-border px-4 py-8 text-sm text-foreground/60">
-              No deliveries match the current operations filters.
-            </div>
+            renderDashedStatePanel({
+              key: "empty-delivery-queue",
+              className: "px-4 py-8 text-sm text-foreground/60",
+              message: "No deliveries match the current operations filters.",
+            })
           ) : null}
 
           {filteredDeliveries.map((delivery) => {
@@ -5191,282 +5734,28 @@ export function DeliveryOpsPanel() {
               children: (
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="space-y-3 lg:flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {renderDeliveryRowPill(
-                        `delivery-channel-${delivery.id}`,
-                        delivery.channel,
-                        "surface",
-                        "tracking-[0.22em]",
-                      )}
-                      {renderDeliveryRowPill(
-                        `delivery-kind-${delivery.id}`,
-                        delivery.transaction_kind,
-                      )}
-                      {renderDeliveryRowPill(
-                        `delivery-status-${delivery.id}`,
-                        delivery.delivery_status.replaceAll("_", " "),
-                        delivery.delivery_status === "failed"
-                          ? "status_failed"
-                          : delivery.delivery_status === "queued"
-                            ? "status_queued"
-                            : "status_sent",
-                      )}
-                      <span className="text-xs text-foreground/48">#{truncateId(delivery.id)}</span>
-                    </div>
+                    {renderDeliveryRowHeader({ delivery, trustSummary })}
 
-                    <div className="grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-5">
-                      {renderLabeledValueBlock({
-                        key: `delivery-transaction-${delivery.id}`,
-                        label: "Transaction",
-                        value: truncateId(delivery.transaction_id),
-                        valueClassName: "mt-1 font-mono text-xs text-foreground",
-                      })}
-                      {renderLabeledValueBlock({
-                        key: `delivery-recipient-${delivery.id}`,
-                        label: "Recipient",
-                        value: truncateId(delivery.recipient_user_id),
-                        valueClassName: "mt-1 font-mono text-xs text-foreground",
-                      })}
-                      {renderLabeledValueBlock({
-                        key: `delivery-attempts-${delivery.id}`,
-                        label: "Attempts",
-                        value: delivery.attempts,
-                      })}
-                      {renderLabeledValueBlock({
-                        key: `delivery-created-${delivery.id}`,
-                        label: "Created",
-                        value: formatDateTime(delivery.created_at),
-                      })}
-                      {renderLabeledValueBlock({
-                        key: `delivery-age-${delivery.id}`,
-                        label: "Age",
-                        value: formatAgeLabel(delivery.created_at),
-                      })}
-                    </div>
-
-                    {trustSummary.total > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {renderDeliveryRowPill(`trust-flags-${delivery.id}`, "Seller Trust Flags", "danger")}
-                        {renderDeliveryRowPill(`trust-open-${delivery.id}`, `${trustSummary.open} open`)}
-                        {renderDeliveryRowPill(`trust-escalated-${delivery.id}`, `${trustSummary.escalated} escalated`)}
-                        {renderDeliveryRowPill(`trust-hidden-${delivery.id}`, `${trustSummary.hidden} hidden`)}
-                      </div>
-                    ) : null}
-
-                    {listingOpsContext
-                      ? (() => {
-                          const tractionPill = getListingTractionPill(listingOpsContext.listing);
-                          const comparisonScopeBadge = getListingComparisonScopeBadge(
-                            listingOpsContext.listing.last_pricing_comparison_scope,
-                          );
-
-                          return renderInsetPanel({
-                            key: `listing-ops-context-${delivery.id}`,
-                            padding: "md",
-                            children: (
-                              <>
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div>
-                                    <p className="text-xs uppercase tracking-[0.2em] text-foreground/46">
-                                      Listing Ops Context
-                                    </p>
-                                    <p className="mt-1 text-sm font-medium text-foreground">
-                                      {listingOpsContext.listing.title}
-                                    </p>
-                                    <p className="mt-1 text-sm text-foreground/64">
-                                      {titleCaseFilterLabel(listingOpsContext.adjustmentType)} ·{" "}
-                                      <span
-                                        className={getListingTrendToneClass(
-                                          listingOpsContext.retentionTrendKey,
-                                        )}
-                                      >
-                                        {listingOpsContext.retentionTrendLabel}
-                                      </span>
-                                    </p>
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                      {listingOpsContext.listing.available_today
-                                        ? renderMiniTonePill(
-                                            `listing-available-today-${delivery.id}`,
-                                            "Available today",
-                                            "border-emerald-200 bg-emerald-50 text-emerald-700",
-                                          )
-                                        : null}
-                                      {tractionPill
-                                        ? renderMiniTonePill(
-                                            `listing-traction-${delivery.id}`,
-                                            tractionPill.label,
-                                            tractionPill.className,
-                                          )
-                                        : null}
-                                      {comparisonScopeBadge
-                                        ? renderMiniTonePill(
-                                            `listing-comparison-scope-${delivery.id}`,
-                                            comparisonScopeBadge.label,
-                                            comparisonScopeBadge.className,
-                                          )
-                                        : null}
-                                    </div>
-                                  </div>
-                                  <div className="text-right text-xs text-foreground/50">
-                                    <p>
-                                      {listingOpsContext.adjustmentAt
-                                        ? `Adjusted ${formatAgeLabel(listingOpsContext.adjustmentAt)} ago`
-                                        : "No adjustment timestamp"}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="mt-3 grid gap-3 text-sm text-foreground/68 sm:grid-cols-2 xl:grid-cols-4">
-                                  {renderLabeledValueBlock({
-                                    key: `listing-last-change-${delivery.id}`,
-                                    label: "Last Change",
-                                    value:
-                                      listingOpsContext.adjustmentSummary?.trim() ||
-                                      "No operating adjustment recorded",
-                                  })}
-                                  {renderLabeledValueBlock({
-                                    key: `listing-since-change-${delivery.id}`,
-                                    label: "Since Change",
-                                    value: `${listingOpsContext.sameSellerPostAdjustmentCount} retained · ${listingOpsContext.crossSellerPostAdjustmentCount} branched`,
-                                  })}
-                                  {renderLabeledValueBlock({
-                                    key: `listing-follow-on-${delivery.id}`,
-                                    label: "Follow-On Mix",
-                                    value: `${listingOpsContext.sameSellerCount} same-seller · ${listingOpsContext.crossSellerCount} cross-seller`,
-                                  })}
-                                  {renderLabeledValueBlock({
-                                    key: `listing-browse-pressure-${delivery.id}`,
-                                    label: "Browse Pressure",
-                                    value: (() => {
-                                      const browseSignals = [
-                                        isPriceDrivenBrowseContext(browseContext) ? "Price-led" : null,
-                                        isSearchDrivenBrowseContext(browseContext) ? "Search-led" : null,
-                                        isLocalDrivenBrowseContext(browseContext) ? "Local-fit" : null,
-                                      ].filter(Boolean);
-                                      return browseSignals.length > 0
-                                        ? browseSignals.join(" · ")
-                                        : "No browse signal";
-                                    })(),
-                                  })}
-                                </div>
-                              </>
-                            ),
-                          });
-                        })()
-                      : null}
-
-                    {delivery.failure_reason
-                      ? renderDangerMessagePanel(`delivery-failure-reason-${delivery.id}`, delivery.failure_reason)
-                      : null}
-
-                    {renderInsetPanel({
-                      key: `payload-${delivery.id}`,
-                      title: "Payload",
-                      padding: "sm",
-                      bodyClassName: "text-xs text-foreground/62",
-                      children: (
-                        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono leading-6">
-                          {JSON.stringify(delivery.payload, null, 2)}
-                        </pre>
-                      ),
+                    {renderListingOpsContextPanel({
+                      deliveryId: delivery.id,
+                      listingOpsContext,
+                      browseContext,
                     })}
 
-                    {renderInsetPanel({
-                      key: `support-note-${delivery.id}`,
-                      title: "Support Note",
-                      subtitle: "Travels with assign and escalate actions",
-                      padding: "sm",
-                      children: (
-                        <textarea
-                          value={noteDrafts[transactionKey] ?? ""}
-                          onChange={(event) =>
-                            setNoteDrafts((current) => ({
-                              ...current,
-                              [transactionKey]: event.target.value,
-                            }))
-                          }
-                          placeholder="Add support context before assigning or escalating this transaction"
-                          className="mt-3 min-h-[96px] w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-foreground outline-none transition focus:border-foreground/30"
-                        />
-                      ),
-                    })}
+                    {renderDeliveryRowDetailStack({ delivery, transactionKey })}
                   </div>
 
-                  <div className="flex flex-col gap-2 lg:min-w-[220px]">
-                    {renderQueueLinkAction(
-                      `open-transaction-${delivery.id}`,
-                      transactionHref,
-                      "Open Transaction",
-                    )}
-                    {listingLaneHref ? (
-                      renderQueueLinkAction(
-                        `open-listing-lane-${delivery.id}`,
-                        listingLaneHref,
-                        "Open Listing Lane",
-                      )
-                    ) : null}
-                    {currentAdminUserId ? (
-                      renderQueueActionButton({
-                        key: `assign-transaction-${delivery.id}`,
-                        label: "Assign Transaction To Me",
-                        onClick: () =>
-                          void updateLinkedTransactionSupport(
-                            delivery,
-                            getSupportPayload(delivery, { admin_assignee_user_id: currentAdminUserId }),
-                            "Assignment",
-                          ),
-                        disabled: supportUpdatingKey === assignActionKey,
-                      })
-                    ) : null}
-                    {trustSummary.total > 0 && trustAdmin ? (
-                      renderQueueActionButton({
-                        key: `trust-escalation-${delivery.id}`,
-                        label: "Escalate To Trust",
-                        onClick: () => void escalateLinkedTransactionToTrust(delivery),
-                        disabled: supportUpdatingKey === trustEscalationActionKey,
-                        tone: "danger",
-                      })
-                    ) : null}
-                    {renderQueueActionButton({
-                      key: `escalate-transaction-${delivery.id}`,
-                      label: "Escalate Transaction",
-                      onClick: () =>
-                        void updateLinkedTransactionSupport(
-                          delivery,
-                          getSupportPayload(delivery, { admin_is_escalated: true }),
-                          "Escalation",
-                        ),
-                      disabled: supportUpdatingKey === escalateActionKey,
-                      tone: "danger",
-                    })}
-                    {(delivery.delivery_status === "failed" || delivery.delivery_status === "queued") ? (
-                      renderQueueActionButton({
-                        key: `retry-delivery-${delivery.id}`,
-                        label: "Retry Delivery",
-                        onClick: () => void retryDelivery(delivery),
-                        disabled: retryingId === delivery.id,
-                        tone: "danger",
-                      })
-                    ) : null}
-                    {renderQueueActionButton({
-                      key: `save-support-note-${delivery.id}`,
-                      label: "Save Support Note",
-                      onClick: () =>
-                        void updateLinkedTransactionSupport(
-                          delivery,
-                          { admin_note: noteDrafts[transactionKey].trim() },
-                          "Support Note",
-                        ),
-                      disabled:
-                        supportUpdatingKey === saveNoteActionKey || !(noteDrafts[transactionKey]?.trim()),
-                    })}
-                    {renderInfoSummaryPanel({
-                      key: `delivery-summary-${delivery.id}`,
-                      lines: [
-                        `Sent: ${delivery.sent_at ? formatDateTime(delivery.sent_at) : "Not yet sent"}`,
-                        `Recommended owner: ${supportAdmin ? formatAdminLabel(supportAdmin) : "Support lane not labeled"}`,
-                      ],
-                    })}
-                  </div>
+                  {renderDeliveryRowActions({
+                    delivery,
+                    transactionHref,
+                    listingLaneHref,
+                    transactionKey,
+                    trustSummary,
+                    assignActionKey,
+                    trustEscalationActionKey,
+                    escalateActionKey,
+                    saveNoteActionKey,
+                  })}
                 </div>
               ),
             });
