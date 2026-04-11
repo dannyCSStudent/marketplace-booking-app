@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, status
 
+from app.core.config import get_settings
 from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
@@ -24,6 +25,7 @@ from app.services.platform_fees import (
     calculate_platform_fee,
     get_active_platform_fee_rate_value,
 )
+from app.services.notification_delivery_worker import process_notification_delivery_rows
 from app.services.response_ai import build_transaction_response_ai_response
 from app.services.workflows import ORDER_TRANSITIONS_BY_ACTOR, validate_transition
 from app.services.notifications import queue_transaction_notification_jobs
@@ -43,6 +45,7 @@ ORDER_ADMIN_SELECT = (
     f"{ORDER_SELECT},admin_note,admin_handoff_note,admin_assignee_user_id,admin_assigned_at,admin_is_escalated,admin_escalated_at,"
     "order_admin_events(id,actor_user_id,action,note,created_at)"
 )
+ORDER_EXCEPTION_TRIGGER_STATUSES = {"confirmed", "preparing", "ready", "out_for_delivery"}
 
 
 def _serialize_order(row: dict, *, include_admin: bool = False) -> OrderRead | OrderAdminRead:
@@ -202,6 +205,186 @@ def _get_seller_user_id(*, seller_id: str) -> str | None:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return seller_profile.get("user_id")
+
+
+def _get_seller_profile_summary(*, seller_id: str) -> dict[str, str] | None:
+    supabase = get_supabase_client()
+    try:
+        seller_profile = supabase.select(
+            "seller_profiles",
+            query={
+                "select": "id,slug,display_name,user_id",
+                "id": f"eq.{seller_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            return None
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return {
+        "id": str(seller_profile.get("id") or ""),
+        "slug": str(seller_profile.get("slug") or ""),
+        "display_name": str(seller_profile.get("display_name") or ""),
+        "user_id": str(seller_profile.get("user_id") or ""),
+    }
+
+
+def _queue_order_exception_notification(
+    *,
+    order: dict,
+    previous_status: str,
+    actor_role: str,
+) -> None:
+    if previous_status not in ORDER_EXCEPTION_TRIGGER_STATUSES or order.get("status") != "canceled":
+        return
+
+    seller = _get_seller_profile_summary(seller_id=order["seller_id"])
+    if not seller:
+        return
+
+    settings = get_settings()
+    admin_ids = [
+        admin_id
+        for admin_id in settings.admin_user_ids
+        if (settings.admin_user_roles or {}).get(admin_id, "").lower() in {"support", "owner"}
+    ]
+    if not admin_ids:
+        admin_ids = list(settings.admin_user_ids)
+
+    recipient_user_ids = []
+    if seller.get("user_id"):
+        recipient_user_ids.append(seller["user_id"])
+    recipient_user_ids.extend(admin_ids)
+    recipient_user_ids = list(dict.fromkeys(recipient_user_ids))
+    if not recipient_user_ids:
+        return
+
+    notification_event_id = (
+        f"order-exception:{order['id']}:{previous_status}:{order.get('status')}:{actor_role}"
+    )
+    supabase = get_supabase_client()
+    try:
+        existing_rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "recipient_user_id,event_id",
+                "event_id": f"eq.{notification_event_id}",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        existing_rows = []
+
+    existing_recipients = {
+        str(row.get("recipient_user_id"))
+        for row in existing_rows
+        if row.get("recipient_user_id")
+    }
+
+    profile_rows = []
+    try:
+        profile_rows = supabase.select(
+            "profiles",
+            query={
+                "select": "id,email_notifications_enabled,push_notifications_enabled",
+                "id": f"in.({','.join(recipient_user_ids)})",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        profile_rows = []
+
+    profile_prefs = {
+        str(row.get("id")): row
+        for row in profile_rows
+        if row.get("id")
+    }
+
+    listing_title = None
+    if order.get("order_items"):
+        first_item = order["order_items"][0] or {}
+        listing_title = ((first_item.get("listings") or {}).get("title") or "").strip() or None
+    listing_label = listing_title or f"order {order['id']}"
+    exception_reason = (
+        f"Order was canceled by {actor_role} after reaching {previous_status}. "
+        "Review the seller handoff and buyer follow-up."
+    )
+    subject = f"Order exception for {listing_label}"
+    body = exception_reason
+    html = (
+        f"<p>Order exception for <strong>{listing_label}</strong>.</p>"
+        f"<p><strong>Previous status:</strong> {previous_status}</p>"
+        f"<p><strong>Current status:</strong> canceled</p>"
+        f"<p><strong>Actor:</strong> {actor_role}</p>"
+        f"<p>{exception_reason}</p>"
+    )
+
+    deliveries: list[dict[str, object]] = []
+    for recipient_user_id in recipient_user_ids:
+        if recipient_user_id in existing_recipients:
+            continue
+
+        prefs = profile_prefs.get(recipient_user_id, {})
+        payload = {
+            "alert_type": "order_exception",
+            "seller_id": seller["id"],
+            "seller_slug": seller["slug"],
+            "seller_display_name": seller["display_name"],
+            "order_id": order["id"],
+            "listing_id": order.get("order_items", [{}])[0].get("listing_id"),
+            "listing_title": listing_title,
+            "previous_status": previous_status,
+            "current_status": "canceled",
+            "actor_role": actor_role,
+            "exception_reason": exception_reason,
+            "alert_signature": notification_event_id,
+            "subject": subject,
+            "body": body,
+            "html": html,
+        }
+
+        if prefs.get("email_notifications_enabled", True):
+            deliveries.append(
+                {
+                    "recipient_user_id": recipient_user_id,
+                    "transaction_kind": "order",
+                    "transaction_id": order["id"],
+                    "event_id": notification_event_id,
+                    "channel": "email",
+                    "delivery_status": "queued",
+                    "payload": payload,
+                }
+            )
+
+        if prefs.get("push_notifications_enabled", True):
+            deliveries.append(
+                {
+                    "recipient_user_id": recipient_user_id,
+                    "transaction_kind": "order",
+                    "transaction_id": order["id"],
+                    "event_id": notification_event_id,
+                    "channel": "push",
+                    "delivery_status": "queued",
+                    "payload": payload,
+                }
+            )
+
+    if not deliveries:
+        return
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if inserted_rows:
+        try:
+            process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
 
 
 def get_my_orders(current_user: CurrentUser) -> list[OrderRead]:
@@ -561,6 +744,12 @@ def update_order_status(current_user: CurrentUser, order_id: str, payload: Order
         actor_role=actor,
         note=payload.seller_response_note,
     )
+    if payload.status == "canceled":
+        _queue_order_exception_notification(
+            order=current_order | {"status": payload.status},
+            previous_status=current_order["status"],
+            actor_role=actor,
+        )
 
     return _get_order_by_id(order_id=order_id, access_token=current_user.access_token)
 

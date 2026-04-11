@@ -73,6 +73,33 @@ export type BookingBulkStatusUpdateResult = {
     failed: BookingBulkActionFailure[];
   };
 
+export type BookingConflictEventRead = {
+    id: string;
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    booking_id: string;
+    listing_id: string;
+    conflict_count: number;
+    scheduled_start: string;
+    scheduled_end: string;
+    created_at: string;
+  };
+
+export type BookingConflictSellerSummaryRead = {
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    event_count: number;
+    latest_event_action: string;
+    latest_event_status: string;
+    latest_event_created_at: string;
+  };
+
 export type BookingCreate = {
     seller_id: string;
     listing_id: string;
@@ -134,6 +161,36 @@ export type CategoryRead = {
     parent_id?: string | null;
   };
 
+export type DeliveryFailureEventRead = {
+    id: string;
+    failed_delivery_id: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    failed_delivery_channel: string;
+    failed_delivery_status: string;
+    failed_delivery_attempts: number;
+    failed_delivery_reason: string;
+    original_recipient_user_id?: string | null;
+    created_at: string;
+  };
+
+export type DeliveryFailureSummaryRead = {
+    failed_delivery_id: string;
+    transaction_kind: string;
+    transaction_id: string;
+    failed_delivery_channel: string;
+    failed_delivery_status: string;
+    failed_delivery_attempts: number;
+    failed_delivery_reason: string;
+    original_recipient_user_id?: string | null;
+    alert_delivery_count: number;
+    latest_alert_delivery_status: string;
+    latest_alert_delivery_created_at: string;
+    acknowledged: boolean;
+  };
+
 export type DeliveryFeeHistoryPoint = {
     date: string;
     delivery_fee_cents: number;
@@ -157,6 +214,36 @@ export type DeliveryFeeSettingsRead = {
 
 export type HTTPValidationError = {
     detail?: ValidationError[];
+  };
+
+export type InventoryAlertEventRead = {
+    id: string;
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    listing_id: string;
+    listing_title: string;
+    inventory_bucket: string;
+    inventory_count?: number | null;
+    created_at: string;
+  };
+
+export type InventoryAlertSummaryRead = {
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    listing_id: string;
+    listing_title: string;
+    inventory_bucket: string;
+    inventory_count?: number | null;
+    alert_delivery_count: number;
+    latest_alert_delivery_status: string;
+    latest_alert_delivery_created_at: string;
+    acknowledged: boolean;
   };
 
 export type ListingAiAssistRequest = {
@@ -482,6 +569,30 @@ export type OrderCreate = {
     items: OrderItemCreate[];
   };
 
+export type OrderExceptionEventRead = {
+    id: string;
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    order_id: string;
+    order_status: string;
+    created_at: string;
+  };
+
+export type OrderExceptionSellerSummaryRead = {
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    event_count: number;
+    latest_event_action: string;
+    latest_event_status: string;
+    latest_event_created_at: string;
+  };
+
 export type OrderItemCreate = {
     listing_id: string;
     quantity: number;
@@ -744,6 +855,33 @@ export type ReviewResponseAiAssistSuggestion = {
     summary: string;
   };
 
+export type ReviewResponseReminderEventRead = {
+    id: string;
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    latest_review_id?: string | null;
+    latest_review_rating?: number | null;
+    pending_review_count: number;
+    created_at: string;
+  };
+
+export type ReviewResponseReminderSellerSummaryRead = {
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    reminder_count: number;
+    latest_review_id?: string | null;
+    latest_review_rating?: number | null;
+    latest_alert_delivery_status: string;
+    latest_alert_delivery_created_at: string;
+    acknowledged: boolean;
+  };
+
 export type ReviewSellerResponseUpdate = {
     seller_response?: string | null;
   };
@@ -893,6 +1031,39 @@ export type SellerUpdate = {
     accepts_custom_orders?: boolean | null;
   };
 
+export type SubscriptionDowngradeEventRead = {
+    id: string;
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    seller_subscription_id?: string | null;
+    from_tier_id?: string | null;
+    from_tier_name?: string | null;
+    to_tier_id?: string | null;
+    to_tier_name?: string | null;
+    reason_code?: string | null;
+    note?: string | null;
+    created_at: string;
+  };
+
+export type SubscriptionDowngradeSellerSummaryRead = {
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    alert_delivery_count: number;
+    latest_alert_delivery_id?: string | null;
+    latest_alert_delivery_status: string;
+    latest_alert_delivery_created_at: string;
+    previous_tier_name?: string | null;
+    current_tier_name?: string | null;
+    reason_code?: string | null;
+    acknowledged: boolean;
+  };
+
 export type SubscriptionTierCreate = {
     code: string;
     name: string;
@@ -959,6 +1130,8 @@ export type ApiSchemaMap = {
   BookingBulkStatusUpdateItem: BookingBulkStatusUpdateItem;
   BookingBulkStatusUpdateRequest: BookingBulkStatusUpdateRequest;
   BookingBulkStatusUpdateResult: BookingBulkStatusUpdateResult;
+  BookingConflictEventRead: BookingConflictEventRead;
+  BookingConflictSellerSummaryRead: BookingConflictSellerSummaryRead;
   BookingCreate: BookingCreate;
   BookingRead: BookingRead;
   BookingResponseAiAssistResponse: BookingResponseAiAssistResponse;
@@ -966,10 +1139,14 @@ export type ApiSchemaMap = {
   BookingStatusEventRead: BookingStatusEventRead;
   BookingStatusUpdate: BookingStatusUpdate;
   CategoryRead: CategoryRead;
+  DeliveryFailureEventRead: DeliveryFailureEventRead;
+  DeliveryFailureSummaryRead: DeliveryFailureSummaryRead;
   DeliveryFeeHistoryPoint: DeliveryFeeHistoryPoint;
   DeliveryFeeSettingsCreate: DeliveryFeeSettingsCreate;
   DeliveryFeeSettingsRead: DeliveryFeeSettingsRead;
   HTTPValidationError: HTTPValidationError;
+  InventoryAlertEventRead: InventoryAlertEventRead;
+  InventoryAlertSummaryRead: InventoryAlertSummaryRead;
   ListingAiAssistRequest: ListingAiAssistRequest;
   ListingAiAssistResponse: ListingAiAssistResponse;
   ListingAiAssistSuggestion: ListingAiAssistSuggestion;
@@ -1001,6 +1178,8 @@ export type ApiSchemaMap = {
   OrderBulkStatusUpdateRequest: OrderBulkStatusUpdateRequest;
   OrderBulkStatusUpdateResult: OrderBulkStatusUpdateResult;
   OrderCreate: OrderCreate;
+  OrderExceptionEventRead: OrderExceptionEventRead;
+  OrderExceptionSellerSummaryRead: OrderExceptionSellerSummaryRead;
   OrderItemCreate: OrderItemCreate;
   OrderItemRead: OrderItemRead;
   OrderRead: OrderRead;
@@ -1026,6 +1205,8 @@ export type ApiSchemaMap = {
   ReviewReportStatusUpdate: ReviewReportStatusUpdate;
   ReviewResponseAiAssistResponse: ReviewResponseAiAssistResponse;
   ReviewResponseAiAssistSuggestion: ReviewResponseAiAssistSuggestion;
+  ReviewResponseReminderEventRead: ReviewResponseReminderEventRead;
+  ReviewResponseReminderSellerSummaryRead: ReviewResponseReminderSellerSummaryRead;
   ReviewSellerResponseUpdate: ReviewSellerResponseUpdate;
   ReviewVisibilityUpdate: ReviewVisibilityUpdate;
   SellerCreate: SellerCreate;
@@ -1038,6 +1219,8 @@ export type ApiSchemaMap = {
   SellerTrustInterventionRead: SellerTrustInterventionRead;
   SellerTrustScoreRead: SellerTrustScoreRead;
   SellerUpdate: SellerUpdate;
+  SubscriptionDowngradeEventRead: SubscriptionDowngradeEventRead;
+  SubscriptionDowngradeSellerSummaryRead: SubscriptionDowngradeSellerSummaryRead;
   SubscriptionTierCreate: SubscriptionTierCreate;
   SubscriptionTierRead: SubscriptionTierRead;
   TrustAlertEventRead: TrustAlertEventRead;
@@ -1263,10 +1446,118 @@ export type ApiOperations = {
       response: NotificationDeliveryRead[];
     };
   };
+  "/notifications/admin/booking-conflicts/events": {
+    get: {
+      response: BookingConflictEventRead[];
+    };
+  };
+  "/notifications/admin/booking-conflicts/sellers": {
+    get: {
+      response: BookingConflictSellerSummaryRead[];
+    };
+  };
+  "/notifications/admin/booking-conflicts/{seller_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
   "/notifications/admin/bulk-retry": {
     post: {
       requestBody: NotificationDeliveryBulkRetryRequest;
       response: NotificationDeliveryBulkRetryResult;
+    };
+  };
+  "/notifications/admin/delivery-failures/events": {
+    get: {
+      response: DeliveryFailureEventRead[];
+    };
+  };
+  "/notifications/admin/delivery-failures/summaries": {
+    get: {
+      response: DeliveryFailureSummaryRead[];
+    };
+  };
+  "/notifications/admin/delivery-failures/{failed_delivery_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/admin/inventory-alerts/events": {
+    get: {
+      response: InventoryAlertEventRead[];
+    };
+  };
+  "/notifications/admin/inventory-alerts/summaries": {
+    get: {
+      response: InventoryAlertSummaryRead[];
+    };
+  };
+  "/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/admin/order-exceptions/events": {
+    get: {
+      response: OrderExceptionEventRead[];
+    };
+  };
+  "/notifications/admin/order-exceptions/sellers": {
+    get: {
+      response: OrderExceptionSellerSummaryRead[];
+    };
+  };
+  "/notifications/admin/order-exceptions/{seller_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/admin/review-response-reminders/events": {
+    get: {
+      response: ReviewResponseReminderEventRead[];
+    };
+  };
+  "/notifications/admin/review-response-reminders/summaries": {
+    get: {
+      response: ReviewResponseReminderSellerSummaryRead[];
+    };
+  };
+  "/notifications/admin/review-response-reminders/{seller_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/admin/subscription-downgrades/events": {
+    get: {
+      response: SubscriptionDowngradeEventRead[];
+    };
+  };
+  "/notifications/admin/subscription-downgrades/sellers": {
+    get: {
+      response: SubscriptionDowngradeSellerSummaryRead[];
+    };
+  };
+  "/notifications/admin/subscription-downgrades/{seller_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
     };
   };
   "/notifications/admin/summary": {

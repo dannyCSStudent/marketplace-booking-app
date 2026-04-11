@@ -42,6 +42,16 @@ export type SellerSubscriptionEventRead = ApiSchemaMap["SellerSubscriptionEventR
 export type SellerListingSummary = ApiSchemaMap["SellerListingSummaryRead"];
 export type SellerTrustIntervention = ApiSchemaMap["SellerTrustInterventionRead"];
 export type TrustAlertSellerSummaryRead = ApiSchemaMap["TrustAlertSellerSummaryRead"];
+export type OrderExceptionSellerSummaryRead = ApiSchemaMap["OrderExceptionSellerSummaryRead"];
+export type OrderExceptionEventRead = ApiSchemaMap["OrderExceptionEventRead"];
+export type BookingConflictSellerSummaryRead = ApiSchemaMap["BookingConflictSellerSummaryRead"];
+export type BookingConflictEventRead = ApiSchemaMap["BookingConflictEventRead"];
+export type DeliveryFailureSummaryRead = ApiSchemaMap["DeliveryFailureSummaryRead"];
+export type DeliveryFailureEventRead = ApiSchemaMap["DeliveryFailureEventRead"];
+export type InventoryAlertSummaryRead = ApiSchemaMap["InventoryAlertSummaryRead"];
+export type InventoryAlertEventRead = ApiSchemaMap["InventoryAlertEventRead"];
+export type SubscriptionDowngradeSellerSummaryRead = ApiSchemaMap["SubscriptionDowngradeSellerSummaryRead"];
+export type SubscriptionDowngradeEventRead = ApiSchemaMap["SubscriptionDowngradeEventRead"];
 export type CategoryRead = {
   id: string;
   name: string;
@@ -380,6 +390,66 @@ export const apiRoutes = {
     const suffix = searchParams.toString();
     return `/notifications/admin/trust-alerts/sellers${suffix ? `?${suffix}` : ""}`;
   },
+  orderExceptionSellerSummaries: (limit?: number, action?: "acknowledged" | "cleared") => {
+    const searchParams = new URLSearchParams();
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    if (action) {
+      searchParams.set("action", action);
+    }
+    const suffix = searchParams.toString();
+    return `/notifications/admin/order-exceptions/sellers${suffix ? `?${suffix}` : ""}`;
+  },
+  orderExceptionEvents: (limit?: number) =>
+    `/notifications/admin/order-exceptions/events${limit ? `?limit=${limit}` : ""}`,
+  acknowledgeOrderException: (sellerId: string) =>
+    `/notifications/admin/order-exceptions/${sellerId}/acknowledge`,
+  bookingConflictSellerSummaries: (limit?: number, action?: "acknowledged" | "cleared") => {
+    const searchParams = new URLSearchParams();
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    if (action) {
+      searchParams.set("action", action);
+    }
+    const suffix = searchParams.toString();
+    return `/notifications/admin/booking-conflicts/sellers${suffix ? `?${suffix}` : ""}`;
+  },
+  bookingConflictEvents: (limit?: number) =>
+    `/notifications/admin/booking-conflicts/events${limit ? `?limit=${limit}` : ""}`,
+  acknowledgeBookingConflict: (sellerId: string) =>
+    `/notifications/admin/booking-conflicts/${sellerId}/acknowledge`,
+  subscriptionDowngradeSellerSummaries: (limit?: number, state?: "active" | "acknowledged" | "all") => {
+    const searchParams = new URLSearchParams();
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    if (state) {
+      searchParams.set("state", state);
+    }
+    const suffix = searchParams.toString();
+    return `/notifications/admin/subscription-downgrades/sellers${suffix ? `?${suffix}` : ""}`;
+  },
+  subscriptionDowngradeEvents: (limit?: number) =>
+    `/notifications/admin/subscription-downgrades/events${limit ? `?limit=${limit}` : ""}`,
+  acknowledgeSubscriptionDowngrade: (sellerId: string) =>
+    `/notifications/admin/subscription-downgrades/${sellerId}/acknowledge`,
+  deliveryFailureSummaries: (limit?: number, state?: "active" | "acknowledged" | "all") => {
+    const searchParams = new URLSearchParams();
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    if (state) {
+      searchParams.set("state", state);
+    }
+    const suffix = searchParams.toString();
+    return `/notifications/admin/delivery-failures/summaries${suffix ? `?${suffix}` : ""}`;
+  },
+  deliveryFailureEvents: (limit?: number) =>
+    `/notifications/admin/delivery-failures/events${limit ? `?limit=${limit}` : ""}`,
+  acknowledgeDeliveryFailure: (failedDeliveryId: string) =>
+    `/notifications/admin/delivery-failures/${failedDeliveryId}/acknowledge`,
   deliveryFees: "/delivery-fees",
   listingPromotion: (listingId: string) => `/admin/listings/${listingId}/promotion`,
   orderById: (orderId: string) => `/orders/${orderId}`,
@@ -531,6 +601,182 @@ export function createApiClient(baseUrl: string) {
   ) {
     return get<TrustAlertSellerSummaryRead[]>(
       apiRoutes.trustAlertSellerSummaries(limit, action),
+      options,
+    );
+  }
+
+  function listAdminOrderExceptionSellerSummaries(
+    limit?: number,
+    action?: "acknowledged" | "cleared",
+    options?: RequestConfig,
+  ) {
+    return get<OrderExceptionSellerSummaryRead[]>(
+      apiRoutes.orderExceptionSellerSummaries(limit, action),
+      options,
+    );
+  }
+
+  function listAdminOrderExceptionEvents(limit?: number, options?: RequestConfig) {
+    return get<OrderExceptionEventRead[]>(apiRoutes.orderExceptionEvents(limit), options);
+  }
+
+  function listAdminBookingConflictSellerSummaries(
+    limit?: number,
+    action?: "acknowledged" | "cleared",
+    options?: RequestConfig,
+  ) {
+    return get<BookingConflictSellerSummaryRead[]>(
+      apiRoutes.bookingConflictSellerSummaries(limit, action),
+      options,
+    );
+  }
+
+  function listAdminBookingConflictEvents(limit?: number, options?: RequestConfig) {
+    return get<BookingConflictEventRead[]>(apiRoutes.bookingConflictEvents(limit), options);
+  }
+
+  function listAdminSubscriptionDowngradeSellerSummaries(
+    limit?: number,
+    state?: "active" | "acknowledged" | "all",
+    options?: RequestConfig,
+  ) {
+    return get<SubscriptionDowngradeSellerSummaryRead[]>(
+      apiRoutes.subscriptionDowngradeSellerSummaries(limit, state),
+      options,
+    );
+  }
+
+  function listAdminSubscriptionDowngradeEvents(limit?: number, options?: RequestConfig) {
+    return get<SubscriptionDowngradeEventRead[]>(apiRoutes.subscriptionDowngradeEvents(limit), options);
+  }
+
+  function acknowledgeAdminSubscriptionDowngrade(sellerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      apiRoutes.acknowledgeSubscriptionDowngrade(sellerId),
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminSubscriptionDowngradeAcknowledgement(
+    sellerId: string,
+    options: RequestConfig,
+  ) {
+    return del<NotificationDelivery[]>(
+      apiRoutes.acknowledgeSubscriptionDowngrade(sellerId),
+      options,
+    );
+  }
+
+  function acknowledgeAdminBookingConflict(sellerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      apiRoutes.acknowledgeBookingConflict(sellerId),
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminBookingConflictAcknowledgement(sellerId: string, options: RequestConfig) {
+    return del<NotificationDelivery[]>(apiRoutes.acknowledgeBookingConflict(sellerId), options);
+  }
+
+  function acknowledgeAdminOrderException(sellerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      apiRoutes.acknowledgeOrderException(sellerId),
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminOrderExceptionAcknowledgement(sellerId: string, options: RequestConfig) {
+    return del<NotificationDelivery[]>(apiRoutes.acknowledgeOrderException(sellerId), options);
+  }
+
+  function listAdminDeliveryFailureSummaries(
+    limit?: number,
+    state?: "active" | "acknowledged" | "all",
+    options?: RequestConfig,
+  ) {
+    return get<DeliveryFailureSummaryRead[]>(
+      apiRoutes.deliveryFailureSummaries(limit, state),
+      options,
+    );
+  }
+
+  function listAdminDeliveryFailureEvents(limit?: number, options?: RequestConfig) {
+    return get<DeliveryFailureEventRead[]>(apiRoutes.deliveryFailureEvents(limit), options);
+  }
+
+  function acknowledgeAdminDeliveryFailure(failedDeliveryId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      apiRoutes.acknowledgeDeliveryFailure(failedDeliveryId),
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminDeliveryFailureAcknowledgement(
+    failedDeliveryId: string,
+    options: RequestConfig,
+  ) {
+    return del<NotificationDelivery[]>(
+      apiRoutes.acknowledgeDeliveryFailure(failedDeliveryId),
+      options,
+    );
+  }
+
+  function listAdminInventoryAlertSummaries(
+    limit?: number,
+    state?: "active" | "acknowledged" | "all",
+    options?: RequestConfig,
+  ) {
+    const searchParams = new URLSearchParams();
+    if (typeof limit === "number") {
+      searchParams.set("limit", String(limit));
+    }
+    if (state) {
+      searchParams.set("state", state);
+    }
+
+    const query = searchParams.toString();
+    return get<InventoryAlertSummaryRead[]>(
+      query ? `/notifications/admin/inventory-alerts/summaries?${query}` : "/notifications/admin/inventory-alerts/summaries",
+      options,
+    );
+  }
+
+  function listAdminInventoryAlertEvents(limit?: number, options?: RequestConfig) {
+    const searchParams = new URLSearchParams();
+    if (typeof limit === "number") {
+      searchParams.set("limit", String(limit));
+    }
+
+    const query = searchParams.toString();
+    return get<InventoryAlertEventRead[]>(
+      query ? `/notifications/admin/inventory-alerts/events?${query}` : "/notifications/admin/inventory-alerts/events",
+      options,
+    );
+  }
+
+  function acknowledgeAdminInventoryAlert(
+    sellerId: string,
+    listingId: string,
+    options: RequestConfig,
+  ) {
+    return post<NotificationDelivery[]>(
+      `/notifications/admin/inventory-alerts/${sellerId}/${listingId}/acknowledge`,
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminInventoryAlertAcknowledgement(
+    sellerId: string,
+    listingId: string,
+    options: RequestConfig,
+  ) {
+    return del<NotificationDelivery[]>(
+      `/notifications/admin/inventory-alerts/${sellerId}/${listingId}/acknowledge`,
       options,
     );
   }
@@ -1010,6 +1256,26 @@ export function createApiClient(baseUrl: string) {
     clearAdminTrustAlertAcknowledgement,
     listAdminTrustAlertEvents,
     listAdminTrustAlertSellerSummaries,
+    listAdminOrderExceptionSellerSummaries,
+    listAdminOrderExceptionEvents,
+    acknowledgeAdminOrderException,
+    clearAdminOrderExceptionAcknowledgement,
+    listAdminSubscriptionDowngradeSellerSummaries,
+    listAdminSubscriptionDowngradeEvents,
+    acknowledgeAdminSubscriptionDowngrade,
+    clearAdminSubscriptionDowngradeAcknowledgement,
+    listAdminDeliveryFailureSummaries,
+    listAdminDeliveryFailureEvents,
+    acknowledgeAdminDeliveryFailure,
+    clearAdminDeliveryFailureAcknowledgement,
+    listAdminInventoryAlertSummaries,
+    listAdminInventoryAlertEvents,
+    acknowledgeAdminInventoryAlert,
+    clearAdminInventoryAlertAcknowledgement,
+    listAdminBookingConflictSellerSummaries,
+    listAdminBookingConflictEvents,
+    acknowledgeAdminBookingConflict,
+    clearAdminBookingConflictAcknowledgement,
     getMyReviewLookup,
     getListingById,
     getListingPriceInsight,

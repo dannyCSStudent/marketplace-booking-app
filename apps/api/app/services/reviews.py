@@ -41,6 +41,8 @@ ALLOWED_RESOLUTION_REASONS = {
     "insufficient_evidence",
 }
 
+REVIEW_RESPONSE_REMINDER_WINDOW_DAYS = 7
+
 
 def _serialize_review(row: dict) -> ReviewRead:
     return ReviewRead(
@@ -149,7 +151,6 @@ def _refresh_seller_review_metrics(*, seller_id: str) -> None:
         )
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
     review_count = len(review_rows)
     average_rating = (
         round(sum(row["rating"] for row in review_rows) / review_count, 2)
@@ -169,6 +170,164 @@ def _refresh_seller_review_metrics(*, seller_id: str) -> None:
         )
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def _queue_review_response_reminder_notifications(*, seller_id: str) -> None:
+    supabase = get_supabase_client()
+
+    try:
+        seller_row = supabase.select(
+            "seller_profiles",
+            query={
+                "select": "id,user_id,display_name,slug",
+                "id": f"eq.{seller_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+        pending_reviews = supabase.select(
+            "reviews",
+            query={
+                "select": "id,rating,comment,seller_response,seller_responded_at,is_hidden,created_at",
+                "seller_id": f"eq.{seller_id}",
+                "is_hidden": "eq.false",
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+        profile_row = supabase.select(
+            "profiles",
+            query={
+                "select": "id,email_notifications_enabled,push_notifications_enabled",
+                "id": f"eq.{seller_row['user_id']}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError:
+        return
+
+    pending_visible_reviews = [
+        review
+        for review in pending_reviews
+        if not review.get("seller_response") and not review.get("is_hidden")
+    ]
+    if not pending_visible_reviews:
+        return
+
+    def _parse_review_time(value: object) -> datetime:
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        return datetime.now(timezone.utc)
+
+    latest_pending_review = max(
+        pending_visible_reviews,
+        key=lambda review: _parse_review_time(review.get("created_at")),
+    )
+    latest_review_ids = ",".join(
+        review["id"]
+        for review in sorted(
+            pending_visible_reviews,
+            key=lambda review: _parse_review_time(review.get("created_at")),
+            reverse=True,
+        )[:3]
+    )
+    event_signature = "|".join(
+        [
+            seller_id,
+            str(len(pending_visible_reviews)),
+            str(latest_pending_review["id"]),
+            str(latest_pending_review.get("created_at") or ""),
+            latest_review_ids,
+        ]
+    )
+    event_id = f"review-response-reminder:{event_signature}"
+
+    try:
+        recent_rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "recipient_user_id,event_id",
+                "recipient_user_id": f"eq.{seller_row['user_id']}",
+                "order": "created_at.desc",
+                "limit": "100",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        return
+
+    if any(row.get("event_id") == event_id for row in recent_rows):
+        return
+
+    reminder_preview = latest_pending_review.get("comment") or "A buyer left a review that still needs your response."
+    subject = f"Review response reminder for {seller_row.get('display_name') or seller_row.get('slug')}"
+    body = f"You have {len(pending_visible_reviews)} review{'s' if len(pending_visible_reviews) != 1 else ''} waiting for a seller response."
+    html = (
+        f"<p>Review response reminder for <strong>{seller_row.get('display_name') or seller_row.get('slug')}</strong>.</p>"
+        f"<p><strong>Pending reviews:</strong> {len(pending_visible_reviews)}</p>"
+        f"<p><strong>Latest comment:</strong> {reminder_preview}</p>"
+        f"<p>{body}</p>"
+    )
+
+    deliveries: list[dict[str, object]] = []
+    payload = {
+        "alert_type": "review_response_reminder",
+        "seller_id": seller_id,
+        "seller_slug": seller_row.get("slug"),
+        "seller_display_name": seller_row.get("display_name"),
+        "pending_review_count": len(pending_visible_reviews),
+        "latest_review_id": latest_pending_review["id"],
+        "latest_review_rating": latest_pending_review.get("rating"),
+        "latest_review_comment": latest_pending_review.get("comment"),
+        "alert_signature": event_id,
+        "subject": subject,
+        "body": body,
+        "html": html,
+    }
+
+    if profile_row.get("email_notifications_enabled", True):
+        deliveries.append(
+            {
+                "recipient_user_id": seller_row["user_id"],
+                "transaction_kind": "review",
+                "transaction_id": seller_id,
+                "event_id": event_id,
+                "channel": "email",
+                "delivery_status": "queued",
+                "payload": payload,
+            }
+        )
+
+    if profile_row.get("push_notifications_enabled", True):
+        deliveries.append(
+            {
+                "recipient_user_id": seller_row["user_id"],
+                "transaction_kind": "review",
+                "transaction_id": seller_id,
+                "event_id": event_id,
+                "channel": "push",
+                "delivery_status": "queued",
+                "payload": payload,
+            }
+        )
+
+    if not deliveries:
+        return
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if inserted_rows:
+        try:
+            process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
 
 
 def create_review(current_user: CurrentUser, payload: ReviewCreate) -> ReviewRead:
@@ -226,6 +385,10 @@ def create_review(current_user: CurrentUser, payload: ReviewCreate) -> ReviewRea
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     _refresh_seller_review_metrics(seller_id=target["seller_id"])
+    try:
+        _queue_review_response_reminder_notifications(seller_id=target["seller_id"])
+    except Exception:
+        pass
     return _serialize_review(rows[0])
 
 
@@ -273,6 +436,10 @@ def update_review_seller_response(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
 
+    try:
+        _queue_review_response_reminder_notifications(seller_id=seller["id"])
+    except Exception:
+        pass
     return _serialize_review(rows[0])
 
 

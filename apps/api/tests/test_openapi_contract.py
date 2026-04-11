@@ -41,6 +41,15 @@ class OpenAPIContractTests(unittest.TestCase):
             "/notifications/admin/worker-health",
             "/notifications/admin/bulk-retry",
             "/notifications/admin/{delivery_id}/retry",
+            "/notifications/admin/delivery-failures/summaries",
+            "/notifications/admin/delivery-failures/events",
+            "/notifications/admin/delivery-failures/{failed_delivery_id}/acknowledge",
+            "/notifications/admin/inventory-alerts/summaries",
+            "/notifications/admin/inventory-alerts/events",
+            "/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge",
+            "/notifications/admin/subscription-downgrades/sellers",
+            "/notifications/admin/subscription-downgrades/events",
+            "/notifications/admin/subscription-downgrades/{seller_id}/acknowledge",
             "/notifications/{delivery_id}/retry",
             "/notifications/bulk-retry",
             "/admin/users",
@@ -70,6 +79,12 @@ class OpenAPIContractTests(unittest.TestCase):
             "NotificationDeliverySummaryRead",
             "NotificationWorkerHealthRead",
             "NotificationDeliveryBulkRetryResult",
+            "DeliveryFailureSummaryRead",
+            "DeliveryFailureEventRead",
+            "InventoryAlertSummaryRead",
+            "InventoryAlertEventRead",
+            "SubscriptionDowngradeSellerSummaryRead",
+            "SubscriptionDowngradeEventRead",
             "AdminUserRead",
         ]:
             self.assertIn(schema_name, components)
@@ -110,6 +125,18 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("get", paths["/notifications/admin/worker-health"])
         self.assertIn("post", paths["/notifications/admin/bulk-retry"])
         self.assertIn("post", paths["/notifications/admin/{delivery_id}/retry"])
+        self.assertIn("get", paths["/notifications/admin/delivery-failures/summaries"])
+        self.assertIn("get", paths["/notifications/admin/delivery-failures/events"])
+        self.assertIn("post", paths["/notifications/admin/delivery-failures/{failed_delivery_id}/acknowledge"])
+        self.assertIn("delete", paths["/notifications/admin/delivery-failures/{failed_delivery_id}/acknowledge"])
+        self.assertIn("get", paths["/notifications/admin/inventory-alerts/summaries"])
+        self.assertIn("get", paths["/notifications/admin/inventory-alerts/events"])
+        self.assertIn("post", paths["/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge"])
+        self.assertIn("delete", paths["/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge"])
+        self.assertIn("get", paths["/notifications/admin/subscription-downgrades/sellers"])
+        self.assertIn("get", paths["/notifications/admin/subscription-downgrades/events"])
+        self.assertIn("post", paths["/notifications/admin/subscription-downgrades/{seller_id}/acknowledge"])
+        self.assertIn("delete", paths["/notifications/admin/subscription-downgrades/{seller_id}/acknowledge"])
         self.assertIn("get", paths["/admin/users"])
         self.assertIn("get", paths["/admin/seller-trust/interventions"])
 

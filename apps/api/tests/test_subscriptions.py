@@ -125,6 +125,115 @@ class SubscriptionServiceTests(unittest.TestCase):
         self.assertEqual(fake_supabase.insert_calls[1][0], "seller_subscription_events")
         self.assertEqual(fake_supabase.insert_calls[1][1]["reason_code"], "manual_upgrade")
 
+    def test_assigning_lower_tier_queues_subscription_downgrade_alerts(self):
+        fake_supabase = _FakeSupabase(
+            select_results=[
+                {
+                    "id": "seller-1",
+                    "user_id": "seller-user-1",
+                    "display_name": "South Dallas Tamales",
+                    "slug": "south-dallas-tamales",
+                },
+                {
+                    "id": "tier-0",
+                    "code": "free",
+                    "name": "Free",
+                    "monthly_price_cents": 0,
+                    "perks_summary": None,
+                    "analytics_enabled": False,
+                    "priority_visibility": False,
+                    "premium_storefront": False,
+                    "is_active": True,
+                    "created_at": "2026-04-01T16:00:00Z",
+                },
+                {
+                    "id": "previous-subscription-1",
+                    "seller_id": "seller-1",
+                    "tier_id": "tier-1",
+                    "started_at": "2026-04-01T16:05:00Z",
+                    "ended_at": None,
+                    "is_active": True,
+                    "created_at": "2026-04-01T16:05:00Z",
+                    "seller_profiles": {"display_name": "South Dallas Tamales", "slug": "south-dallas-tamales"},
+                    "subscription_tiers": {
+                        "id": "tier-1",
+                        "code": "starter",
+                        "name": "Starter",
+                        "monthly_price_cents": 1900,
+                        "perks_summary": None,
+                        "analytics_enabled": True,
+                        "priority_visibility": False,
+                        "premium_storefront": False,
+                    },
+                },
+                {
+                    "id": "subscription-2",
+                    "seller_id": "seller-1",
+                    "tier_id": "tier-0",
+                    "started_at": "2026-04-07T16:05:00Z",
+                    "ended_at": None,
+                    "is_active": True,
+                    "created_at": "2026-04-07T16:05:00Z",
+                    "seller_profiles": {"display_name": "South Dallas Tamales", "slug": "south-dallas-tamales"},
+                    "subscription_tiers": {
+                        "id": "tier-0",
+                        "code": "free",
+                        "name": "Free",
+                        "monthly_price_cents": 0,
+                        "perks_summary": None,
+                        "analytics_enabled": False,
+                        "priority_visibility": False,
+                        "premium_storefront": False,
+                    },
+                },
+                [],
+                [
+                    {
+                        "id": "seller-user-1",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": True,
+                    },
+                    {
+                        "id": "admin-user-1",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": False,
+                    },
+                ],
+            ],
+            insert_results=[
+                [{"id": "subscription-2"}],
+                [{"id": "delivery-1"}],
+            ],
+        )
+
+        fake_settings = type(
+            "Settings",
+            (),
+            {
+                "admin_user_ids": ["admin-user-1"],
+                "admin_user_roles": {"admin-user-1": "monetization"},
+            },
+        )()
+
+        with (
+            patch("app.services.subscriptions.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.subscriptions.get_settings", return_value=fake_settings),
+            patch("app.services.subscriptions.process_notification_delivery_rows") as process_rows,
+        ):
+            subscription = assign_seller_subscription(
+                SellerSubscriptionAssign(
+                    seller_slug="south-dallas-tamales",
+                    tier_id="tier-0",
+                    reason_code="plan_reset",
+                ),
+                actor_user_id="admin-user-1",
+            )
+
+        self.assertEqual(subscription.tier_code, "free")
+        self.assertEqual(fake_supabase.insert_calls[2][0], "notification_deliveries")
+        self.assertEqual(fake_supabase.insert_calls[2][1][0]["payload"]["alert_type"], "subscription_downgrade")
+        process_rows.assert_called_once()
+
     def test_reads_my_active_seller_subscription(self):
         fake_supabase = _FakeSupabase(
             select_results=[
@@ -251,6 +360,8 @@ class _FakeSupabase:
     def insert(self, table, payload, *args, **kwargs):
         self.insert_calls.append((table, payload))
         if table == "seller_subscription_events":
+            return [payload]
+        if table == "notification_deliveries":
             return [payload]
         if not self._insert_results:
             raise AssertionError("Unexpected insert call")

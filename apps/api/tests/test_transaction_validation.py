@@ -6,9 +6,9 @@ from fastapi import HTTPException
 
 from app.dependencies.auth import CurrentUser
 from app.schemas.bookings import BookingCreate
-from app.schemas.orders import OrderCreate, OrderItemCreate
+from app.schemas.orders import OrderCreate, OrderItemCreate, OrderStatusUpdate
 from app.services.bookings import create_booking
-from app.services.orders import create_order
+from app.services.orders import create_order, update_order_status
 
 
 BUYER_USER = CurrentUser(id="buyer-user-id", email="buyer@example.com", access_token="buyer-token")
@@ -47,6 +47,135 @@ class OrderCreationValidationTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("does not support delivery", context.exception.detail)
         self.assertEqual(fake_supabase.insert_calls, 0)
+
+
+class OrderStatusValidationTests(unittest.TestCase):
+    def test_seller_cancellation_after_acceptance_queues_order_exception_alert(self):
+        current_user = CurrentUser(
+            id="seller-user-id",
+            email="seller@example.com",
+            access_token="seller-token",
+        )
+        current_order = {
+            "id": "order-1",
+            "buyer_id": "buyer-user-id",
+            "seller_id": "seller-profile-id",
+            "status": "confirmed",
+            "fulfillment": "pickup",
+            "subtotal_cents": 2500,
+            "total_cents": 2500,
+            "currency": "USD",
+            "delivery_fee_cents": 0,
+            "platform_fee_cents": 0,
+            "platform_fee_rate": "0",
+            "notes": "Need by Friday",
+            "buyer_browse_context": "catalog:featured",
+            "seller_response_note": None,
+            "order_items": [
+                {
+                    "id": "item-1",
+                    "listing_id": "listing-1",
+                    "quantity": 1,
+                    "unit_price_cents": 2500,
+                    "total_price_cents": 2500,
+                    "listings": {
+                        "title": "Tamales Box",
+                        "type": "product",
+                        "is_local_only": True,
+                    },
+                }
+            ],
+            "order_status_events": [
+                {
+                    "id": "event-1",
+                    "status": "confirmed",
+                    "actor_role": "buyer",
+                    "note": "Need by Friday",
+                    "created_at": "2026-04-07T15:00:00+00:00",
+                }
+            ],
+        }
+        updated_order = {
+            **current_order,
+            "status": "canceled",
+            "order_status_events": [
+                *current_order["order_status_events"],
+                {
+                    "id": "event-2",
+                    "status": "canceled",
+                    "actor_role": "seller",
+                    "note": "Seller could not fulfill the order.",
+                    "created_at": "2026-04-07T16:00:00+00:00",
+                },
+            ],
+        }
+        fake_supabase = _ValidationSupabase(
+            select_results=[
+                current_order,
+                {"id": "seller-profile-id", "user_id": "seller-user-id"},
+                {
+                    "id": "seller-profile-id",
+                    "slug": "tamales-by-lupe",
+                    "display_name": "Tamales by Lupe",
+                    "user_id": "seller-user-id",
+                },
+                [
+                    {
+                        "id": "seller-user-id",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": True,
+                    },
+                    {
+                        "id": "admin-support-id",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": True,
+                    },
+                    {
+                        "id": "admin-owner-id",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": True,
+                    },
+                ],
+                [],
+                updated_order,
+            ],
+            insert_results=[[{"id": "event-2"}], [{"id": "delivery-1"}, {"id": "delivery-2"}]],
+            update_results=[[updated_order]],
+        )
+
+        settings = type(
+            "Settings",
+            (),
+            {
+                "admin_user_ids": ["admin-support-id", "admin-owner-id"],
+                "admin_user_roles": {
+                    "admin-support-id": "support",
+                    "admin-owner-id": "owner",
+                },
+            },
+        )()
+
+        with (
+            patch("app.services.orders.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.orders.get_settings", return_value=settings),
+            patch("app.services.orders.queue_transaction_notification_jobs") as mock_queue,
+            patch("app.services.orders.process_notification_delivery_rows"),
+        ):
+            result = update_order_status(
+                current_user,
+                "order-1",
+                OrderStatusUpdate(status="canceled", seller_response_note="Seller could not fulfill the order."),
+            )
+
+        self.assertEqual(result.status, "canceled")
+        self.assertEqual(fake_supabase.insert_calls, 2)
+        self.assertEqual(fake_supabase.update_calls, 1)
+        self.assertEqual(mock_queue.call_count, 1)
+        self.assertEqual(fake_supabase.insert_payloads[1][0]["payload"]["alert_type"], "order_exception")
+        self.assertEqual(
+            {delivery["recipient_user_id"] for delivery in fake_supabase.insert_payloads[1]},
+            {"seller-user-id", "admin-support-id", "admin-owner-id"},
+        )
 
 
 class BookingCreationValidationTests(unittest.TestCase):
@@ -288,11 +417,14 @@ class BookingCreationValidationTests(unittest.TestCase):
 
 
 class _ValidationSupabase:
-    def __init__(self, *, select_results, insert_results=None):
+    def __init__(self, *, select_results, insert_results=None, update_results=None):
         self._select_results = list(select_results)
         self._insert_results = list(insert_results or [])
+        self._update_results = list(update_results or [])
         self.insert_calls = 0
+        self.update_calls = 0
         self.insert_payloads = []
+        self.update_payloads = []
 
     def select(self, *args, **kwargs):
         if not self._select_results:
@@ -305,6 +437,14 @@ class _ValidationSupabase:
         self.insert_payloads.append(payload)
         if self._insert_results:
             return self._insert_results.pop(0)
+        return []
+
+    def update(self, *args, **kwargs):
+        self.update_calls += 1
+        payload = args[1] if len(args) > 1 else kwargs.get("values")
+        self.update_payloads.append(payload)
+        if self._update_results:
+            return self._update_results.pop(0)
         return []
 
 

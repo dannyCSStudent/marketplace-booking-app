@@ -82,6 +82,16 @@ type ReviewResponseAiState = {
   suggestion: ReviewResponseAiAssistSuggestion | null;
 };
 
+type ReviewResponseReminderActivityEntry = {
+  id: string;
+  createdAt: string;
+  reviewId: string;
+  reviewRating: number;
+  reviewComment: string;
+  reminderCount: number;
+  latestCreatedAt: string;
+};
+
 type ListingPriceInsightState = {
   loading: boolean;
   error: string | null;
@@ -147,6 +157,57 @@ type InventoryAlertGroup = {
   deliveries: NotificationDelivery[];
 };
 
+type BookingConflictGroup = {
+  signature: string;
+  bookingId: string;
+  listingId: string;
+  listingTitle: string;
+  listingSlug: string;
+  latestCreatedAt: string;
+  deliveries: NotificationDelivery[];
+};
+
+type BookingConflictActivityEntry = {
+  id: string;
+  createdAt: string;
+  bookingId: string;
+  listingId: string;
+  listingTitle: string;
+  conflictCount: number;
+  latestCreatedAt: string;
+};
+
+type DeliveryFailureActivityEntry = {
+  id: string;
+  createdAt: string;
+  failedDeliveryId: string;
+  transactionKind: string;
+  transactionId: string;
+  failureReason: string;
+  latestCreatedAt: string;
+};
+
+type SubscriptionDowngradeActivityEntry = {
+  id: string;
+  createdAt: string;
+  deliveryId: string;
+  sellerId: string;
+  previousTierName: string;
+  currentTierName: string;
+  reasonCode: string;
+  latestCreatedAt: string;
+};
+
+type OrderExceptionActivityEntry = {
+  id: string;
+  createdAt: string;
+  deliveryId: string;
+  orderId: string;
+  orderStatus: string;
+  exceptionReason: string;
+  latestCreatedAt: string;
+};
+
 type SellerInventoryAlertActivityEntry = {
   id: string;
   createdAt: string;
@@ -174,6 +235,22 @@ const SELLER_INVENTORY_ALERT_ACTIVITY_KEY = "seller_inventory_alert_activity";
 const SELLER_INVENTORY_ALERT_ACTIVITY_FILTER_KEY = "seller_inventory_alert_activity_filter";
 const SELLER_INVENTORY_ALERT_ACTIVITY_COLLAPSED_KEY =
   "seller_inventory_alert_activity_collapsed";
+const SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY =
+  "seller_review_response_reminder_activity";
+const SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_COLLAPSED_KEY =
+  "seller_review_response_reminder_activity_collapsed";
+const SELLER_BOOKING_CONFLICT_ACTIVITY_KEY = "seller_booking_conflict_activity";
+const SELLER_BOOKING_CONFLICT_ACTIVITY_COLLAPSED_KEY =
+  "seller_booking_conflict_activity_collapsed";
+const SELLER_DELIVERY_FAILURE_ACTIVITY_KEY = "seller_delivery_failure_activity";
+const SELLER_DELIVERY_FAILURE_ACTIVITY_COLLAPSED_KEY =
+  "seller_delivery_failure_activity_collapsed";
+const SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_KEY = "seller_subscription_downgrade_activity";
+const SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_COLLAPSED_KEY =
+  "seller_subscription_downgrade_activity_collapsed";
+const SELLER_ORDER_EXCEPTION_ACTIVITY_KEY = "seller_order_exception_activity";
+const SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY =
+  "seller_order_exception_activity_collapsed";
 const SELLER_DELIVERY_ALERT_FILTER_KEY = "seller_delivery_alert_filter";
 
 function isExpiredAuthError(error: unknown) {
@@ -929,6 +1006,26 @@ function getListingSupportPressure(input: {
   return null;
 }
 
+function getSellerReviewPressureToneClass(riskLevel: string | null) {
+  if (riskLevel === "critical") {
+    return "border-red-200 bg-red-50/50 text-red-700";
+  }
+
+  if (riskLevel === "elevated") {
+    return "border-rose-200 bg-rose-50/50 text-rose-700";
+  }
+
+  if (riskLevel === "watch") {
+    return "border-amber-200 bg-amber-50/50 text-amber-800";
+  }
+
+  if (riskLevel === "low") {
+    return "border-emerald-200 bg-emerald-50/50 text-emerald-700";
+  }
+
+  return "border-border bg-background/45 text-foreground";
+}
+
 function getListingSupportPressureLaneMode(input: {
   failedDeliveryCount: number;
   queuedDeliveryCount: number;
@@ -1136,7 +1233,16 @@ export function SellerWorkspace() {
     () => (searchParams.get("activityRecovery") as "all" | "easing") ?? "all",
   );
   type DeliveryStatusFilter = "all" | "queued" | "sent" | "failed";
-  type DeliveryAlertFilter = "all" | "inventory" | "trust" | "booking" | "other";
+type DeliveryAlertFilter =
+    | "all"
+    | "inventory"
+    | "trust"
+    | "review_response_reminder"
+    | "booking"
+    | "order_exception"
+    | "subscription_downgrade"
+    | "delivery_failure"
+    | "other";
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<DeliveryStatusFilter>(
     () => (searchParams.get("deliveryStatus") as DeliveryStatusFilter) ?? "all",
   );
@@ -1206,6 +1312,61 @@ export function SellerWorkspace() {
   const [collapsedInventoryAlertActivityGroups, setCollapsedInventoryAlertActivityGroups] =
     useState<Record<InventoryAlertActivityGroup, boolean>>({
       Recent: false,
+    });
+  const [reviewResponseReminderActivity, setReviewResponseReminderActivity] = useState<
+    ReviewResponseReminderActivityEntry[]
+  >([]);
+  const [collapsedReviewResponseReminderActivityGroups, setCollapsedReviewResponseReminderActivityGroups] =
+    useState<{
+      Today: boolean;
+      Earlier: boolean;
+    }>({
+      Today: false,
+      Earlier: false,
+    });
+  const [bookingConflictActivity, setBookingConflictActivity] = useState<
+    BookingConflictActivityEntry[]
+  >([]);
+  const [collapsedBookingConflictActivityGroups, setCollapsedBookingConflictActivityGroups] =
+    useState<{
+      Today: boolean;
+      Earlier: boolean;
+    }>({
+      Today: false,
+      Earlier: false,
+    });
+  const [deliveryFailureActivity, setDeliveryFailureActivity] = useState<
+    DeliveryFailureActivityEntry[]
+  >([]);
+  const [collapsedDeliveryFailureActivityGroups, setCollapsedDeliveryFailureActivityGroups] =
+    useState<{
+      Today: boolean;
+      Earlier: boolean;
+    }>({
+      Today: false,
+      Earlier: false,
+    });
+  const [subscriptionDowngradeActivity, setSubscriptionDowngradeActivity] = useState<
+    SubscriptionDowngradeActivityEntry[]
+  >([]);
+  const [collapsedSubscriptionDowngradeActivityGroups, setCollapsedSubscriptionDowngradeActivityGroups] =
+    useState<{
+      Today: boolean;
+      Earlier: boolean;
+    }>({
+      Today: false,
+      Earlier: false,
+    });
+  const [orderExceptionActivity, setOrderExceptionActivity] = useState<OrderExceptionActivityEntry[]>(
+    [],
+  );
+  const [collapsedOrderExceptionActivityGroups, setCollapsedOrderExceptionActivityGroups] =
+    useState<{
+      Today: boolean;
+      Earlier: boolean;
+    }>({
+      Today: false,
+      Earlier: false,
     });
   const [watchlistActivity, setWatchlistActivity] = useState<SellerWatchlistActivityEntry[]>([]);
 
@@ -1345,10 +1506,21 @@ export function SellerWorkspace() {
     window.localStorage.removeItem(SELLER_ACCESS_TOKEN_KEY);
     window.localStorage.removeItem(SELLER_REFRESH_TOKEN_KEY);
     window.localStorage.removeItem(SELLER_NOTIFICATIONS_SEEN_AT_KEY);
+    window.sessionStorage.removeItem(SELLER_BOOKING_CONFLICT_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_BOOKING_CONFLICT_ACTIVITY_COLLAPSED_KEY);
+    window.sessionStorage.removeItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_COLLAPSED_KEY);
+    window.sessionStorage.removeItem(SELLER_DELIVERY_FAILURE_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_DELIVERY_FAILURE_ACTIVITY_COLLAPSED_KEY);
     setWorkspace(null);
     setAccountProfile(null);
     setNotificationDeliveries([]);
     setNotificationsSeenAt(null);
+    setReviewResponseReminderActivity([]);
+    setCollapsedReviewResponseReminderActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
     setListingDrafts({});
     setResponseNotes({});
     setReviewResponseDrafts({});
@@ -1662,6 +1834,201 @@ export function SellerWorkspace() {
     }
 
     try {
+      const stored = window.sessionStorage.getItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as ReviewResponseReminderActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setReviewResponseReminderActivity(parsed.slice(0, 6));
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedCollapsed = window.sessionStorage.getItem(
+        SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedCollapsed) {
+        const parsed = JSON.parse(storedCollapsed) as { Today?: boolean; Earlier?: boolean };
+        setCollapsedReviewResponseReminderActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_COLLAPSED_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(SELLER_BOOKING_CONFLICT_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as BookingConflictActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setBookingConflictActivity(parsed.slice(0, 6));
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_BOOKING_CONFLICT_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedCollapsed = window.sessionStorage.getItem(
+        SELLER_BOOKING_CONFLICT_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedCollapsed) {
+        const parsed = JSON.parse(storedCollapsed) as { Today?: boolean; Earlier?: boolean };
+        setCollapsedBookingConflictActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_BOOKING_CONFLICT_ACTIVITY_COLLAPSED_KEY);
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(SELLER_DELIVERY_FAILURE_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as DeliveryFailureActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setDeliveryFailureActivity(parsed.slice(0, 6));
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_DELIVERY_FAILURE_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedCollapsed = window.sessionStorage.getItem(
+        SELLER_DELIVERY_FAILURE_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedCollapsed) {
+        const parsed = JSON.parse(storedCollapsed) as { Today?: boolean; Earlier?: boolean };
+        setCollapsedDeliveryFailureActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_DELIVERY_FAILURE_ACTIVITY_COLLAPSED_KEY);
+    }
+
+    try {
+      const storedOrderExceptionActivity = window.sessionStorage.getItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_KEY,
+      );
+      if (storedOrderExceptionActivity) {
+        const parsed = JSON.parse(storedOrderExceptionActivity) as OrderExceptionActivityEntry[];
+        if (Array.isArray(parsed)) {
+          setOrderExceptionActivity(parsed.slice(0, 6));
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_ORDER_EXCEPTION_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedOrderExceptionCollapsed = window.sessionStorage.getItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedOrderExceptionCollapsed) {
+        const parsed = JSON.parse(storedOrderExceptionCollapsed) as {
+          Today?: boolean;
+          Earlier?: boolean;
+        };
+        setCollapsedOrderExceptionActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY);
+    }
+
+    try {
+      const storedSubscriptionDowngradeActivity = window.sessionStorage.getItem(
+        SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_KEY,
+      );
+      if (storedSubscriptionDowngradeActivity) {
+        const parsed = JSON.parse(storedSubscriptionDowngradeActivity) as SubscriptionDowngradeActivityEntry[];
+        if (Array.isArray(parsed)) {
+          setSubscriptionDowngradeActivity(parsed.slice(0, 6));
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedSubscriptionDowngradeCollapsed = window.sessionStorage.getItem(
+        SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedSubscriptionDowngradeCollapsed) {
+        const parsed = JSON.parse(storedSubscriptionDowngradeCollapsed) as {
+          Today?: boolean;
+          Earlier?: boolean;
+        };
+        setCollapsedSubscriptionDowngradeActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_COLLAPSED_KEY);
+    }
+
+    try {
+      const storedOrderExceptionActivity = window.sessionStorage.getItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_KEY,
+      );
+      if (storedOrderExceptionActivity) {
+        const parsed = JSON.parse(storedOrderExceptionActivity) as OrderExceptionActivityEntry[];
+        if (Array.isArray(parsed)) {
+          setOrderExceptionActivity(parsed.slice(0, 6));
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_ORDER_EXCEPTION_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedOrderExceptionCollapsed = window.sessionStorage.getItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedOrderExceptionCollapsed) {
+        const parsed = JSON.parse(storedOrderExceptionCollapsed) as {
+          Today?: boolean;
+          Earlier?: boolean;
+        };
+        setCollapsedOrderExceptionActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
       const stored = window.sessionStorage.getItem(SELLER_WATCHLIST_ACTIVITY_KEY);
       if (!stored) {
         return;
@@ -1772,6 +2139,8 @@ export function SellerWorkspace() {
       storedDeliveryAlertFilter === "all" ||
       storedDeliveryAlertFilter === "inventory" ||
       storedDeliveryAlertFilter === "trust" ||
+      storedDeliveryAlertFilter === "order_exception" ||
+      storedDeliveryAlertFilter === "subscription_downgrade" ||
       storedDeliveryAlertFilter === "other"
     ) {
       setDeliveryAlertFilter(storedDeliveryAlertFilter);
@@ -1781,6 +2150,8 @@ export function SellerWorkspace() {
         storedFilter === "all" ||
         storedFilter === "inventory" ||
         storedFilter === "trust" ||
+        storedFilter === "order_exception" ||
+        storedFilter === "subscription_downgrade" ||
         storedFilter === "other"
       ) {
         setDeliveryAlertFilter(storedFilter);
@@ -1872,6 +2243,186 @@ export function SellerWorkspace() {
       JSON.stringify(inventoryAlertActivity.slice(0, 6)),
     );
   }, [inventoryAlertActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY,
+        JSON.stringify(reviewResponseReminderActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [reviewResponseReminderActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_COLLAPSED_KEY,
+        JSON.stringify(collapsedReviewResponseReminderActivityGroups),
+      );
+    } catch {
+      // ignore
+    }
+  }, [collapsedReviewResponseReminderActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_BOOKING_CONFLICT_ACTIVITY_KEY,
+        JSON.stringify(bookingConflictActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [bookingConflictActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_BOOKING_CONFLICT_ACTIVITY_COLLAPSED_KEY,
+        JSON.stringify(collapsedBookingConflictActivityGroups),
+      );
+    } catch {
+      // ignore
+    }
+  }, [collapsedBookingConflictActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_DELIVERY_FAILURE_ACTIVITY_KEY,
+        JSON.stringify(deliveryFailureActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [deliveryFailureActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+      SELLER_DELIVERY_FAILURE_ACTIVITY_COLLAPSED_KEY,
+      JSON.stringify(collapsedDeliveryFailureActivityGroups),
+    );
+    } catch {
+      // ignore
+    }
+  }, [collapsedDeliveryFailureActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_KEY,
+        JSON.stringify(orderExceptionActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [orderExceptionActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY,
+        JSON.stringify(collapsedOrderExceptionActivityGroups),
+      );
+    } catch {
+      // ignore
+    }
+  }, [collapsedOrderExceptionActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_KEY,
+        JSON.stringify(orderExceptionActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [orderExceptionActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY,
+        JSON.stringify(collapsedOrderExceptionActivityGroups),
+      );
+    } catch {
+      // ignore
+    }
+  }, [collapsedOrderExceptionActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_KEY,
+        JSON.stringify(subscriptionDowngradeActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [subscriptionDowngradeActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_COLLAPSED_KEY,
+        JSON.stringify(collapsedSubscriptionDowngradeActivityGroups),
+      );
+    } catch {
+      // ignore
+    }
+  }, [collapsedSubscriptionDowngradeActivityGroups]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2643,6 +3194,49 @@ export function SellerWorkspace() {
     }));
   }
 
+  function recordReviewResponseReminderActivity(review: ReviewRead) {
+    setReviewResponseReminderActivity((current) => {
+      const nextEntry: ReviewResponseReminderActivityEntry = {
+        id: `${review.id}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        reviewId: review.id,
+        reviewRating: review.rating,
+        reviewComment: String(review.comment ?? "Buyer left a rating without a written comment.").trim(),
+        reminderCount: reviewResponseReminderDeliveryCount,
+        latestCreatedAt: review.created_at,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter(
+          (entry) => entry.reviewId !== review.id || entry.latestCreatedAt !== review.created_at,
+        ),
+      ].slice(0, 6);
+    });
+  }
+
+  function openReviewResponseReminder(review: ReviewRead) {
+    recordReviewResponseReminderActivity(review);
+    document.getElementById("seller-recent-reviews")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  function clearReviewResponseReminderActivity() {
+    setReviewResponseReminderActivity([]);
+    setCollapsedReviewResponseReminderActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_COLLAPSED_KEY);
+  }
+
   function saveReviewResponse(review: ReviewRead) {
     executeSellerApiAction<Profile>({
       missingAccessTokenMessage: "Sign in again before responding to reviews.",
@@ -2665,6 +3259,7 @@ export function SellerWorkspace() {
   }
 
   function requestReviewResponseAiAssist(review: ReviewRead) {
+    recordReviewResponseReminderActivity(review);
     executeSellerApiAction<ReviewResponseAiAssistResponse>({
       missingAccessTokenMessage: "Sign in again before generating a review reply.",
       errorMessage: "Unable to generate response suggestion",
@@ -2711,6 +3306,25 @@ export function SellerWorkspace() {
         })),
       execute: (accessToken) => api.requestReviewResponseAiAssist(review.id, { accessToken }),
     });
+  }
+
+  function replayReviewResponseReminderActivity(entry: ReviewResponseReminderActivityEntry) {
+    const review = workspace?.reviews.find((candidate) => candidate.id === entry.reviewId);
+    if (review) {
+      recordReviewResponseReminderActivity(review);
+    }
+
+    document.getElementById("seller-recent-reviews")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  function toggleReviewResponseReminderActivityGroup(group: "Today" | "Earlier") {
+    setCollapsedReviewResponseReminderActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
   }
 
   function requestOrderResponseAiAssist(order: Order) {
@@ -3584,14 +4198,42 @@ export function SellerWorkspace() {
           if (deliveryAlertFilter === "trust" && deliveryAlertType !== "seller_trust_intervention") {
             return false;
           }
+          if (
+            deliveryAlertFilter === "review_response_reminder" &&
+            deliveryAlertType !== "review_response_reminder"
+          ) {
+            return false;
+          }
           if (deliveryAlertFilter === "booking" && deliveryAlertType !== "booking_conflict") {
+            return false;
+          }
+          if (
+            deliveryAlertFilter === "order_exception" &&
+            deliveryAlertType !== "order_exception"
+          ) {
+            return false;
+          }
+          if (
+            deliveryAlertFilter === "subscription_downgrade" &&
+            deliveryAlertType !== "subscription_downgrade"
+          ) {
+            return false;
+          }
+          if (
+            deliveryAlertFilter === "delivery_failure" &&
+            deliveryAlertType !== "delivery_failure"
+          ) {
             return false;
           }
           if (
             deliveryAlertFilter === "other" &&
             (deliveryAlertType === "inventory_alert" ||
               deliveryAlertType === "seller_trust_intervention" ||
-              deliveryAlertType === "booking_conflict")
+              deliveryAlertType === "review_response_reminder" ||
+              deliveryAlertType === "booking_conflict" ||
+              deliveryAlertType === "order_exception" ||
+              deliveryAlertType === "subscription_downgrade" ||
+              deliveryAlertType === "delivery_failure")
           ) {
             return false;
           }
@@ -3623,11 +4265,52 @@ export function SellerWorkspace() {
       ).length,
     [notificationDeliveries],
   );
+  const reviewResponseReminderDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "review_response_reminder",
+      ).length,
+    [notificationDeliveries],
+  );
   const bookingConflictAlertDeliveryCount = useMemo(
     () =>
       notificationDeliveries.filter(
         (delivery) => delivery.payload?.alert_type === "booking_conflict",
       ).length,
+    [notificationDeliveries],
+  );
+  const orderExceptionAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "order_exception",
+      ).length,
+    [notificationDeliveries],
+  );
+  const latestOrderExceptionDelivery = useMemo(
+    () =>
+      notificationDeliveries.find((delivery) => delivery.payload?.alert_type === "order_exception") ??
+      null,
+    [notificationDeliveries],
+  );
+  const subscriptionDowngradeAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "subscription_downgrade",
+      ).length,
+    [notificationDeliveries],
+  );
+  const deliveryFailureAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "delivery_failure",
+      ).length,
+    [notificationDeliveries],
+  );
+  const latestSubscriptionDowngradeDelivery = useMemo(
+    () =>
+      notificationDeliveries.find(
+        (delivery) => delivery.payload?.alert_type === "subscription_downgrade",
+      ) ?? null,
     [notificationDeliveries],
   );
   const otherAlertDeliveryCount = useMemo(
@@ -3638,7 +4321,11 @@ export function SellerWorkspace() {
           Boolean(alertType) &&
           alertType !== "inventory_alert" &&
           alertType !== "seller_trust_intervention" &&
-          alertType !== "booking_conflict"
+          alertType !== "review_response_reminder" &&
+          alertType !== "booking_conflict" &&
+          alertType !== "order_exception" &&
+          alertType !== "subscription_downgrade" &&
+          alertType !== "delivery_failure"
         );
       }).length,
     [notificationDeliveries],
@@ -3776,6 +4463,304 @@ export function SellerWorkspace() {
       return acc;
     }, {});
   }, [inventoryAlertGroups]);
+  const bookingConflictGroups = useMemo(() => {
+    const groupedDeliveries = new Map<string, BookingConflictGroup>();
+
+    notificationDeliveries
+      .filter((delivery) => delivery.payload?.alert_type === "booking_conflict")
+      .forEach((delivery) => {
+        const payload = delivery.payload ?? {};
+        const signature = String(
+          payload.alert_signature ??
+            `${payload.booking_id ?? delivery.transaction_id}:${payload.listing_id ?? delivery.transaction_id}`,
+        );
+        const bookingId = String(payload.booking_id ?? delivery.transaction_id ?? "").trim();
+        const listingId = String(payload.listing_id ?? delivery.transaction_id ?? "").trim();
+        const listingTitle = String(payload.listing_title ?? "Booking conflict").trim();
+        const listingSlug = String(payload.listing_slug ?? "").trim();
+        const existing = groupedDeliveries.get(signature);
+        if (existing) {
+          existing.deliveries.push(delivery);
+          if (new Date(delivery.created_at).getTime() > new Date(existing.latestCreatedAt).getTime()) {
+            existing.latestCreatedAt = delivery.created_at;
+          }
+          return;
+        }
+
+        groupedDeliveries.set(signature, {
+          signature,
+          bookingId,
+          listingId,
+          listingTitle,
+          listingSlug,
+          latestCreatedAt: delivery.created_at,
+          deliveries: [delivery],
+        });
+      });
+
+    return [...groupedDeliveries.values()].sort(
+      (left, right) =>
+        new Date(right.latestCreatedAt).getTime() - new Date(left.latestCreatedAt).getTime(),
+    );
+  }, [notificationDeliveries]);
+  const bookingConflictSummaryByListingId = useMemo(() => {
+    return bookingConflictGroups.reduce<Record<string, { count: number; latestCreatedAt: string }>>(
+      (acc, group) => {
+        const current = acc[group.listingId];
+        if (!current) {
+          acc[group.listingId] = {
+            count: group.deliveries.length,
+            latestCreatedAt: group.latestCreatedAt,
+          };
+          return acc;
+        }
+
+        acc[group.listingId] = {
+          count: current.count + group.deliveries.length,
+          latestCreatedAt:
+            new Date(group.latestCreatedAt).getTime() > new Date(current.latestCreatedAt).getTime()
+              ? group.latestCreatedAt
+              : current.latestCreatedAt,
+        };
+        return acc;
+      },
+      {},
+    );
+  }, [bookingConflictGroups]);
+  const filteredBookingConflictGroups = useMemo(
+    () =>
+      bookingConflictGroups
+        .filter((group) => matchesDeliveryRecency(group.latestCreatedAt, deliveryRecencyFilter))
+        .filter((group) => {
+          if (deliveryStatusFilter === "all") {
+            return true;
+          }
+          return group.deliveries.some((delivery) => delivery.delivery_status === deliveryStatusFilter);
+        })
+        .slice(0, 4),
+    [bookingConflictGroups, deliveryRecencyFilter, deliveryStatusFilter],
+  );
+  const latestBookingConflictGroup = filteredBookingConflictGroups[0] ?? null;
+  const bookingConflictQueuedCount = useMemo(
+    () =>
+      bookingConflictGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "queued").length,
+        0,
+      ),
+    [bookingConflictGroups],
+  );
+  const bookingConflictSentCount = useMemo(
+    () =>
+      bookingConflictGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "sent").length,
+        0,
+      ),
+    [bookingConflictGroups],
+  );
+  const bookingConflictFailedCount = useMemo(
+    () =>
+      bookingConflictGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "failed").length,
+        0,
+      ),
+    [bookingConflictGroups],
+  );
+  const deliveryFailureGroups = useMemo(() => {
+    const groupedDeliveries = new Map<string, NotificationDelivery[]>();
+
+    notificationDeliveries
+      .filter((delivery) => delivery.payload?.alert_type === "delivery_failure")
+      .forEach((delivery) => {
+        const payload = delivery.payload ?? {};
+        const failedDeliveryId = String(payload.failed_delivery_id ?? delivery.transaction_id ?? "").trim();
+        if (!failedDeliveryId) {
+          return;
+        }
+
+        const current = groupedDeliveries.get(failedDeliveryId);
+        if (current) {
+          current.push(delivery);
+          return;
+        }
+
+        groupedDeliveries.set(failedDeliveryId, [delivery]);
+      });
+
+    return [...groupedDeliveries.entries()]
+      .map(([failedDeliveryId, deliveries]) => {
+        const sortedDeliveries = [...deliveries].sort(
+          (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+        );
+        const latestDelivery = sortedDeliveries[0];
+        const payload = latestDelivery?.payload ?? {};
+
+        return {
+          failedDeliveryId,
+          transactionKind: String(latestDelivery?.transaction_kind ?? "delivery"),
+          transactionId: String(latestDelivery?.transaction_id ?? failedDeliveryId),
+          failureReason: String(
+            payload.failed_delivery_reason ?? latestDelivery?.failure_reason ?? "Unknown delivery failure",
+          ),
+          latestCreatedAt: latestDelivery?.created_at ?? new Date(0).toISOString(),
+          deliveries: sortedDeliveries,
+        };
+      })
+      .sort(
+        (left, right) =>
+          new Date(right.latestCreatedAt).getTime() - new Date(left.latestCreatedAt).getTime(),
+      );
+  }, [notificationDeliveries]);
+  const latestDeliveryFailureGroup = deliveryFailureGroups[0] ?? null;
+  const deliveryFailureQueuedCount = useMemo(
+    () =>
+      deliveryFailureGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "queued").length,
+        0,
+      ),
+    [deliveryFailureGroups],
+  );
+  const deliveryFailureSentCount = useMemo(
+    () =>
+      deliveryFailureGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "sent").length,
+        0,
+      ),
+    [deliveryFailureGroups],
+  );
+  const deliveryFailureFailedCount = useMemo(
+    () =>
+      deliveryFailureGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "failed").length,
+        0,
+      ),
+    [deliveryFailureGroups],
+  );
+  const filteredDeliveryFailureGroups = useMemo(
+    () =>
+      deliveryFailureGroups
+        .filter((group) => matchesDeliveryRecency(group.latestCreatedAt, deliveryRecencyFilter))
+        .filter((group) => {
+          if (deliveryStatusFilter === "all") {
+            return true;
+          }
+
+          return group.deliveries.some((delivery) => delivery.delivery_status === deliveryStatusFilter);
+        })
+        .slice(0, 4),
+    [deliveryFailureGroups, deliveryRecencyFilter, deliveryStatusFilter],
+  );
+  const filteredDeliveryFailureActivity = useMemo(
+    () => deliveryFailureActivity,
+    [deliveryFailureActivity],
+  );
+  const groupedDeliveryFailureActivity = useMemo(
+    () =>
+      filteredDeliveryFailureActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as DeliveryFailureActivityEntry[],
+          Earlier: [] as DeliveryFailureActivityEntry[],
+        },
+      ),
+    [filteredDeliveryFailureActivity],
+  );
+  const hasEarlierDeliveryFailureActivity = groupedDeliveryFailureActivity.Earlier.length > 0;
+  const canCollapseEarlierDeliveryFailureActivity =
+    hasEarlierDeliveryFailureActivity && !collapsedDeliveryFailureActivityGroups.Earlier;
+  const canExpandAllDeliveryFailureActivity =
+    (groupedDeliveryFailureActivity.Today.length > 0 && collapsedDeliveryFailureActivityGroups.Today) ||
+    (groupedDeliveryFailureActivity.Earlier.length > 0 &&
+      collapsedDeliveryFailureActivityGroups.Earlier);
+  const filteredOrderExceptionActivity = useMemo(
+    () => orderExceptionActivity,
+    [orderExceptionActivity],
+  );
+  const groupedOrderExceptionActivity = useMemo(
+    () =>
+      filteredOrderExceptionActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as OrderExceptionActivityEntry[],
+          Earlier: [] as OrderExceptionActivityEntry[],
+        },
+      ),
+    [filteredOrderExceptionActivity],
+  );
+  const hasEarlierOrderExceptionActivity = groupedOrderExceptionActivity.Earlier.length > 0;
+  const canCollapseEarlierOrderExceptionActivity =
+    hasEarlierOrderExceptionActivity && !collapsedOrderExceptionActivityGroups.Earlier;
+  const canExpandAllOrderExceptionActivity =
+    (groupedOrderExceptionActivity.Today.length > 0 && collapsedOrderExceptionActivityGroups.Today) ||
+    (groupedOrderExceptionActivity.Earlier.length > 0 &&
+      collapsedOrderExceptionActivityGroups.Earlier);
+  const filteredSubscriptionDowngradeActivity = useMemo(
+    () => subscriptionDowngradeActivity,
+    [subscriptionDowngradeActivity],
+  );
+  const groupedSubscriptionDowngradeActivity = useMemo(
+    () =>
+      filteredSubscriptionDowngradeActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as SubscriptionDowngradeActivityEntry[],
+          Earlier: [] as SubscriptionDowngradeActivityEntry[],
+        },
+      ),
+    [filteredSubscriptionDowngradeActivity],
+  );
+  const hasEarlierSubscriptionDowngradeActivity =
+    groupedSubscriptionDowngradeActivity.Earlier.length > 0;
+  const canCollapseEarlierSubscriptionDowngradeActivity =
+    hasEarlierSubscriptionDowngradeActivity && !collapsedSubscriptionDowngradeActivityGroups.Earlier;
+  const canExpandAllSubscriptionDowngradeActivity =
+    (groupedSubscriptionDowngradeActivity.Today.length > 0 &&
+      collapsedSubscriptionDowngradeActivityGroups.Today) ||
+    (groupedSubscriptionDowngradeActivity.Earlier.length > 0 &&
+      collapsedSubscriptionDowngradeActivityGroups.Earlier);
+  const filteredBookingConflictActivity = useMemo(
+    () => bookingConflictActivity,
+    [bookingConflictActivity],
+  );
+  const groupedBookingConflictActivity = useMemo(
+    () =>
+      filteredBookingConflictActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as BookingConflictActivityEntry[],
+          Earlier: [] as BookingConflictActivityEntry[],
+        },
+      ),
+    [filteredBookingConflictActivity],
+  );
+  const hasEarlierBookingConflictActivity = groupedBookingConflictActivity.Earlier.length > 0;
+  const canCollapseEarlierBookingConflictActivity =
+    hasEarlierBookingConflictActivity && !collapsedBookingConflictActivityGroups.Earlier;
+  const canExpandAllBookingConflictActivity =
+    (groupedBookingConflictActivity.Today.length > 0 && collapsedBookingConflictActivityGroups.Today) ||
+    (groupedBookingConflictActivity.Earlier.length > 0 &&
+      collapsedBookingConflictActivityGroups.Earlier);
   const filteredInventoryAlertActivity = useMemo(
     () =>
       inventoryAlertActivity.filter(
@@ -3912,17 +4897,57 @@ export function SellerWorkspace() {
       ).length,
     [workspace?.bookings, workspace?.orders],
   );
+  const sellerTrustScore = workspace?.seller.trust_score ?? null;
   const hasSellerReviewPressure = useMemo(() => {
-    if (!workspace) {
+    if (!sellerTrustScore) {
       return false;
     }
 
-    if ((workspace.seller.average_rating ?? 0) > 0 && (workspace.seller.average_rating ?? 0) < 4.2) {
-      return true;
-    }
+    return sellerTrustScore.risk_level !== "low";
+  }, [sellerTrustScore]);
+  const pendingReviewResponseReviews = useMemo(
+    () =>
+      (workspace?.reviews ?? []).filter((review) => {
+        if (review.is_hidden) {
+          return false;
+        }
 
-    return workspace.reviews.some((review) => review.rating <= 3);
-  }, [workspace]);
+        return !String(review.seller_response ?? "").trim();
+      }),
+    [workspace?.reviews],
+  );
+  const pendingReviewResponseCount = pendingReviewResponseReviews.length;
+  const latestPendingReviewResponse = pendingReviewResponseReviews[0] ?? null;
+  const filteredReviewResponseReminderActivity = useMemo(
+    () => reviewResponseReminderActivity,
+    [reviewResponseReminderActivity],
+  );
+  const groupedReviewResponseReminderActivity = useMemo(
+    () =>
+      filteredReviewResponseReminderActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as ReviewResponseReminderActivityEntry[],
+          Earlier: [] as ReviewResponseReminderActivityEntry[],
+        },
+      ),
+    [filteredReviewResponseReminderActivity],
+  );
+  const latestReviewResponseReminderActivity = reviewResponseReminderActivity[0] ?? null;
+  const hasEarlierReviewResponseReminderActivity =
+    groupedReviewResponseReminderActivity.Earlier.length > 0;
+  const canCollapseEarlierReviewResponseReminderActivity =
+    hasEarlierReviewResponseReminderActivity &&
+    !collapsedReviewResponseReminderActivityGroups.Earlier;
+  const canExpandAllReviewResponseReminderActivity =
+    (groupedReviewResponseReminderActivity.Today.length > 0 &&
+      collapsedReviewResponseReminderActivityGroups.Today) ||
+    (groupedReviewResponseReminderActivity.Earlier.length > 0 &&
+      collapsedReviewResponseReminderActivityGroups.Earlier);
   const listingDeliveryPressureById = useMemo(() => {
     if (!workspace) {
       return {};
@@ -4968,6 +5993,7 @@ export function SellerWorkspace() {
     listingAdjustmentFilter,
     listingWatchlistFilter,
     listingTrendFilter,
+    deliveryAlertFilter,
     workspace?.listings,
     workspacePreset,
   ]);
@@ -5008,6 +6034,10 @@ export function SellerWorkspace() {
       return `${delivery.transaction_kind} · ${delivery.transaction_id}`;
     }
 
+    if (delivery.transaction_kind === "seller") {
+      return `subscription · ${formatSubscriptionPlanLabel(workspace.subscription)}`;
+    }
+
     if (delivery.transaction_kind === "order") {
       const order = workspace.orders.find((item) => item.id === delivery.transaction_id);
       if (!order) {
@@ -5034,8 +6064,20 @@ export function SellerWorkspace() {
     if (alertType === "seller_trust_intervention") {
       return "Trust alert";
     }
+    if (alertType === "review_response_reminder") {
+      return "Review response reminder";
+    }
     if (alertType === "booking_conflict") {
       return "Booking conflict";
+    }
+    if (alertType === "order_exception") {
+      return "Order exception";
+    }
+    if (alertType === "subscription_downgrade") {
+      return "Subscription downgrade";
+    }
+    if (alertType === "delivery_failure") {
+      return "Delivery failure";
     }
     if (typeof alertType === "string" && alertType.trim()) {
       return `${titleCaseWorkspaceLabel(alertType.replaceAll("_", " "))} alert`;
@@ -5048,6 +6090,13 @@ export function SellerWorkspace() {
     setActivityFocus(`${delivery.transaction_kind}:${delivery.transaction_id}`);
   }
 
+  function focusSellerSubscriptionPlan() {
+    document.getElementById("seller-subscription-plan")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
   function openInventoryAlertListing(listingId: string, group?: InventoryAlertGroup) {
     const listing = workspace?.listings.find((item) => item.id === listingId);
     if (!listing) {
@@ -5058,6 +6107,248 @@ export function SellerWorkspace() {
       recordInventoryAlertActivity(group);
     }
     revealListingControlTarget(listing, "inventory");
+  }
+
+  function recordBookingConflictActivity(group: BookingConflictGroup) {
+    setBookingConflictActivity((current) => {
+      const nextEntry: BookingConflictActivityEntry = {
+        id: `${group.signature}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        bookingId: group.bookingId,
+        listingId: group.listingId,
+        listingTitle: group.listingTitle,
+        conflictCount: group.deliveries.length,
+        latestCreatedAt: group.latestCreatedAt,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter((entry) => entry.bookingId !== group.bookingId || entry.latestCreatedAt !== group.latestCreatedAt),
+      ].slice(0, 6);
+    });
+  }
+
+  function openBookingConflictListing(listingId: string, group?: BookingConflictGroup) {
+    const listing = workspace?.listings.find((item) => item.id === listingId);
+    if (!listing) {
+      return;
+    }
+
+    if (group) {
+      recordBookingConflictActivity(group);
+    }
+    revealListingControlTarget(listing, "booking");
+  }
+
+  function recordDeliveryFailureActivity(delivery: NotificationDelivery) {
+    const failedDeliveryId = String(delivery.payload?.failed_delivery_id ?? delivery.transaction_id ?? "").trim();
+    if (!failedDeliveryId) {
+      return;
+    }
+
+    setDeliveryFailureActivity((current) => {
+      const nextEntry: DeliveryFailureActivityEntry = {
+        id: `${failedDeliveryId}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        failedDeliveryId,
+        transactionKind: delivery.transaction_kind,
+        transactionId: delivery.transaction_id,
+        failureReason: String(
+          delivery.payload?.failed_delivery_reason ?? delivery.failure_reason ?? "Unknown delivery failure",
+        ),
+        latestCreatedAt: delivery.created_at,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter((entry) => entry.failedDeliveryId !== failedDeliveryId || entry.latestCreatedAt !== delivery.created_at),
+      ].slice(0, 6);
+    });
+  }
+
+  function openDeliveryFailureReview(delivery: NotificationDelivery) {
+    recordDeliveryFailureActivity(delivery);
+    focusDeliveryTransaction(delivery);
+  }
+
+  function recordOrderExceptionActivity(delivery: NotificationDelivery) {
+    const orderId = String(delivery.payload?.order_id ?? delivery.transaction_id ?? "").trim();
+    if (!orderId) {
+      return;
+    }
+
+    const orderStatus = String(delivery.payload?.order_status ?? "canceled").trim();
+    const exceptionReason = String(
+      delivery.payload?.exception_reason ?? delivery.failure_reason ?? "Order exception",
+    ).trim();
+
+    setOrderExceptionActivity((current) => {
+      const nextEntry: OrderExceptionActivityEntry = {
+        id: `${delivery.id}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        deliveryId: delivery.id,
+        orderId,
+        orderStatus,
+        exceptionReason,
+        latestCreatedAt: delivery.created_at,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter((entry) => entry.deliveryId !== delivery.id),
+      ].slice(0, 6);
+    });
+  }
+
+  function openOrderExceptionReview(delivery: NotificationDelivery) {
+    recordOrderExceptionActivity(delivery);
+    focusDeliveryTransaction(delivery);
+  }
+
+  function recordSubscriptionDowngradeActivity(delivery: NotificationDelivery) {
+    const sellerId = String(delivery.payload?.seller_id ?? delivery.transaction_id ?? "").trim();
+    if (!sellerId) {
+      return;
+    }
+
+    const previousTierName = String(delivery.payload?.previous_tier_name ?? "Previous tier").trim();
+    const currentTierName = String(delivery.payload?.current_tier_name ?? "Current tier").trim();
+    const reasonCode = String(delivery.payload?.reason_code ?? "subscription_downgrade").trim();
+
+    setSubscriptionDowngradeActivity((current) => {
+      const nextEntry: SubscriptionDowngradeActivityEntry = {
+        id: `${delivery.id}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        deliveryId: delivery.id,
+        sellerId,
+        previousTierName,
+        currentTierName,
+        reasonCode,
+        latestCreatedAt: delivery.created_at,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter((entry) => entry.deliveryId !== delivery.id),
+      ].slice(0, 6);
+    });
+  }
+
+  function openSubscriptionDowngradeReview(delivery: NotificationDelivery) {
+    recordSubscriptionDowngradeActivity(delivery);
+    focusSellerSubscriptionPlan();
+  }
+
+  function clearSubscriptionDowngradeActivity() {
+    setSubscriptionDowngradeActivity([]);
+    setCollapsedSubscriptionDowngradeActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_SUBSCRIPTION_DOWNGRADE_ACTIVITY_COLLAPSED_KEY);
+  }
+
+  function clearDeliveryFailureActivity() {
+    setDeliveryFailureActivity([]);
+    setCollapsedDeliveryFailureActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(SELLER_DELIVERY_FAILURE_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_DELIVERY_FAILURE_ACTIVITY_COLLAPSED_KEY);
+  }
+
+  function clearOrderExceptionActivity() {
+    setOrderExceptionActivity([]);
+    setCollapsedOrderExceptionActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(SELLER_ORDER_EXCEPTION_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_ORDER_EXCEPTION_ACTIVITY_COLLAPSED_KEY);
+  }
+
+  function replaySubscriptionDowngradeActivity(entry: SubscriptionDowngradeActivityEntry) {
+    const delivery = notificationDeliveries.find(
+      (candidate) =>
+        candidate.payload?.alert_type === "subscription_downgrade" &&
+        String(candidate.payload?.seller_id ?? candidate.transaction_id ?? "") === entry.sellerId &&
+        candidate.id === entry.deliveryId,
+    );
+    if (delivery) {
+      recordSubscriptionDowngradeActivity(delivery);
+    }
+    focusSellerSubscriptionPlan();
+  }
+
+  function toggleSubscriptionDowngradeActivityGroup(group: "Today" | "Earlier") {
+    setCollapsedSubscriptionDowngradeActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
+  }
+
+  function replayOrderExceptionActivity(entry: OrderExceptionActivityEntry) {
+    const delivery = notificationDeliveries.find(
+      (candidate) =>
+        candidate.payload?.alert_type === "order_exception" &&
+        String(candidate.payload?.order_id ?? candidate.transaction_id ?? "") === entry.orderId &&
+        candidate.id === entry.deliveryId,
+    );
+    if (delivery) {
+      recordOrderExceptionActivity(delivery);
+    }
+    setActivityFocus(`order:${entry.orderId}`);
+  }
+
+  function toggleOrderExceptionActivityGroup(group: "Today" | "Earlier") {
+    setCollapsedOrderExceptionActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
+  }
+
+  function replayBookingConflictActivity(entry: BookingConflictActivityEntry) {
+    const listing = workspace?.listings.find((item) => item.id === entry.listingId) ?? null;
+    if (!listing) {
+      return;
+    }
+
+    revealListingControlTarget(listing, "booking");
+  }
+
+  function toggleBookingConflictActivityGroup(group: "Today" | "Earlier") {
+    setCollapsedBookingConflictActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
+  }
+
+  function collapseEarlierBookingConflictActivity() {
+    setCollapsedBookingConflictActivityGroups((current) => ({
+      ...current,
+      Earlier: true,
+    }));
+  }
+
+  function expandAllBookingConflictActivity() {
+    setCollapsedBookingConflictActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
   }
 
   function recordInventoryAlertActivity(group: InventoryAlertGroup) {
@@ -6614,7 +7905,7 @@ export function SellerWorkspace() {
               <MiniStat label="Bookings" value={String(workspace.bookings.length)} />
               <MiniStat label="Reviews" value={String(workspace.reviews.length)} />
             </div>
-            <div className="rounded-3xl border border-border bg-white px-4 py-4">
+            <div id="seller-subscription-plan" className="rounded-3xl border border-border bg-white px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
@@ -7720,6 +9011,288 @@ export function SellerWorkspace() {
               </div>
             </div>
 
+            {sellerTrustScore ? (
+              <div
+                className={`rounded-3xl border px-4 py-4 ${getSellerReviewPressureToneClass(
+                  sellerTrustScore.risk_level,
+                )}`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Review Pressure
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      {sellerTrustScore.label} · {sellerTrustScore.score}/100
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      {sellerTrustScore.trend_summary}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                      {sellerTrustScore.risk_level}
+                    </span>
+                    <button
+                      className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                      onClick={() =>
+                        document.getElementById("seller-recent-reviews")?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        })
+                      }
+                      type="button"
+                    >
+                      Open recent reviews
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                    {sellerTrustScore.review_count} reviews
+                  </span>
+                  <span className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                    {sellerTrustScore.hidden_review_count} hidden
+                  </span>
+                  <span className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                    {sellerTrustScore.trend_direction}
+                  </span>
+                </div>
+                {sellerTrustScore.risk_reasons.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {sellerTrustScore.risk_reasons.slice(0, 3).map((reason) => (
+                      <span
+                        key={reason}
+                        className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60"
+                      >
+                        {reason}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {pendingReviewResponseCount > 0 ? (
+              <div className="rounded-3xl border border-amber-200 bg-amber-50/35 px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Review Response Reminder
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      {pendingReviewResponseCount} review
+                      {pendingReviewResponseCount === 1 ? "" : "s"} need a seller response
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      {latestPendingReviewResponse?.comment ??
+                        "A recent buyer review still needs a seller reply."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                      {reviewResponseReminderDeliveryCount} reminder
+                      {reviewResponseReminderDeliveryCount === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={
+                        !latestPendingReviewResponse ||
+                        reviewResponseAiState[latestPendingReviewResponse.id]?.loading
+                      }
+                      onClick={() =>
+                        latestPendingReviewResponse
+                          ? requestReviewResponseAiAssist(latestPendingReviewResponse)
+                          : null
+                      }
+                      type="button"
+                    >
+                      {latestPendingReviewResponse &&
+                      reviewResponseAiState[latestPendingReviewResponse.id]?.loading
+                        ? "Suggesting..."
+                        : "Suggest reply"}
+                    </button>
+                    <button
+                      className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() =>
+                        latestPendingReviewResponse
+                          ? openReviewResponseReminder(latestPendingReviewResponse)
+                          : document.getElementById("seller-recent-reviews")?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "start",
+                            })
+                      }
+                      type="button"
+                    >
+                      {latestPendingReviewResponse ? "Open latest reminder" : "Open recent reviews"}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {latestPendingReviewResponse ? (
+                    <>
+                      <span className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                        Latest review · {latestPendingReviewResponse.rating}/5
+                      </span>
+                      <span className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                        {new Date(latestPendingReviewResponse.created_at).toLocaleDateString()}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {reviewResponseReminderActivity.length > 0 ? (
+              <div className="rounded-3xl border border-amber-200 bg-amber-50/28 px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                      Review Response Reminder Activity
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      Re-open the review reminders you already inspected in this session.
+                    </p>
+                    {collapsedReviewResponseReminderActivityGroups.Earlier ? (
+                      <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                        Earlier collapsed · {groupedReviewResponseReminderActivity.Earlier.length} hidden action
+                        {groupedReviewResponseReminderActivity.Earlier.length === 1 ? "" : "s"}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                    {filteredReviewResponseReminderActivity.length} recent action
+                    {filteredReviewResponseReminderActivity.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={clearReviewResponseReminderActivity}
+                    type="button"
+                  >
+                    Clear history
+                  </button>
+                  {latestReviewResponseReminderActivity ? (
+                    <button
+                      className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                      onClick={() => replayReviewResponseReminderActivity(latestReviewResponseReminderActivity)}
+                      type="button"
+                    >
+                      Open latest reminder
+                    </button>
+                  ) : null}
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                    disabled={
+                      !canCollapseEarlierReviewResponseReminderActivity &&
+                      !canExpandAllReviewResponseReminderActivity
+                    }
+                    onClick={() => {
+                      if (canExpandAllReviewResponseReminderActivity) {
+                        setCollapsedReviewResponseReminderActivityGroups({
+                          Today: false,
+                          Earlier: false,
+                        });
+                        return;
+                      }
+
+                      toggleReviewResponseReminderActivityGroup("Earlier");
+                    }}
+                    type="button"
+                  >
+                    {canExpandAllReviewResponseReminderActivity ? "Expand all" : "Collapse earlier"}
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-col gap-3">
+                  {groupedReviewResponseReminderActivity.Today.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Today</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleReviewResponseReminderActivityGroup("Today")}
+                          type="button"
+                        >
+                          {collapsedReviewResponseReminderActivityGroups.Today ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedReviewResponseReminderActivityGroups.Today ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedReviewResponseReminderActivity.Today.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    Review · {entry.reviewRating}/5
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    {new Date(entry.createdAt).toLocaleString()}
+                                  </p>
+                                  <p className="mt-2 text-sm text-foreground/68">
+                                    {entry.reviewComment}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replayReviewResponseReminderActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                  {groupedReviewResponseReminderActivity.Earlier.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Earlier</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleReviewResponseReminderActivityGroup("Earlier")}
+                          type="button"
+                        >
+                          {collapsedReviewResponseReminderActivityGroups.Earlier ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedReviewResponseReminderActivityGroups.Earlier ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedReviewResponseReminderActivity.Earlier.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    Review · {entry.reviewRating}/5
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    {new Date(entry.createdAt).toLocaleString()}
+                                  </p>
+                                  <p className="mt-2 text-sm text-foreground/68">
+                                    {entry.reviewComment}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replayReviewResponseReminderActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             <div className="rounded-3xl border border-border bg-white px-4 py-4">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
@@ -7738,7 +9311,7 @@ export function SellerWorkspace() {
                 </span>
               </div>
 
-              <div className="mt-4 space-y-3">
+              <div id="seller-recent-reviews" className="mt-4 space-y-3">
                 {workspace.reviews.length > 0 ? (
                   workspace.reviews.map((review) => (
                     <article
@@ -8182,6 +9755,409 @@ export function SellerWorkspace() {
 
             <div
               className={`rounded-3xl border bg-white px-4 py-4 ${
+                bookingConflictAlertDeliveryCount > 0
+                  ? "border-orange-200 bg-orange-50/30"
+                  : "border-border"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Booking Conflicts
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    Conflicting and auto-accept bookings · {bookingConflictAlertDeliveryCount} alerts
+                  </p>
+                  <p className="mt-1 text-sm text-foreground/64">
+                    Overlapping requests and booking-state conflicts that need a seller review.
+                  </p>
+                </div>
+                <span className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                  {bookingConflictGroups.length} groups
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["all", `All · ${bookingConflictAlertDeliveryCount}`],
+                  ["queued", `Queued · ${bookingConflictQueuedCount}`],
+                  ["sent", `Sent · ${bookingConflictSentCount}`],
+                  ["failed", `Failed · ${bookingConflictFailedCount}`],
+                ].map(([status, label]) => (
+                  <SelectChip
+                    key={status}
+                    active={deliveryStatusFilter === status}
+                    onClick={() =>
+                      setDeliveryStatusFilter(status as "all" | "queued" | "sent" | "failed")
+                    }
+                  >
+                    {label}
+                  </SelectChip>
+                ))}
+              </div>
+              {latestBookingConflictGroup ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                    onClick={() =>
+                      openBookingConflictListing(
+                        latestBookingConflictGroup.listingId,
+                        latestBookingConflictGroup,
+                      )
+                    }
+                    type="button"
+                  >
+                    Open latest booking conflict
+                  </button>
+                </div>
+              ) : null}
+              <div className="mt-4 space-y-3">
+                {filteredBookingConflictGroups.length > 0 ? (
+                  filteredBookingConflictGroups.map((group) => {
+                    const listing = workspace?.listings.find((item) => item.id === group.listingId) ?? null;
+                    const bookingConflictSummary = bookingConflictSummaryByListingId[group.listingId] ?? null;
+
+                    return (
+                      <div
+                        key={group.signature}
+                        className="rounded-[1.1rem] border border-orange-200 bg-orange-50/70 px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">{group.listingTitle}</p>
+                            <p className="mt-1 text-xs uppercase tracking-[0.16em] text-foreground/52">
+                              {group.listingSlug || group.listingId}
+                            </p>
+                            <p className="mt-1 text-sm text-foreground/70">
+                              {bookingConflictSummary?.count ?? group.deliveries.length} conflict alert
+                              {(bookingConflictSummary?.count ?? group.deliveries.length) === 1 ? "" : "s"}{" "}
+                              in this lane.
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {group.deliveries.map((delivery) => (
+                                <span
+                                  key={delivery.id}
+                                  className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                    delivery.delivery_status === "sent"
+                                      ? "border-olive/20 bg-olive/10 text-olive"
+                                      : delivery.delivery_status === "failed"
+                                        ? "border-red-200 bg-red-50 text-red-700"
+                                        : "border-orange-200 bg-orange-50 text-orange-800"
+                                  }`}
+                                >
+                                  {delivery.channel} · {delivery.delivery_status}
+                                </span>
+                              ))}
+                            </div>
+                            <p className="mt-1 text-xs text-foreground/52">
+                              Latest conflict · {new Date(group.latestCreatedAt).toLocaleString()}
+                            </p>
+                          </div>
+                          <button
+                            className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => openBookingConflictListing(group.listingId, group)}
+                            type="button"
+                          >
+                            Review booking
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-foreground/66">
+                    No booking conflict alerts match the current filters.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {bookingConflictActivity.length > 0 ? (
+              <div className="rounded-3xl border border-orange-200 bg-orange-50/40 px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Booking Conflict Activity
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      Recent conflict reviews · {bookingConflictActivity.length} action
+                      {bookingConflictActivity.length === 1 ? "" : "s"}
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      Re-open the booking conflicts you already inspected in this session.
+                    </p>
+                    {collapsedBookingConflictActivityGroups.Earlier ? (
+                      <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                        Earlier collapsed · {groupedBookingConflictActivity.Earlier.length} hidden action
+                        {groupedBookingConflictActivity.Earlier.length === 1 ? "" : "s"}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                    {filteredBookingConflictActivity.length} recent action
+                    {filteredBookingConflictActivity.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60 transition hover:border-accent hover:text-accent"
+                    onClick={() => setBookingConflictActivity([])}
+                    type="button"
+                  >
+                    Clear history
+                  </button>
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                    disabled={!canCollapseEarlierBookingConflictActivity && !canExpandAllBookingConflictActivity}
+                    onClick={() => {
+                      if (canExpandAllBookingConflictActivity) {
+                        expandAllBookingConflictActivity();
+                        return;
+                      }
+                      collapseEarlierBookingConflictActivity();
+                    }}
+                    type="button"
+                  >
+                    {canExpandAllBookingConflictActivity ? "Expand all" : "Collapse earlier"}
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-col gap-3">
+                  {groupedBookingConflictActivity.Today.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Today</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleBookingConflictActivityGroup("Today")}
+                          type="button"
+                        >
+                          {collapsedBookingConflictActivityGroups.Today ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedBookingConflictActivityGroups.Today ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedBookingConflictActivity.Today.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    {entry.listingTitle}
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    Booking {entry.bookingId} · {entry.conflictCount} conflict
+                                    {entry.conflictCount === 1 ? "" : "s"} ·{" "}
+                                    {new Date(entry.createdAt).toLocaleString()}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replayBookingConflictActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                  {groupedBookingConflictActivity.Earlier.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Earlier</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleBookingConflictActivityGroup("Earlier")}
+                          type="button"
+                        >
+                          {collapsedBookingConflictActivityGroups.Earlier ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedBookingConflictActivityGroups.Earlier ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedBookingConflictActivity.Earlier.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    {entry.listingTitle}
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    Booking {entry.bookingId} · {entry.conflictCount} conflict
+                                    {entry.conflictCount === 1 ? "" : "s"} ·{" "}
+                                    {new Date(entry.createdAt).toLocaleString()}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replayBookingConflictActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {orderExceptionActivity.length > 0 ? (
+              <div className="rounded-3xl border border-orange-200 bg-orange-50/40 px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Order Exception Activity
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      Recent order exception reviews · {orderExceptionActivity.length} action
+                      {orderExceptionActivity.length === 1 ? "" : "s"}
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      Re-open the order exceptions you already inspected in this session.
+                    </p>
+                    {collapsedOrderExceptionActivityGroups.Earlier ? (
+                      <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                        Earlier collapsed · {groupedOrderExceptionActivity.Earlier.length} hidden action
+                        {groupedOrderExceptionActivity.Earlier.length === 1 ? "" : "s"}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                    {filteredOrderExceptionActivity.length} recent action
+                    {filteredOrderExceptionActivity.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={clearOrderExceptionActivity}
+                    type="button"
+                  >
+                    Clear history
+                  </button>
+                  {latestOrderExceptionDelivery ? (
+                    <button
+                      className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                      onClick={() => openOrderExceptionReview(latestOrderExceptionDelivery)}
+                      type="button"
+                    >
+                      Open latest exception
+                    </button>
+                  ) : null}
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                    disabled={
+                      !canCollapseEarlierOrderExceptionActivity && !canExpandAllOrderExceptionActivity
+                    }
+                    onClick={() => {
+                      if (canExpandAllOrderExceptionActivity) {
+                        setCollapsedOrderExceptionActivityGroups({
+                          Today: false,
+                          Earlier: false,
+                        });
+                        return;
+                      }
+
+                      toggleOrderExceptionActivityGroup("Earlier");
+                    }}
+                    type="button"
+                  >
+                    {canExpandAllOrderExceptionActivity ? "Expand all" : "Collapse earlier"}
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-col gap-3">
+                  {groupedOrderExceptionActivity.Today.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Today</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleOrderExceptionActivityGroup("Today")}
+                          type="button"
+                        >
+                          {collapsedOrderExceptionActivityGroups.Today ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedOrderExceptionActivityGroups.Today ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedOrderExceptionActivity.Today.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    Order {entry.orderId.slice(0, 8)}
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    {entry.orderStatus.replaceAll("_", " ")} · {entry.exceptionReason} ·{" "}
+                                    {new Date(entry.createdAt).toLocaleString()}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replayOrderExceptionActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                  {groupedOrderExceptionActivity.Earlier.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Earlier</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleOrderExceptionActivityGroup("Earlier")}
+                          type="button"
+                        >
+                          {collapsedOrderExceptionActivityGroups.Earlier ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedOrderExceptionActivityGroups.Earlier ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedOrderExceptionActivity.Earlier.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    Order {entry.orderId.slice(0, 8)}
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    {entry.orderStatus.replaceAll("_", " ")} · {entry.exceptionReason} ·{" "}
+                                    {new Date(entry.createdAt).toLocaleString()}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replayOrderExceptionActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            <div
+              className={`rounded-3xl border bg-white px-4 py-4 ${
                 queuedDeliveryCount > 0 || failedDeliveryCount > 0
                   ? "border-amber-200 bg-amber-50/30"
                   : "border-border"
@@ -8197,7 +10173,10 @@ export function SellerWorkspace() {
                   </p>
                   <p className="mt-1 text-sm text-foreground/64">
                     Alerts · {inventoryAlertDeliveryCount} inventory · {trustAlertDeliveryCount} trust ·{" "}
-                    {otherAlertDeliveryCount} other
+                    {reviewResponseReminderDeliveryCount} review response ·{" "}
+                    {bookingConflictAlertDeliveryCount} booking · {orderExceptionAlertDeliveryCount} order exception ·{" "}
+                    {subscriptionDowngradeAlertDeliveryCount} subscription downgrade ·{" "}
+                    {deliveryFailureAlertDeliveryCount} delivery failure · {otherAlertDeliveryCount} other
                   </p>
                 </div>
                 <span className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground/60">
@@ -8260,7 +10239,17 @@ export function SellerWorkspace() {
                   ["all", `All Alerts · ${filteredNotificationDeliveries.length}`],
                   ["inventory", `Inventory · ${inventoryAlertDeliveryCount}`],
                   ["trust", `Trust · ${trustAlertDeliveryCount}`],
+                  [
+                    "review_response_reminder",
+                    `Review response · ${reviewResponseReminderDeliveryCount}`,
+                  ],
                   ["booking", `Booking · ${bookingConflictAlertDeliveryCount}`],
+                  ["order_exception", `Order Exception · ${orderExceptionAlertDeliveryCount}`],
+                  [
+                    "subscription_downgrade",
+                    `Subscription Downgrade · ${subscriptionDowngradeAlertDeliveryCount}`,
+                  ],
+                  ["delivery_failure", `Delivery Failure · ${deliveryFailureAlertDeliveryCount}`],
                   ["other", `Other Alerts · ${otherAlertDeliveryCount}`],
                 ].map(([value, label]) => (
                   <SelectChip
@@ -8302,13 +10291,21 @@ export function SellerWorkspace() {
                           {getDeliveryAlertTypeLabel(delivery) ? (
                             <span
                               className={`mt-2 inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                delivery.payload?.alert_type === "inventory_alert"
+                              delivery.payload?.alert_type === "inventory_alert"
+                                ? "border-amber-200 bg-amber-50 text-amber-800"
+                                : delivery.payload?.alert_type === "seller_trust_intervention"
+                                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : delivery.payload?.alert_type === "review_response_reminder"
                                   ? "border-amber-200 bg-amber-50 text-amber-800"
-                                  : delivery.payload?.alert_type === "seller_trust_intervention"
-                                    ? "border-rose-200 bg-rose-50 text-rose-700"
-                                    : "border-border bg-background text-foreground/68"
-                              }`}
-                            >
+                                : delivery.payload?.alert_type === "order_exception"
+                                  ? "border-orange-200 bg-orange-50 text-orange-800"
+                                  : delivery.payload?.alert_type === "subscription_downgrade"
+                                    ? "border-violet-200 bg-violet-50 text-violet-700"
+                                  : delivery.payload?.alert_type === "delivery_failure"
+                                    ? "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700"
+                                  : "border-border bg-background text-foreground/68"
+                            }`}
+                          >
                               {getDeliveryAlertTypeLabel(delivery)}
                             </span>
                           ) : null}
@@ -8368,6 +10365,573 @@ export function SellerWorkspace() {
                   </p>
                 )}
               </div>
+              {latestOrderExceptionDelivery ? (
+                <div className="mt-4 rounded-[1.3rem] border border-orange-200 bg-orange-50/40 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                        Order Exceptions
+                      </p>
+                      <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                        Confirmed orders canceled later · {orderExceptionAlertDeliveryCount} alerts
+                      </p>
+                      <p className="mt-1 text-sm text-foreground/64">
+                        Sellers get notified when a confirmed order is canceled or otherwise flagged out of flow.
+                      </p>
+                      <p className="mt-2 text-xs uppercase tracking-[0.14em] text-foreground/52">
+                        Latest exception · {getDeliveryTransactionLabel(latestOrderExceptionDelivery)} ·{" "}
+                        {new Date(latestOrderExceptionDelivery.created_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                        onClick={() => openOrderExceptionReview(latestOrderExceptionDelivery)}
+                        type="button"
+                      >
+                        Review order
+                      </button>
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                        onClick={() => setDeliveryAlertFilter("order_exception")}
+                        type="button"
+                      >
+                        Show in queue
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {orderExceptionActivity.length > 0 ? (
+                <div className="mt-4 rounded-[1.3rem] border border-orange-200 bg-orange-50/30 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                        Order Exception Activity
+                      </p>
+                      <p className="mt-1 text-sm text-foreground/64">
+                        Re-open the order exceptions you already inspected in this session.
+                      </p>
+                      {collapsedOrderExceptionActivityGroups.Earlier ? (
+                        <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                          Earlier collapsed · {groupedOrderExceptionActivity.Earlier.length} hidden action
+                          {groupedOrderExceptionActivity.Earlier.length === 1 ? "" : "s"}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                      {filteredOrderExceptionActivity.length} recent action
+                      {filteredOrderExceptionActivity.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={clearOrderExceptionActivity}
+                      type="button"
+                    >
+                      Clear history
+                    </button>
+                    {latestOrderExceptionDelivery ? (
+                      <button
+                        className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                        onClick={() => openOrderExceptionReview(latestOrderExceptionDelivery)}
+                        type="button"
+                      >
+                        Open latest exception
+                      </button>
+                    ) : null}
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                      disabled={
+                        !canCollapseEarlierOrderExceptionActivity && !canExpandAllOrderExceptionActivity
+                      }
+                      onClick={() => {
+                        if (canExpandAllOrderExceptionActivity) {
+                          setCollapsedOrderExceptionActivityGroups({
+                            Today: false,
+                            Earlier: false,
+                          });
+                          return;
+                        }
+
+                        toggleOrderExceptionActivityGroup("Earlier");
+                      }}
+                      type="button"
+                    >
+                      {canExpandAllOrderExceptionActivity ? "Expand all" : "Collapse earlier"}
+                    </button>
+                  </div>
+                  <div className="mt-4 flex flex-col gap-3">
+                    {groupedOrderExceptionActivity.Today.length > 0 ? (
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Today</p>
+                          <button
+                            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => toggleOrderExceptionActivityGroup("Today")}
+                            type="button"
+                          >
+                            {collapsedOrderExceptionActivityGroups.Today ? "Expand" : "Collapse"}
+                          </button>
+                        </div>
+                        {collapsedOrderExceptionActivityGroups.Today ? null : (
+                          <div className="mt-3 space-y-3">
+                            {groupedOrderExceptionActivity.Today.map((entry) => (
+                              <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">
+                                      Order {entry.orderId.slice(0, 8)}
+                                    </p>
+                                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                      {entry.orderStatus.replaceAll("_", " ")} · {entry.exceptionReason} ·{" "}
+                                      {new Date(entry.createdAt).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                    onClick={() => replayOrderExceptionActivity(entry)}
+                                    type="button"
+                                  >
+                                    Re-open
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    {groupedOrderExceptionActivity.Earlier.length > 0 ? (
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Earlier</p>
+                          <button
+                            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => toggleOrderExceptionActivityGroup("Earlier")}
+                            type="button"
+                          >
+                            {collapsedOrderExceptionActivityGroups.Earlier ? "Expand" : "Collapse"}
+                          </button>
+                        </div>
+                        {collapsedOrderExceptionActivityGroups.Earlier ? null : (
+                          <div className="mt-3 space-y-3">
+                            {groupedOrderExceptionActivity.Earlier.map((entry) => (
+                              <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">
+                                      Order {entry.orderId.slice(0, 8)}
+                                    </p>
+                                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                      {entry.orderStatus.replaceAll("_", " ")} · {entry.exceptionReason} ·{" "}
+                                      {new Date(entry.createdAt).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                    onClick={() => replayOrderExceptionActivity(entry)}
+                                    type="button"
+                                  >
+                                    Re-open
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {latestSubscriptionDowngradeDelivery ? (
+                <div className="mt-4 rounded-[1.3rem] border border-violet-200 bg-violet-50/40 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                        Subscription Downgrades
+                      </p>
+                      <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                        Subscription plan changes · {subscriptionDowngradeAlertDeliveryCount} alerts
+                      </p>
+                      <p className="mt-1 text-sm text-foreground/64">
+                        Sellers get notified when a plan downgrade removes paid perks or lowers tier access.
+                      </p>
+                      <p className="mt-2 text-xs uppercase tracking-[0.14em] text-foreground/52">
+                        Latest downgrade · {getDeliveryTransactionLabel(latestSubscriptionDowngradeDelivery)} ·{" "}
+                        {new Date(latestSubscriptionDowngradeDelivery.created_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                        onClick={focusSellerSubscriptionPlan}
+                        type="button"
+                      >
+                        Review subscription
+                      </button>
+                      <button
+                        className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                        onClick={() => {
+                          setDeliveryAlertFilter("subscription_downgrade");
+                          openSubscriptionDowngradeReview(latestSubscriptionDowngradeDelivery);
+                        }}
+                        type="button"
+                      >
+                        Show in queue
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {subscriptionDowngradeActivity.length > 0 ? (
+                <div className="mt-4 rounded-[1.3rem] border border-violet-200 bg-violet-50/30 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                        Subscription Downgrade Activity
+                      </p>
+                      <p className="mt-1 text-sm text-foreground/64">
+                        Re-open the downgrade reviews you already inspected in this session.
+                      </p>
+                      {collapsedSubscriptionDowngradeActivityGroups.Earlier ? (
+                        <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                          Earlier collapsed · {groupedSubscriptionDowngradeActivity.Earlier.length} hidden action
+                          {groupedSubscriptionDowngradeActivity.Earlier.length === 1 ? "" : "s"}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                      {filteredSubscriptionDowngradeActivity.length} recent action
+                      {filteredSubscriptionDowngradeActivity.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={clearSubscriptionDowngradeActivity}
+                      type="button"
+                    >
+                      Clear history
+                    </button>
+                    {latestSubscriptionDowngradeDelivery ? (
+                      <button
+                        className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                        onClick={() => openSubscriptionDowngradeReview(latestSubscriptionDowngradeDelivery)}
+                        type="button"
+                      >
+                        Open latest downgrade
+                      </button>
+                    ) : null}
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                      disabled={
+                        !canCollapseEarlierSubscriptionDowngradeActivity &&
+                        !canExpandAllSubscriptionDowngradeActivity
+                      }
+                      onClick={() => {
+                        if (canExpandAllSubscriptionDowngradeActivity) {
+                          setCollapsedSubscriptionDowngradeActivityGroups({
+                            Today: false,
+                            Earlier: false,
+                          });
+                          return;
+                        }
+
+                        toggleSubscriptionDowngradeActivityGroup("Earlier");
+                      }}
+                      type="button"
+                    >
+                      {canExpandAllSubscriptionDowngradeActivity ? "Expand all" : "Collapse earlier"}
+                    </button>
+                  </div>
+                  <div className="mt-4 flex flex-col gap-3">
+                    {groupedSubscriptionDowngradeActivity.Today.length > 0 ? (
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Today</p>
+                          <button
+                            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => toggleSubscriptionDowngradeActivityGroup("Today")}
+                            type="button"
+                          >
+                            {collapsedSubscriptionDowngradeActivityGroups.Today ? "Expand" : "Collapse"}
+                          </button>
+                        </div>
+                        {collapsedSubscriptionDowngradeActivityGroups.Today ? null : (
+                          <div className="mt-3 space-y-3">
+                            {groupedSubscriptionDowngradeActivity.Today.map((entry) => (
+                              <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">
+                                      {entry.previousTierName} → {entry.currentTierName}
+                                    </p>
+                                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                      {entry.reasonCode} · {new Date(entry.createdAt).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                    onClick={() => replaySubscriptionDowngradeActivity(entry)}
+                                    type="button"
+                                  >
+                                    Re-open
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    {groupedSubscriptionDowngradeActivity.Earlier.length > 0 ? (
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Earlier</p>
+                          <button
+                            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => toggleSubscriptionDowngradeActivityGroup("Earlier")}
+                            type="button"
+                          >
+                            {collapsedSubscriptionDowngradeActivityGroups.Earlier ? "Expand" : "Collapse"}
+                          </button>
+                        </div>
+                        {collapsedSubscriptionDowngradeActivityGroups.Earlier ? null : (
+                          <div className="mt-3 space-y-3">
+                            {groupedSubscriptionDowngradeActivity.Earlier.map((entry) => (
+                              <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">
+                                      {entry.previousTierName} → {entry.currentTierName}
+                                    </p>
+                                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                      {entry.reasonCode} · {new Date(entry.createdAt).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                    onClick={() => replaySubscriptionDowngradeActivity(entry)}
+                                    type="button"
+                                  >
+                                    Re-open
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {deliveryFailureActivity.length > 0 ? (
+                <div className="mt-4 rounded-[1.3rem] border border-fuchsia-200 bg-fuchsia-50/40 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                        Recent delivery failure activity
+                      </p>
+                      <p className="mt-1 text-sm text-foreground/64">
+                        Re-open the latest delivery failures you already reviewed in this session.
+                      </p>
+                      {collapsedDeliveryFailureActivityGroups.Earlier ? (
+                        <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                          Earlier collapsed · {groupedDeliveryFailureActivity.Earlier.length} hidden action
+                          {groupedDeliveryFailureActivity.Earlier.length === 1 ? "" : "s"}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                      {filteredDeliveryFailureActivity.length} recent action
+                      {filteredDeliveryFailureActivity.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={clearDeliveryFailureActivity}
+                      type="button"
+                    >
+                      Clear history
+                    </button>
+                    {latestDeliveryFailureGroup ? (
+                      <button
+                        className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                        onClick={() => {
+                          const delivery = notificationDeliveries.find(
+                            (candidate) =>
+                              candidate.payload?.alert_type === "delivery_failure" &&
+                              String(candidate.payload?.failed_delivery_id ?? candidate.transaction_id ?? "") ===
+                                latestDeliveryFailureGroup.failedDeliveryId,
+                          );
+                          if (delivery) {
+                            openDeliveryFailureReview(delivery);
+                          }
+                        }}
+                        type="button"
+                      >
+                        Open latest delivery failure
+                      </button>
+                    ) : null}
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                      disabled={!canCollapseEarlierDeliveryFailureActivity}
+                      onClick={() =>
+                        setCollapsedDeliveryFailureActivityGroups((current) => ({
+                          ...current,
+                          Earlier: true,
+                        }))
+                      }
+                      type="button"
+                    >
+                      Collapse earlier
+                    </button>
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                      disabled={!canExpandAllDeliveryFailureActivity}
+                      onClick={() =>
+                        setCollapsedDeliveryFailureActivityGroups({
+                          Today: false,
+                          Earlier: false,
+                        })
+                      }
+                      type="button"
+                    >
+                      Expand all
+                    </button>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {groupedDeliveryFailureActivity.Today.length > 0 ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-semibold uppercase tracking-[0.16em] text-foreground/54">
+                            Today
+                          </p>
+                          <button
+                            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() =>
+                              setCollapsedDeliveryFailureActivityGroups((current) => ({
+                                ...current,
+                                Today: !current.Today,
+                              }))
+                            }
+                            type="button"
+                          >
+                            {collapsedDeliveryFailureActivityGroups.Today ? "Expand" : "Collapse"}
+                          </button>
+                        </div>
+                        {collapsedDeliveryFailureActivityGroups.Today ? null : (
+                          <div className="space-y-2">
+                            {groupedDeliveryFailureActivity.Today.map((entry) => (
+                              <div
+                                key={entry.id}
+                                className="rounded-[1.1rem] border border-border bg-white px-4 py-3"
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">
+                                      {entry.transactionKind} · {entry.failedDeliveryId}
+                                    </p>
+                                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                      {entry.failureReason} · {new Date(entry.createdAt).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                    onClick={() => {
+                                      const delivery = notificationDeliveries.find(
+                                        (candidate) =>
+                                          candidate.payload?.alert_type === "delivery_failure" &&
+                                          String(candidate.payload?.failed_delivery_id ?? candidate.transaction_id ?? "") ===
+                                            entry.failedDeliveryId,
+                                      );
+                                      if (delivery) {
+                                        openDeliveryFailureReview(delivery);
+                                      }
+                                    }}
+                                    type="button"
+                                  >
+                                    Re-open
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    {groupedDeliveryFailureActivity.Earlier.length > 0 ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-semibold uppercase tracking-[0.16em] text-foreground/54">
+                            Earlier
+                          </p>
+                          <button
+                            className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() =>
+                              setCollapsedDeliveryFailureActivityGroups((current) => ({
+                                ...current,
+                                Earlier: !current.Earlier,
+                              }))
+                            }
+                            type="button"
+                          >
+                            {collapsedDeliveryFailureActivityGroups.Earlier ? "Expand" : "Collapse"}
+                          </button>
+                        </div>
+                        {collapsedDeliveryFailureActivityGroups.Earlier ? (
+                          <p className="text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                            Earlier collapsed · {groupedDeliveryFailureActivity.Earlier.length} hidden action
+                            {groupedDeliveryFailureActivity.Earlier.length === 1 ? "" : "s"}
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {groupedDeliveryFailureActivity.Earlier.map((entry) => (
+                              <div
+                                key={entry.id}
+                                className="rounded-[1.1rem] border border-border bg-white px-4 py-3"
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">
+                                      {entry.transactionKind} · {entry.failedDeliveryId}
+                                    </p>
+                                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                      {entry.failureReason} · {new Date(entry.createdAt).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                    onClick={() => {
+                                      const delivery = notificationDeliveries.find(
+                                        (candidate) =>
+                                          candidate.payload?.alert_type === "delivery_failure" &&
+                                          String(candidate.payload?.failed_delivery_id ?? candidate.transaction_id ?? "") ===
+                                            entry.failedDeliveryId,
+                                      );
+                                      if (delivery) {
+                                        openDeliveryFailureReview(delivery);
+                                      }
+                                    }}
+                                    type="button"
+                                  >
+                                    Re-open
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
@@ -8898,6 +11462,28 @@ export function SellerWorkspace() {
                               >
                                 Inventory alert · {inventoryAlertSummary.count}
                               </button>
+                            ) : null}
+                            {bookingConflictSummaryByListingId[listing.id] ? (
+                              (() => {
+                                const bookingConflictGroup = bookingConflictGroups.find(
+                                  (group) => group.listingId === listing.id,
+                                );
+                                if (!bookingConflictGroup) {
+                                  return null;
+                                }
+
+                                return (
+                                  <button
+                                    className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-800"
+                                    onClick={() =>
+                                      openBookingConflictListing(listing.id, bookingConflictGroup)
+                                    }
+                                    type="button"
+                                  >
+                                    Booking conflict · {bookingConflictSummaryByListingId[listing.id].count}
+                                  </button>
+                                );
+                              })()
                             ) : null}
                             {supportPressure ? (
                               <span

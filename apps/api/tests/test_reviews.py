@@ -76,6 +76,72 @@ class ReviewCreationTests(unittest.TestCase):
         self.assertEqual(fake_supabase.updated_payload["review_count"], 1)
         self.assertEqual(fake_supabase.updated_payload["average_rating"], 5.0)
 
+    def test_buyer_review_queues_seller_response_reminder(self):
+        fake_supabase = _FakeSupabase(
+            select_side_effect=[
+                {
+                    "id": "order-1",
+                    "buyer_id": BUYER_USER.id,
+                    "seller_id": "seller-profile-id",
+                    "status": "completed",
+                },
+                SupabaseError(406, "No review yet"),
+                [{"rating": 5}],
+                {
+                    "id": "seller-profile-id",
+                    "user_id": SELLER_USER.id,
+                    "display_name": "Demo Seller",
+                    "slug": "demo-seller",
+                },
+                [
+                    {
+                        "id": "review-1",
+                        "rating": 5,
+                        "comment": "Great order experience.",
+                        "seller_response": None,
+                        "seller_responded_at": None,
+                        "is_hidden": False,
+                        "created_at": "2026-04-05T12:00:00+00:00",
+                    }
+                ],
+                {
+                    "id": SELLER_USER.id,
+                    "email_notifications_enabled": True,
+                    "push_notifications_enabled": False,
+                },
+                [],
+            ],
+            insert_result=[
+                {
+                    "id": "review-1",
+                    "rating": 5,
+                    "comment": "Great order experience.",
+                    "created_at": "2026-04-05T12:00:00+00:00",
+                }
+            ],
+        )
+
+        with (
+            patch("app.services.reviews.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.reviews.process_notification_delivery_rows", return_value={"processed": 1}),
+        ):
+            review = create_review(
+                BUYER_USER,
+                ReviewCreate(
+                    order_id="order-1",
+                    rating=5,
+                    comment="Great order experience.",
+                ),
+            )
+
+        self.assertEqual(review.rating, 5)
+        self.assertEqual(fake_supabase.insert_calls, 2)
+        self.assertEqual(fake_supabase.update_calls, 1)
+        self.assertEqual(
+            fake_supabase.insert_payloads[1][1][0]["payload"]["alert_type"],
+            "review_response_reminder",
+        )
+
     def test_rejects_review_before_completion(self):
         fake_supabase = _FakeSupabase(
             select_side_effect=[

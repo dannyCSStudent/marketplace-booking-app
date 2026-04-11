@@ -7,6 +7,7 @@ from urllib.request import Request, urlopen
 from app.core.config import get_settings
 from app.core.supabase import SupabaseError
 from app.dependencies.supabase import get_supabase_client
+from app.services.notification_deliveries import queue_admin_delivery_failure_notifications
 
 
 def process_notification_deliveries(*, batch_size: int = 25) -> dict[str, int]:
@@ -65,6 +66,12 @@ def process_notification_delivery_rows(
                 error_message=str(exc),
                 final=should_fail_permanently,
             )
+            if should_fail_permanently and str((delivery.get("payload") or {}).get("alert_type") or "") != "delivery_failure":
+                queue_admin_delivery_failure_notifications(
+                    delivery=delivery,
+                    error_message=str(exc),
+                    final=should_fail_permanently,
+                )
             _log_worker_event(
                 "notification_delivery_failed",
                 delivery_id=delivery_id,

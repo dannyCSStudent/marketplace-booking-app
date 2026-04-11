@@ -2,9 +2,11 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 
+from app.core.config import get_settings
 from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
+from app.services.notification_delivery_worker import process_notification_delivery_rows
 from app.schemas.subscriptions import (
     SellerSubscriptionAssign,
     SellerSubscriptionEventRead,
@@ -194,7 +196,7 @@ def _get_seller_by_slug(slug: str) -> dict:
     try:
         return supabase.select(
             "seller_profiles",
-            query={"select": "id,display_name,slug", "slug": f"eq.{slug}"},
+            query={"select": "id,user_id,display_name,slug", "slug": f"eq.{slug}"},
             use_service_role=True,
             expect_single=True,
         )
@@ -307,6 +309,150 @@ def _record_subscription_event(
         pass
 
 
+def _queue_subscription_downgrade_notifications(
+    *,
+    seller: dict,
+    previous_subscription: dict | None,
+    subscription: SellerSubscriptionRead,
+    previous_tier: dict | None,
+    next_tier: dict,
+    reason_code: str,
+    note: str | None,
+) -> None:
+    settings = get_settings()
+    admin_ids = [
+        admin_id
+        for admin_id in settings.admin_user_ids
+        if (settings.admin_user_roles or {}).get(admin_id, "").lower() in {"monetization", "support", "owner"}
+    ]
+    if not admin_ids:
+        admin_ids = list(settings.admin_user_ids)
+
+    recipient_user_ids = []
+    if seller.get("user_id"):
+        recipient_user_ids.append(str(seller["user_id"]))
+    recipient_user_ids.extend(admin_ids)
+    recipient_user_ids = list(dict.fromkeys(recipient_user_ids))
+    if not recipient_user_ids:
+        return
+
+    event_id = (
+        f"subscription-downgrade:{seller['id']}:{subscription.id}:"
+        f"{previous_tier.get('id') if previous_tier else 'none'}:{next_tier.get('id')}"
+    )
+
+    supabase = get_supabase_client()
+    try:
+        existing_rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "recipient_user_id,event_id",
+                "event_id": f"eq.{event_id}",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        existing_rows = []
+
+    existing_recipients = {
+        str(row.get("recipient_user_id"))
+        for row in existing_rows
+        if row.get("recipient_user_id")
+    }
+
+    profile_rows = []
+    try:
+        profile_rows = supabase.select(
+            "profiles",
+            query={
+                "select": "id,email_notifications_enabled,push_notifications_enabled",
+                "id": f"in.({','.join(recipient_user_ids)})",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        profile_rows = []
+
+    profile_prefs = {str(row.get("id")): row for row in profile_rows if row.get("id")}
+
+    from_tier_name = str(previous_tier.get("name") or previous_tier.get("code") or "Previous tier").strip()
+    to_tier_name = str(next_tier.get("name") or next_tier.get("code") or "Current tier").strip()
+    subject = f"Subscription downgrade for {seller['display_name']}"
+    body = (
+        f"{seller['display_name']} moved from {from_tier_name} to {to_tier_name}. "
+        "Review whether pricing, perks, or retention support should follow up."
+    )
+    html = (
+        f"<p>Subscription downgrade for <strong>{seller['display_name']}</strong>.</p>"
+        f"<p><strong>From:</strong> {from_tier_name}</p>"
+        f"<p><strong>To:</strong> {to_tier_name}</p>"
+        f"<p><strong>Reason:</strong> {reason_code}</p>"
+        f"<p>{note or body}</p>"
+    )
+
+    deliveries: list[dict[str, object]] = []
+    for recipient_user_id in recipient_user_ids:
+        if recipient_user_id in existing_recipients:
+            continue
+
+        prefs = profile_prefs.get(recipient_user_id, {})
+        payload = {
+            "alert_type": "subscription_downgrade",
+            "seller_id": seller["id"],
+            "seller_slug": seller["slug"],
+            "seller_display_name": seller["display_name"],
+            "seller_subscription_id": subscription.id,
+            "subscription_id": subscription.id,
+            "previous_tier_id": previous_tier.get("id") if previous_tier else None,
+            "previous_tier_name": from_tier_name,
+            "current_tier_id": next_tier.get("id"),
+            "current_tier_name": to_tier_name,
+            "reason_code": reason_code,
+            "note": note,
+            "alert_signature": event_id,
+            "subject": subject,
+            "body": body,
+            "html": html,
+        }
+
+        if prefs.get("email_notifications_enabled", True):
+            deliveries.append(
+                {
+                    "recipient_user_id": recipient_user_id,
+                    "transaction_kind": "seller",
+                    "transaction_id": seller["id"],
+                    "event_id": event_id,
+                    "channel": "email",
+                    "delivery_status": "queued",
+                    "payload": payload,
+                }
+            )
+
+        if prefs.get("push_notifications_enabled", True):
+            deliveries.append(
+                {
+                    "recipient_user_id": recipient_user_id,
+                    "transaction_kind": "seller",
+                    "transaction_id": seller["id"],
+                    "event_id": event_id,
+                    "channel": "push",
+                    "delivery_status": "queued",
+                    "payload": payload,
+                }
+            )
+
+    if not deliveries:
+        return
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if isinstance(inserted_rows, list) and inserted_rows:
+        process_notification_delivery_rows(inserted_rows)
+
+
 def get_active_seller_subscription(seller_id: str) -> SellerSubscriptionRead:
     supabase = get_supabase_client()
     try:
@@ -386,6 +532,7 @@ def assign_seller_subscription(payload: SellerSubscriptionAssign, *, actor_user_
 
     if actor_user_id:
         previous_tier_id = previous_subscription.get("tier_id") if previous_subscription else None
+        previous_tier = previous_subscription.get("subscription_tiers") if previous_subscription else None
         action = _resolve_subscription_event_action(previous_subscription, next_tier)
         _record_subscription_event(
             seller_id=seller["id"],
@@ -397,5 +544,15 @@ def assign_seller_subscription(payload: SellerSubscriptionAssign, *, actor_user_
             to_tier_id=payload.tier_id,
             note=payload.note,
         )
+        if action == "downgrade":
+            _queue_subscription_downgrade_notifications(
+                seller=seller,
+                previous_subscription=previous_subscription,
+                subscription=subscription,
+                previous_tier=previous_tier,
+                next_tier=next_tier,
+                reason_code=payload.reason_code,
+                note=payload.note,
+            )
 
     return subscription

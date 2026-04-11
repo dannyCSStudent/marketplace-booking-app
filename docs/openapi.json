@@ -2972,6 +2972,1080 @@
         }
       }
     },
+    "/notifications/admin/delivery-failures/summaries": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Delivery Failure Summaries",
+        "operationId": "read_admin_delivery_failure_summaries_notifications_admin_delivery_failures_summaries_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 6,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryFailureSummaryRead"
+                  },
+                  "title": "Response Read Admin Delivery Failure Summaries Notifications Admin Delivery Failures Summaries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/review-response-reminders/summaries": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Review Response Reminder Summaries",
+        "operationId": "read_admin_review_response_reminder_summaries_notifications_admin_review_response_reminders_summaries_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 8,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewResponseReminderSellerSummaryRead"
+                  },
+                  "title": "Response Read Admin Review Response Reminder Summaries Notifications Admin Review Response Reminders Summaries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/review-response-reminders/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Review Response Reminder Events",
+        "operationId": "read_admin_review_response_reminder_events_notifications_admin_review_response_reminders_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewResponseReminderEventRead"
+                  },
+                  "title": "Response Read Admin Review Response Reminder Events Notifications Admin Review Response Reminders Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/review-response-reminders/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Review Response Reminder",
+        "operationId": "acknowledge_review_response_reminder_notifications_admin_review_response_reminders__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Review Response Reminder Notifications Admin Review Response Reminders  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Review Response Reminder Acknowledgement",
+        "operationId": "clear_review_response_reminder_acknowledgement_notifications_admin_review_response_reminders__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Review Response Reminder Acknowledgement Notifications Admin Review Response Reminders  Seller Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/delivery-failures/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Delivery Failure Events",
+        "operationId": "read_admin_delivery_failure_events_notifications_admin_delivery_failures_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryFailureEventRead"
+                  },
+                  "title": "Response Read Admin Delivery Failure Events Notifications Admin Delivery Failures Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/delivery-failures/{failed_delivery_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Delivery Failure",
+        "operationId": "acknowledge_delivery_failure_notifications_admin_delivery_failures__failed_delivery_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "failed_delivery_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Failed Delivery Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Delivery Failure Notifications Admin Delivery Failures  Failed Delivery Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Delivery Failure Acknowledgement",
+        "operationId": "clear_delivery_failure_acknowledgement_notifications_admin_delivery_failures__failed_delivery_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "failed_delivery_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Failed Delivery Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Delivery Failure Acknowledgement Notifications Admin Delivery Failures  Failed Delivery Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/inventory-alerts/summaries": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Inventory Alert Summaries",
+        "operationId": "read_admin_inventory_alert_summaries_notifications_admin_inventory_alerts_summaries_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 8,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InventoryAlertSummaryRead"
+                  },
+                  "title": "Response Read Admin Inventory Alert Summaries Notifications Admin Inventory Alerts Summaries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/inventory-alerts/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Inventory Alert Events",
+        "operationId": "read_admin_inventory_alert_events_notifications_admin_inventory_alerts_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InventoryAlertEventRead"
+                  },
+                  "title": "Response Read Admin Inventory Alert Events Notifications Admin Inventory Alerts Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Inventory Alert",
+        "operationId": "acknowledge_inventory_alert_notifications_admin_inventory_alerts__seller_id___listing_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "listing_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Listing Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Inventory Alert Notifications Admin Inventory Alerts  Seller Id   Listing Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Inventory Alert Acknowledgement",
+        "operationId": "clear_inventory_alert_acknowledgement_notifications_admin_inventory_alerts__seller_id___listing_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "listing_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Listing Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Inventory Alert Acknowledgement Notifications Admin Inventory Alerts  Seller Id   Listing Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/subscription-downgrades/sellers": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Subscription Downgrade Sellers",
+        "operationId": "read_admin_subscription_downgrade_sellers_notifications_admin_subscription_downgrades_sellers_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 6,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubscriptionDowngradeSellerSummaryRead"
+                  },
+                  "title": "Response Read Admin Subscription Downgrade Sellers Notifications Admin Subscription Downgrades Sellers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/subscription-downgrades/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Subscription Downgrade Events",
+        "operationId": "read_admin_subscription_downgrade_events_notifications_admin_subscription_downgrades_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubscriptionDowngradeEventRead"
+                  },
+                  "title": "Response Read Admin Subscription Downgrade Events Notifications Admin Subscription Downgrades Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/subscription-downgrades/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Subscription Downgrade",
+        "operationId": "acknowledge_subscription_downgrade_notifications_admin_subscription_downgrades__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Subscription Downgrade Notifications Admin Subscription Downgrades  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Subscription Downgrade Acknowledgement",
+        "operationId": "clear_subscription_downgrade_acknowledgement_notifications_admin_subscription_downgrades__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Subscription Downgrade Acknowledgement Notifications Admin Subscription Downgrades  Seller Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications/admin/trust-alerts/{seller_id}/acknowledge": {
       "post": {
         "tags": [
@@ -3219,6 +4293,534 @@
                     "$ref": "#/components/schemas/TrustAlertSellerSummaryRead"
                   },
                   "title": "Response Read Admin Trust Alert Sellers Notifications Admin Trust Alerts Sellers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/order-exceptions/sellers": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Order Exception Sellers",
+        "operationId": "read_admin_order_exception_sellers_notifications_admin_order_exceptions_sellers_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 6,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OrderExceptionSellerSummaryRead"
+                  },
+                  "title": "Response Read Admin Order Exception Sellers Notifications Admin Order Exceptions Sellers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/order-exceptions/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Order Exception",
+        "operationId": "acknowledge_order_exception_notifications_admin_order_exceptions__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Order Exception Notifications Admin Order Exceptions  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Order Exception Acknowledgement",
+        "operationId": "clear_order_exception_acknowledgement_notifications_admin_order_exceptions__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Order Exception Acknowledgement Notifications Admin Order Exceptions  Seller Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/order-exceptions/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Order Exception Events",
+        "operationId": "read_admin_order_exception_events_notifications_admin_order_exceptions_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OrderExceptionEventRead"
+                  },
+                  "title": "Response Read Admin Order Exception Events Notifications Admin Order Exceptions Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/booking-conflicts/sellers": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Booking Conflict Sellers",
+        "operationId": "read_admin_booking_conflict_sellers_notifications_admin_booking_conflicts_sellers_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 6,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BookingConflictSellerSummaryRead"
+                  },
+                  "title": "Response Read Admin Booking Conflict Sellers Notifications Admin Booking Conflicts Sellers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/booking-conflicts/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Booking Conflict",
+        "operationId": "acknowledge_booking_conflict_notifications_admin_booking_conflicts__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Booking Conflict Notifications Admin Booking Conflicts  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Booking Conflict Acknowledgement",
+        "operationId": "clear_booking_conflict_acknowledgement_notifications_admin_booking_conflicts__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Booking Conflict Acknowledgement Notifications Admin Booking Conflicts  Seller Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/booking-conflicts/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Booking Conflict Events",
+        "operationId": "read_admin_booking_conflict_events_notifications_admin_booking_conflicts_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BookingConflictEventRead"
+                  },
+                  "title": "Response Read Admin Booking Conflict Events Notifications Admin Booking Conflicts Events Get"
                 }
               }
             }
@@ -5715,6 +7317,137 @@
         ],
         "title": "BookingBulkStatusUpdateResult"
       },
+      "BookingConflictEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "booking_id": {
+            "type": "string",
+            "title": "Booking Id"
+          },
+          "listing_id": {
+            "type": "string",
+            "title": "Listing Id"
+          },
+          "conflict_count": {
+            "type": "integer",
+            "title": "Conflict Count"
+          },
+          "scheduled_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled Start"
+          },
+          "scheduled_end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled End"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "booking_id",
+          "listing_id",
+          "conflict_count",
+          "scheduled_start",
+          "scheduled_end",
+          "created_at"
+        ],
+        "title": "BookingConflictEventRead"
+      },
+      "BookingConflictSellerSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "latest_event_action": {
+            "type": "string",
+            "title": "Latest Event Action"
+          },
+          "latest_event_status": {
+            "type": "string",
+            "title": "Latest Event Status"
+          },
+          "latest_event_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Event Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "event_count",
+          "latest_event_action",
+          "latest_event_status",
+          "latest_event_created_at"
+        ],
+        "title": "BookingConflictSellerSummaryRead"
+      },
       "BookingCreate": {
         "properties": {
           "seller_id": {
@@ -6051,6 +7784,162 @@
         ],
         "title": "CategoryRead"
       },
+      "DeliveryFailureEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "failed_delivery_id": {
+            "type": "string",
+            "title": "Failed Delivery Id"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "failed_delivery_channel": {
+            "type": "string",
+            "title": "Failed Delivery Channel"
+          },
+          "failed_delivery_status": {
+            "type": "string",
+            "title": "Failed Delivery Status"
+          },
+          "failed_delivery_attempts": {
+            "type": "integer",
+            "title": "Failed Delivery Attempts"
+          },
+          "failed_delivery_reason": {
+            "type": "string",
+            "title": "Failed Delivery Reason"
+          },
+          "original_recipient_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Recipient User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "failed_delivery_id",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "failed_delivery_channel",
+          "failed_delivery_status",
+          "failed_delivery_attempts",
+          "failed_delivery_reason",
+          "created_at"
+        ],
+        "title": "DeliveryFailureEventRead"
+      },
+      "DeliveryFailureSummaryRead": {
+        "properties": {
+          "failed_delivery_id": {
+            "type": "string",
+            "title": "Failed Delivery Id"
+          },
+          "transaction_kind": {
+            "type": "string",
+            "title": "Transaction Kind"
+          },
+          "transaction_id": {
+            "type": "string",
+            "title": "Transaction Id"
+          },
+          "failed_delivery_channel": {
+            "type": "string",
+            "title": "Failed Delivery Channel"
+          },
+          "failed_delivery_status": {
+            "type": "string",
+            "title": "Failed Delivery Status"
+          },
+          "failed_delivery_attempts": {
+            "type": "integer",
+            "title": "Failed Delivery Attempts"
+          },
+          "failed_delivery_reason": {
+            "type": "string",
+            "title": "Failed Delivery Reason"
+          },
+          "original_recipient_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Recipient User Id"
+          },
+          "alert_delivery_count": {
+            "type": "integer",
+            "title": "Alert Delivery Count"
+          },
+          "latest_alert_delivery_status": {
+            "type": "string",
+            "title": "Latest Alert Delivery Status"
+          },
+          "latest_alert_delivery_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Alert Delivery Created At"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "failed_delivery_id",
+          "transaction_kind",
+          "transaction_id",
+          "failed_delivery_channel",
+          "failed_delivery_status",
+          "failed_delivery_attempts",
+          "failed_delivery_reason",
+          "alert_delivery_count",
+          "latest_alert_delivery_status",
+          "latest_alert_delivery_created_at",
+          "acknowledged"
+        ],
+        "title": "DeliveryFailureSummaryRead"
+      },
       "DeliveryFeeHistoryPoint": {
         "properties": {
           "date": {
@@ -6167,6 +8056,162 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "InventoryAlertEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "listing_id": {
+            "type": "string",
+            "title": "Listing Id"
+          },
+          "listing_title": {
+            "type": "string",
+            "title": "Listing Title"
+          },
+          "inventory_bucket": {
+            "type": "string",
+            "title": "Inventory Bucket"
+          },
+          "inventory_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Count"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "listing_id",
+          "listing_title",
+          "inventory_bucket",
+          "created_at"
+        ],
+        "title": "InventoryAlertEventRead"
+      },
+      "InventoryAlertSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "listing_id": {
+            "type": "string",
+            "title": "Listing Id"
+          },
+          "listing_title": {
+            "type": "string",
+            "title": "Listing Title"
+          },
+          "inventory_bucket": {
+            "type": "string",
+            "title": "Inventory Bucket"
+          },
+          "inventory_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Count"
+          },
+          "alert_delivery_count": {
+            "type": "integer",
+            "title": "Alert Delivery Count"
+          },
+          "latest_alert_delivery_status": {
+            "type": "string",
+            "title": "Latest Alert Delivery Status"
+          },
+          "latest_alert_delivery_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Alert Delivery Created At"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "listing_id",
+          "listing_title",
+          "inventory_bucket",
+          "alert_delivery_count",
+          "latest_alert_delivery_status",
+          "latest_alert_delivery_created_at",
+          "acknowledged"
+        ],
+        "title": "InventoryAlertSummaryRead"
       },
       "ListingAiAssistRequest": {
         "properties": {
@@ -8140,6 +10185,120 @@
         ],
         "title": "OrderCreate"
       },
+      "OrderExceptionEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "order_id": {
+            "type": "string",
+            "title": "Order Id"
+          },
+          "order_status": {
+            "type": "string",
+            "title": "Order Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "order_id",
+          "order_status",
+          "created_at"
+        ],
+        "title": "OrderExceptionEventRead"
+      },
+      "OrderExceptionSellerSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "latest_event_action": {
+            "type": "string",
+            "title": "Latest Event Action"
+          },
+          "latest_event_status": {
+            "type": "string",
+            "title": "Latest Event Status"
+          },
+          "latest_event_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Event Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "event_count",
+          "latest_event_action",
+          "latest_event_status",
+          "latest_event_created_at"
+        ],
+        "title": "OrderExceptionSellerSummaryRead"
+      },
       "OrderItemCreate": {
         "properties": {
           "listing_id": {
@@ -9591,6 +11750,159 @@
         ],
         "title": "ReviewResponseAiAssistSuggestion"
       },
+      "ReviewResponseReminderEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "latest_review_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Review Id"
+          },
+          "latest_review_rating": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Review Rating"
+          },
+          "pending_review_count": {
+            "type": "integer",
+            "title": "Pending Review Count"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "pending_review_count",
+          "created_at"
+        ],
+        "title": "ReviewResponseReminderEventRead"
+      },
+      "ReviewResponseReminderSellerSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "reminder_count": {
+            "type": "integer",
+            "title": "Reminder Count"
+          },
+          "latest_review_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Review Id"
+          },
+          "latest_review_rating": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Review Rating"
+          },
+          "latest_alert_delivery_status": {
+            "type": "string",
+            "title": "Latest Alert Delivery Status"
+          },
+          "latest_alert_delivery_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Alert Delivery Created At"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "reminder_count",
+          "latest_alert_delivery_status",
+          "latest_alert_delivery_created_at",
+          "acknowledged"
+        ],
+        "title": "ReviewResponseReminderSellerSummaryRead"
+      },
       "ReviewSellerResponseUpdate": {
         "properties": {
           "seller_response": {
@@ -10535,6 +12847,231 @@
         },
         "type": "object",
         "title": "SellerUpdate"
+      },
+      "SubscriptionDowngradeEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "seller_subscription_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Subscription Id"
+          },
+          "from_tier_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Tier Id"
+          },
+          "from_tier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Tier Name"
+          },
+          "to_tier_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Tier Id"
+          },
+          "to_tier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Tier Name"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "created_at"
+        ],
+        "title": "SubscriptionDowngradeEventRead"
+      },
+      "SubscriptionDowngradeSellerSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "alert_delivery_count": {
+            "type": "integer",
+            "title": "Alert Delivery Count"
+          },
+          "latest_alert_delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Alert Delivery Id"
+          },
+          "latest_alert_delivery_status": {
+            "type": "string",
+            "title": "Latest Alert Delivery Status"
+          },
+          "latest_alert_delivery_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Alert Delivery Created At"
+          },
+          "previous_tier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Tier Name"
+          },
+          "current_tier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Tier Name"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "alert_delivery_count",
+          "latest_alert_delivery_status",
+          "latest_alert_delivery_created_at",
+          "acknowledged"
+        ],
+        "title": "SubscriptionDowngradeSellerSummaryRead"
       },
       "SubscriptionTierCreate": {
         "properties": {

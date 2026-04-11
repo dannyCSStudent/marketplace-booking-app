@@ -2324,6 +2324,40 @@ export function DeliveryOpsPanel() {
       });
     }
 
+    const deliveryFailureAlerts = deliveries.filter(
+      (delivery) => delivery.payload?.alert_type === "delivery_failure",
+    ).length;
+    if (deliveryFailureAlerts > 0) {
+      alerts.push({
+        id: "delivery-failure-alerts",
+        severity: deliveryFailureAlerts >= 3 ? "high" : "medium",
+        title: "Delivery failure alerts were dispatched",
+        detail:
+          deliveryFailureAlerts >= 3
+            ? `${deliveryFailureAlerts} admin delivery-failure alert${deliveryFailureAlerts === 1 ? "" : "s"} were queued after worker retries exhausted.`
+            : `${deliveryFailureAlerts} admin delivery-failure alert${deliveryFailureAlerts === 1 ? "" : "s"} were queued to follow up on worker-side delivery failures.`,
+        actionLabel: "Open failure alerts",
+        isNewSinceVisit: false,
+        onClick: () => {
+          recordWatchlistAlertAction(
+            "delivery failure alerts",
+            deliveryFailureAlerts >= 3 ? "warning" : "neutral",
+            "Opened the delivery failure alert slice to review worker-side notification failures.",
+          );
+          applyQueueState({
+            preset: "needs_attention",
+            status: "all",
+            channel: "all",
+            kind: "all",
+            recency: "week",
+            trust: "all",
+            ownership: "all",
+          });
+          setSearchQuery("delivery failure");
+        },
+      });
+    }
+
     if (counts.trustDrivenOpen > 0) {
       alerts.push({
         id: "trust-backlog",

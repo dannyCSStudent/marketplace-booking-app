@@ -78,6 +78,51 @@ class NotificationDeliveryWorkerTests(unittest.TestCase):
         self.assertEqual(fake_supabase.update_payloads[-1]["delivery_status"], "queued")
         self.assertIn("provider down", fake_supabase.update_payloads[-1]["failure_reason"])
 
+    def test_final_failed_delivery_queues_admin_alert(self):
+        fake_supabase = _FakeSupabase(
+            select_results=[
+                [
+                    {
+                        "id": "delivery-1",
+                        "recipient_user_id": "user-1",
+                        "transaction_kind": "order",
+                        "transaction_id": "order-1",
+                        "event_id": "event-1",
+                        "channel": "email",
+                        "payload": {"status": "confirmed"},
+                        "attempts": 2,
+                        "next_attempt_at": "2026-03-31T00:00:00+00:00",
+                    }
+                ],
+                [{"id": "admin-1", "email_notifications_enabled": True, "push_notifications_enabled": False}],
+                [],
+            ]
+        )
+
+        settings = _settings(
+            notification_email_provider="log",
+            notification_push_provider="log",
+            admin_user_ids=["admin-1"],
+            admin_user_roles={"admin-1": "owner"},
+        )
+
+        with (
+            patch("app.services.notification_delivery_worker.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.notification_delivery_worker.get_settings", return_value=settings),
+            patch(
+                "app.services.notification_delivery_worker._dispatch_delivery",
+                side_effect=RuntimeError("provider down"),
+            ),
+            patch(
+                "app.services.notification_delivery_worker.queue_admin_delivery_failure_notifications",
+            ) as mock_queue_alert,
+        ):
+            result = process_notification_deliveries(batch_size=10)
+
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(fake_supabase.update_payloads[-1]["delivery_status"], "failed")
+        mock_queue_alert.assert_called_once()
+
     def test_resend_delivery_uses_auth_email_lookup(self):
         fake_supabase = _FakeSupabase(select_results=[])
         fake_response = MagicMock()
