@@ -4,10 +4,14 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 
 import { formatCurrency, getApiBaseUrl } from '@/lib/api';
 import {
+  clearBuyerWorkspaceResumeFilters,
   getBuyerDeliveryRetryMode,
+  getBuyerRecentNotificationDeliveries,
   getBuyerWorkspaceFilters,
+  getBuyerWorkspaceResumeFilters,
   setBuyerDeliveryRetryMode,
   setBuyerWorkspaceFilters,
+  setBuyerWorkspaceResumeFilters,
 } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
@@ -17,6 +21,77 @@ function formatRetryMode(mode: 'best_effort' | 'atomic') {
 
 function toggleRetryMode(mode: 'best_effort' | 'atomic') {
   return mode === 'atomic' ? 'best_effort' : 'atomic';
+}
+
+type BuyerWorkspaceSnapshot = {
+  notificationFilter?: 'all' | 'order' | 'booking';
+  deliveryFilter?: 'all' | 'queued' | 'sent' | 'failed';
+  deliveryRecencyFilter?: 'today' | '7d' | 'all';
+  activityFilter?: 'all' | 'order' | 'booking';
+  activityEngagementFilter?: 'all' | 'product' | 'service' | 'local' | 'hybrid';
+  workspacePreset?: 'default' | 'needs-action' | 'recent-failures';
+  deliveryRetryMode?: 'best_effort' | 'atomic';
+};
+
+function getBuyerWorkspaceSnapshotKey(snapshot: BuyerWorkspaceSnapshot | null) {
+  if (!snapshot) {
+    return null;
+  }
+
+  return JSON.stringify({
+    notificationFilter: snapshot.notificationFilter ?? 'all',
+    deliveryFilter: snapshot.deliveryFilter ?? 'all',
+    deliveryRecencyFilter: snapshot.deliveryRecencyFilter ?? '7d',
+    activityFilter: snapshot.activityFilter ?? 'all',
+    activityEngagementFilter: snapshot.activityEngagementFilter ?? 'all',
+    workspacePreset: snapshot.workspacePreset ?? 'default',
+    deliveryRetryMode: snapshot.deliveryRetryMode ?? 'best_effort',
+  });
+}
+
+function getBuyerWorkspaceSummary(snapshot: BuyerWorkspaceSnapshot | null) {
+  if (!snapshot) {
+    return null;
+  }
+
+  const parts = [
+    snapshot.workspacePreset === 'needs-action'
+      ? 'Needs Action'
+      : snapshot.workspacePreset === 'recent-failures'
+        ? 'Recent Failures'
+        : 'Default',
+    snapshot.notificationFilter !== 'all' ? `Notifications: ${snapshot.notificationFilter}` : null,
+    snapshot.deliveryFilter !== 'all' ? `Deliveries: ${snapshot.deliveryFilter}` : null,
+    snapshot.deliveryRecencyFilter !== '7d' ? `Recency: ${snapshot.deliveryRecencyFilter}` : null,
+    snapshot.activityFilter !== 'all' ? `Activity: ${snapshot.activityFilter}` : null,
+    snapshot.activityEngagementFilter !== 'all'
+      ? `Engagement: ${snapshot.activityEngagementFilter}`
+      : null,
+    snapshot.deliveryRetryMode === 'atomic' ? 'Validate First' : null,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function applyBuyerWorkspaceSnapshot(
+  snapshot: BuyerWorkspaceSnapshot,
+  setters: {
+    setNotificationFilter: (value: 'all' | 'order' | 'booking') => void;
+    setDeliveryFilter: (value: 'all' | 'queued' | 'sent' | 'failed') => void;
+    setDeliveryRecencyFilter: (value: 'today' | '7d' | 'all') => void;
+    setActivityFilter: (value: 'all' | 'order' | 'booking') => void;
+    setActivityEngagementFilter: (value: 'all' | 'product' | 'service' | 'local' | 'hybrid') => void;
+    setWorkspacePreset: (value: 'default' | 'needs-action' | 'recent-failures') => void;
+    setDeliveryRetryMode: (value: 'best_effort' | 'atomic') => void;
+  },
+) {
+  setters.setNotificationFilter(snapshot.notificationFilter ?? 'all');
+  setters.setDeliveryFilter(snapshot.deliveryFilter ?? 'all');
+  setters.setDeliveryRecencyFilter(snapshot.deliveryRecencyFilter ?? '7d');
+  setters.setActivityFilter(snapshot.activityFilter ?? 'all');
+  setters.setActivityEngagementFilter(snapshot.activityEngagementFilter ?? 'all');
+  setters.setWorkspacePreset(snapshot.workspacePreset ?? 'default');
+  setters.setDeliveryRetryMode(snapshot.deliveryRetryMode ?? 'best_effort');
 }
 
 export default function BuyerScreen() {
@@ -61,6 +136,11 @@ export default function BuyerScreen() {
   const [workspacePreset, setWorkspacePreset] = useState<'default' | 'needs-action' | 'recent-failures'>('default');
   const [deliveryRetryMode, setDeliveryRetryMode] = useState<'best_effort' | 'atomic'>('best_effort');
   const [filtersRestored, setFiltersRestored] = useState(false);
+  const [resumeWorkspaceFilters, setResumeWorkspaceFiltersState] = useState<BuyerWorkspaceSnapshot | null>(
+    null,
+  );
+  const [resumeWorkspaceRestored, setResumeWorkspaceRestored] = useState(false);
+  const [recentNotificationDeliveryIds, setRecentNotificationDeliveryIds] = useState<string[]>([]);
 
   const filteredNotifications = useMemo(
     () =>
@@ -242,21 +322,77 @@ export default function BuyerScreen() {
   }, []);
 
   useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerWorkspaceResumeFilters();
+      if (!storedValue) {
+        setResumeWorkspaceRestored(true);
+        return;
+      }
+
+      try {
+        const storedFilters = JSON.parse(storedValue) as BuyerWorkspaceSnapshot;
+        setResumeWorkspaceFiltersState(storedFilters);
+      } catch {
+        // Ignore corrupted resume state and fall back to no saved workspace.
+      } finally {
+        setResumeWorkspaceRestored(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerRecentNotificationDeliveries();
+      if (!storedValue) {
+        return;
+      }
+
+      try {
+        const storedRecentDeliveries = JSON.parse(storedValue) as string[];
+        if (Array.isArray(storedRecentDeliveries)) {
+          setRecentNotificationDeliveryIds(
+            storedRecentDeliveries.filter((item) => typeof item === 'string'),
+          );
+        }
+      } catch {
+        // Ignore corrupted recent-delivery state.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     if (!filtersRestored) {
       return;
     }
 
-    void setBuyerWorkspaceFilters(
-      JSON.stringify({
-        notificationFilter,
-        deliveryFilter,
-        deliveryRecencyFilter,
-        activityFilter,
-        activityEngagementFilter,
-        workspacePreset,
-      }),
-    );
+    const snapshot: BuyerWorkspaceSnapshot = {
+      notificationFilter,
+      deliveryFilter,
+      deliveryRecencyFilter,
+      activityFilter,
+      activityEngagementFilter,
+      workspacePreset,
+      deliveryRetryMode,
+    };
+
+    void setBuyerWorkspaceFilters(JSON.stringify(snapshot));
     void setBuyerDeliveryRetryMode(deliveryRetryMode);
+
+    const hasActiveWorkspace =
+      notificationFilter !== 'all' ||
+      deliveryFilter !== 'all' ||
+      deliveryRecencyFilter !== '7d' ||
+      activityFilter !== 'all' ||
+      activityEngagementFilter !== 'all' ||
+      workspacePreset !== 'default' ||
+      deliveryRetryMode !== 'best_effort';
+
+    if (hasActiveWorkspace) {
+      void setBuyerWorkspaceResumeFilters(JSON.stringify(snapshot));
+      if (getBuyerWorkspaceSnapshotKey(resumeWorkspaceFilters) !== getBuyerWorkspaceSnapshotKey(snapshot)) {
+        setResumeWorkspaceFiltersState(snapshot);
+      }
+    }
   }, [
     activityFilter,
     activityEngagementFilter,
@@ -265,6 +401,7 @@ export default function BuyerScreen() {
     deliveryRecencyFilter,
     filtersRestored,
     notificationFilter,
+    resumeWorkspaceFilters,
     workspacePreset,
   ]);
 
@@ -295,6 +432,64 @@ export default function BuyerScreen() {
     setActivityFilter('all');
     setActivityEngagementFilter('all');
   }
+
+  const resumeWorkspaceSummary = useMemo(
+    () => getBuyerWorkspaceSummary(resumeWorkspaceFilters),
+    [resumeWorkspaceFilters],
+  );
+  const currentWorkspaceSnapshot = useMemo(
+    () =>
+      ({
+        notificationFilter,
+        deliveryFilter,
+        deliveryRecencyFilter,
+        activityFilter,
+        activityEngagementFilter,
+        workspacePreset,
+        deliveryRetryMode,
+      }) satisfies BuyerWorkspaceSnapshot,
+    [
+      activityFilter,
+      activityEngagementFilter,
+      deliveryRetryMode,
+      deliveryFilter,
+      deliveryRecencyFilter,
+      notificationFilter,
+      workspacePreset,
+    ],
+  );
+  const savedWorkspaceIsDifferent =
+    resumeWorkspaceRestored &&
+    Boolean(resumeWorkspaceFilters) &&
+    getBuyerWorkspaceSnapshotKey(resumeWorkspaceFilters) !==
+      getBuyerWorkspaceSnapshotKey(currentWorkspaceSnapshot);
+  const canResumeWorkspace =
+    resumeWorkspaceRestored &&
+    Boolean(resumeWorkspaceFilters) &&
+    Boolean(resumeWorkspaceSummary);
+  const recentNotificationDeliveries = useMemo(
+    () =>
+      recentNotificationDeliveryIds
+        .map((itemId) => notificationDeliveries.find((item) => item.id === itemId))
+        .filter((item): item is (typeof notificationDeliveries)[number] => Boolean(item)),
+    [notificationDeliveries, recentNotificationDeliveryIds],
+  );
+
+  const handleResumeWorkspace = () => {
+    if (!resumeWorkspaceFilters) {
+      return;
+    }
+
+    applyBuyerWorkspaceSnapshot(resumeWorkspaceFilters, {
+      setNotificationFilter,
+      setDeliveryFilter,
+      setDeliveryRecencyFilter,
+      setActivityFilter,
+      setActivityEngagementFilter,
+      setWorkspacePreset,
+      setDeliveryRetryMode,
+    });
+  };
 
   function handleAuth() {
     setLocalError(null);
@@ -460,7 +655,40 @@ export default function BuyerScreen() {
       </View>
 
       <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Workspace Views</Text>
+        <View style={styles.panelHeaderRow}>
+          <Text style={styles.panelTitle}>Workspace Views</Text>
+          {savedWorkspaceIsDifferent ? (
+            <Pressable style={styles.savedWorkspaceCue} onPress={handleResumeWorkspace}>
+              <Text style={styles.savedWorkspaceCueText}>Saved workspace available</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        {canResumeWorkspace ? (
+          <View style={styles.resumePanel}>
+            <View style={styles.resumePanelHeader}>
+              <View>
+                <Text style={styles.resumeEyebrow}>Saved Workspace</Text>
+                <Text style={styles.resumeTitle}>Resume your last filter mix.</Text>
+              </View>
+              <Pressable style={styles.resumeButton} onPress={handleResumeWorkspace}>
+                <Text style={styles.resumeButtonText}>Resume workspace</Text>
+              </Pressable>
+            </View>
+            {resumeWorkspaceSummary ? (
+              <Text style={styles.resumeSummary}>{resumeWorkspaceSummary}</Text>
+            ) : null}
+            {savedWorkspaceIsDifferent ? (
+              <Pressable
+                style={styles.resumeClearButton}
+                onPress={async () => {
+                  setResumeWorkspaceFiltersState(null);
+                  await clearBuyerWorkspaceResumeFilters();
+                }}>
+                <Text style={styles.resumeClearButtonText}>Clear saved workspace</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         <View style={styles.filterRow}>
           <FilterChip
             label="Default"
@@ -633,12 +861,65 @@ export default function BuyerScreen() {
       <View style={[styles.panel, unreadNotificationCount > 0 && styles.panelUnread]}>
         <View style={styles.notificationsHeader}>
           <Text style={styles.panelTitle}>Notifications · {filteredNotifications.length}</Text>
-          {profile ? (
-            <Pressable style={styles.markSeenButton} onPress={() => void markNotificationsSeen()}>
-              <Text style={styles.markSeenButtonText}>Mark seen</Text>
-            </Pressable>
-          ) : null}
+          <View style={styles.notificationsHeaderActions}>
+            {recentNotificationDeliveries.length > 0 ? (
+              <Pressable
+                style={styles.savedDeliveryCue}
+                onPress={() =>
+                  router.push({
+                    pathname: '/notifications/[id]',
+                    params: { id: recentNotificationDeliveries[0].id },
+                  })
+                }>
+                <Text style={styles.savedDeliveryCueText}>
+                  Open latest · {recentNotificationDeliveries[0].channel} ·{' '}
+                  {recentNotificationDeliveries[0].delivery_status}
+                </Text>
+              </Pressable>
+            ) : null}
+            {profile ? (
+              <Pressable style={styles.markSeenButton} onPress={() => void markNotificationsSeen()}>
+                <Text style={styles.markSeenButtonText}>Mark seen</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
+        {recentNotificationDeliveries.length > 0 ? (
+          <View style={styles.recentDeliveryPanel}>
+            <View style={styles.notificationsHeader}>
+              <Text style={styles.recentDeliveryTitle}>Recently Opened Deliveries</Text>
+              <Pressable
+                style={styles.recentDeliveryClearButton}
+                onPress={async () => {
+                  setRecentNotificationDeliveryIds([]);
+                  await clearBuyerRecentNotificationDeliveries();
+                }}>
+                <Text style={styles.recentDeliveryClearButtonText}>Clear saved delivery history</Text>
+              </Pressable>
+            </View>
+            <View style={styles.recentDeliveryList}>
+              {recentNotificationDeliveries.map((delivery) => (
+                <Pressable
+                  key={delivery.id}
+                  style={styles.recentDeliveryCard}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/notifications/[id]',
+                      params: { id: delivery.id },
+                    })
+                  }>
+                  <Text style={styles.activityLabel}>
+                    {delivery.channel} · {delivery.delivery_status}
+                  </Text>
+                  <Text style={styles.activityMeta}>
+                    {new Date(delivery.created_at).toLocaleString()} · attempts {delivery.attempts}
+                  </Text>
+                  <Text style={styles.activityNote}>{delivery.payload.subject ?? getDeliveryRecipient(delivery.payload)}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
         <View style={styles.filterRow}>
           <FilterChip
             label="All"
@@ -1088,6 +1369,13 @@ const styles = StyleSheet.create({
     padding: 18,
     gap: 12,
   },
+  panelHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
   panelUnread: {
     borderWidth: 1,
     borderColor: '#d88c43',
@@ -1153,15 +1441,148 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+  savedWorkspaceCue: {
+    borderRadius: 999,
+    backgroundColor: '#eef3e4',
+    borderWidth: 1,
+    borderColor: '#c7d7ab',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  savedWorkspaceCueText: {
+    color: '#496022',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
   notificationsHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
+  notificationsHeaderActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  savedDeliveryCue: {
+    borderRadius: 999,
+    backgroundColor: '#eef3e4',
+    borderWidth: 1,
+    borderColor: '#c7d7ab',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  savedDeliveryCueText: {
+    color: '#496022',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  recentDeliveryPanel: {
+    backgroundColor: '#f4eadb',
+    borderRadius: 18,
+    gap: 10,
+    padding: 14,
+  },
+  recentDeliveryTitle: {
+    color: '#1f2319',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  recentDeliveryList: {
+    gap: 10,
+  },
+  recentDeliveryCard: {
+    backgroundColor: '#fff8ee',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e4d6bf',
+    gap: 4,
+    padding: 12,
+  },
+  recentDeliveryClearButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  recentDeliveryClearButtonText: {
+    color: '#4d4338',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
   filterRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  resumePanel: {
+    backgroundColor: '#f4eadb',
+    borderRadius: 22,
+    padding: 16,
+    gap: 8,
+  },
+  resumePanelHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  resumeEyebrow: {
+    color: '#6f6556',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  resumeTitle: {
+    color: '#1f2319',
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  resumeButton: {
+    borderRadius: 999,
+    backgroundColor: '#1f351f',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  resumeButtonText: {
+    color: '#fff8ee',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  resumeSummary: {
+    color: '#6f6556',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  resumeClearButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  resumeClearButtonText: {
+    color: '#4d4338',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   filterChip: {
     borderRadius: 999,

@@ -15,6 +15,12 @@ import {
   type ReviewRead,
 } from "@/app/lib/api";
 import { restoreBuyerSession } from "@/app/lib/buyer-auth";
+import {
+  clearRecentReceipts,
+  getRecentReceipts,
+  setRecentReceipt,
+  type RecentReceiptEntry,
+} from "@/app/lib/receipt-history";
 
 type ReceiptPanelProps = {
   kind: "order" | "booking";
@@ -29,6 +35,27 @@ function titleCaseLabel(value: string) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function formatBookingScheduleSummary(start: string, end: string) {
+  const bookingStart = new Date(start);
+  const bookingEnd = new Date(end);
+
+  return {
+    dayLabel: bookingStart.toLocaleDateString([], {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    }),
+    timeLabel: `${bookingStart.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })} to ${bookingEnd.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })}`,
+    fullLabel: `${bookingStart.toLocaleString()} to ${bookingEnd.toLocaleString()}`,
+  };
 }
 
 function getRecommendedBrowsePreset(input: {
@@ -215,6 +242,33 @@ function getSuggestionSellerPriority(
   return suggestion.seller_id === currentSellerId ? 1 : 0;
 }
 
+function buildReceiptHref(entry: Pick<RecentReceiptEntry, "kind" | "id">) {
+  return `/transactions/${entry.kind}/${entry.id}`;
+}
+
+function getReceiptKindLabel(kind: RecentReceiptEntry["kind"]) {
+  return kind === "order" ? "Order" : "Booking";
+}
+
+function getReceiptDetailLabel(receipt: {
+  kind: RecentReceiptEntry["kind"];
+  title: string;
+  status: string;
+  currency: string;
+  total_cents: number;
+  scheduleLabel?: string | null;
+}) {
+  const parts = [receipt.title, receipt.status];
+
+  if (receipt.scheduleLabel) {
+    parts.push(receipt.scheduleLabel);
+  }
+
+  parts.push(formatCurrency(receipt.total_cents, receipt.currency));
+
+  return parts.join(" · ");
+}
+
 function buildListingHref(
   listingId: string,
   safeFromHref: string | null,
@@ -244,6 +298,7 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
   const [moreLikeThisListings, setMoreLikeThisListings] = useState<
     (Listing & { recommendationLabel: string })[]
   >([]);
+  const [recentReceipts, setRecentReceipts] = useState<RecentReceiptEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const safeFromHref = (() => {
@@ -287,6 +342,12 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
   })();
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      setRecentReceipts(getRecentReceipts());
+    }
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
 
     void (async () => {
@@ -311,24 +372,27 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
             { orderId: id },
             session.access_token,
           );
-          const dashboard = await api.loadBuyerDashboard(session.access_token);
+          const [engagement, listings] = await Promise.all([
+            api.loadBuyerEngagementContext(session.access_token),
+            api.loadPublicListingsPage({ limit: 100, offset: 0 }),
+          ]);
           const preset = getRecommendedBrowsePreset({
-            listings: dashboard.listings,
-            orders: dashboard.orders,
-            bookings: dashboard.bookings,
+            listings,
+            orders: engagement.orders,
+            bookings: engagement.bookings,
           });
           if (!cancelled) {
             setOrder(nextOrder);
             setReview(reviewLookup.review ?? null);
             setMoreLikeThisListings(
-              dashboard.listings
+              listings
                 .filter((item) => item.id !== nextOrder.items?.[0]?.listing_id)
                 .map((item) => ({
                   listing: item,
                   match: getRecommendationMatch(item, preset),
                 }))
                 .filter((item): item is {
-                  listing: (typeof dashboard.listings)[number];
+                  listing: (typeof listings)[number];
                   match: { score: number; label: string };
                 } => Boolean(item.match))
                 .sort((left, right) => {
@@ -353,6 +417,22 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
                 .slice(0, 3)
                 .map((item) => ({ ...item.listing, recommendationLabel: item.match.label })),
             );
+            setRecentReceipts(
+              setRecentReceipt({
+                kind: "order",
+                id: nextOrder.id,
+                label: nextOrder.items?.[0]?.listing_title ?? `Order ${nextOrder.id.slice(0, 8)}`,
+                detail: getReceiptDetailLabel({
+                  kind: "order",
+                  title: nextOrder.items?.[0]?.listing_title ?? "Order receipt",
+                  status: nextOrder.status.replaceAll("_", " "),
+                  currency: nextOrder.currency,
+                  total_cents: nextOrder.total_cents,
+                }),
+                href: buildReceiptHref({ kind: "order", id: nextOrder.id }),
+                lastSeenAt: new Date().toISOString(),
+              }),
+            );
           }
         } else {
           const nextBooking = await api.getBookingById(id, { accessToken: session.access_token });
@@ -360,24 +440,27 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
             { bookingId: id },
             session.access_token,
           );
-          const dashboard = await api.loadBuyerDashboard(session.access_token);
+          const [engagement, listings] = await Promise.all([
+            api.loadBuyerEngagementContext(session.access_token),
+            api.loadPublicListingsPage({ limit: 100, offset: 0 }),
+          ]);
           const preset = getRecommendedBrowsePreset({
-            listings: dashboard.listings,
-            orders: dashboard.orders,
-            bookings: dashboard.bookings,
+            listings,
+            orders: engagement.orders,
+            bookings: engagement.bookings,
           });
           if (!cancelled) {
             setBooking(nextBooking);
             setReview(reviewLookup.review ?? null);
             setMoreLikeThisListings(
-              dashboard.listings
+              listings
                 .filter((item) => item.id !== nextBooking.listing_id)
                 .map((item) => ({
                   listing: item,
                   match: getRecommendationMatch(item, preset),
                 }))
                 .filter((item): item is {
-                  listing: (typeof dashboard.listings)[number];
+                  listing: (typeof listings)[number];
                   match: { score: number; label: string };
                 } => Boolean(item.match))
                 .sort((left, right) => {
@@ -401,6 +484,27 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
                 })
                 .slice(0, 3)
                 .map((item) => ({ ...item.listing, recommendationLabel: item.match.label })),
+            );
+            const bookingScheduleSummary = formatBookingScheduleSummary(
+              nextBooking.scheduled_start,
+              nextBooking.scheduled_end,
+            );
+            setRecentReceipts(
+              setRecentReceipt({
+                kind: "booking",
+                id: nextBooking.id,
+                label: nextBooking.listing_title ?? `Booking ${nextBooking.id.slice(0, 8)}`,
+                detail: getReceiptDetailLabel({
+                  kind: "booking",
+                  title: nextBooking.listing_title ?? "Booking receipt",
+                  status: nextBooking.status.replaceAll("_", " "),
+                  currency: nextBooking.currency,
+                  total_cents: nextBooking.total_cents,
+                  scheduleLabel: `${bookingScheduleSummary.dayLabel} · ${bookingScheduleSummary.timeLabel}`,
+                }),
+                href: buildReceiptHref({ kind: "booking", id: nextBooking.id }),
+                lastSeenAt: new Date().toISOString(),
+              }),
             );
           }
         }
@@ -425,6 +529,8 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
     };
   }, [id, kind]);
 
+  const latestReceipt = recentReceipts[0] ?? null;
+
   if (loading) {
     return (
       <div className="rounded-[1.5rem] border border-border bg-white/70 p-6 text-sm text-foreground/66">
@@ -445,10 +551,19 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
     return (
       <div className="space-y-6">
         <ReceiptContextBar originSliceSummary={originSliceSummary} safeFromHref={safeFromHref} />
+        <RecentReceiptRail
+          latestReceipt={latestReceipt}
+          recentReceipts={recentReceipts}
+          onClear={() => {
+            clearRecentReceipts();
+            setRecentReceipts([]);
+          }}
+        />
         <ReceiptHero
           eyebrow="Order Receipt"
           title="Order submitted successfully."
           subtitle="The seller queue now has this order and can move it through the workflow."
+          latestReceiptHref={latestReceipt ? buildReceiptHref(latestReceipt) : null}
         />
         <ReceiptCard
           title="Summary"
@@ -509,22 +624,47 @@ export function ReceiptPanel({ kind, id }: ReceiptPanelProps) {
   }
 
   if (kind === "booking" && booking) {
+    const bookingSchedule = formatBookingScheduleSummary(
+      booking.scheduled_start,
+      booking.scheduled_end,
+    );
+
     return (
       <div className="space-y-6">
         <ReceiptContextBar originSliceSummary={originSliceSummary} safeFromHref={safeFromHref} />
+        <RecentReceiptRail
+          latestReceipt={latestReceipt}
+          recentReceipts={recentReceipts}
+          onClear={() => {
+            clearRecentReceipts();
+            setRecentReceipts([]);
+          }}
+        />
         <ReceiptHero
           eyebrow="Booking Receipt"
           title="Booking requested successfully."
           subtitle="The seller queue now has this booking request and can confirm or decline it."
+          latestReceiptHref={latestReceipt ? buildReceiptHref(latestReceipt) : null}
         />
+        <div className="rounded-[1.7rem] border border-accent/20 bg-accent/5 p-5">
+          <p className="font-mono text-xs uppercase tracking-[0.22em] text-foreground/48">
+            Requested Schedule
+          </p>
+          <p className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-foreground">
+            {bookingSchedule.dayLabel}
+          </p>
+          <p className="mt-2 text-base text-foreground/76">{bookingSchedule.timeLabel}</p>
+          <p className="mt-3 text-sm text-foreground/60">
+            Keep this window handy if you need to message the seller or compare it against other plans.
+          </p>
+        </div>
         <ReceiptCard
           title="Summary"
           rows={[
             ["Booking ID", booking.id],
             ["Status", booking.status.replaceAll("_", " ")],
             ["Listing", booking.listing_title ?? booking.listing_id],
-            ["Starts", new Date(booking.scheduled_start).toLocaleString()],
-            ["Ends", new Date(booking.scheduled_end).toLocaleString()],
+            ["Schedule", bookingSchedule.fullLabel],
             ["Total", formatCurrency(booking.total_cents, booking.currency)],
             ["Seller update", booking.seller_response_note ?? "No seller note yet"],
             ["Notes", booking.notes ?? "No notes added"],
@@ -744,6 +884,70 @@ function ReceiptContextBar({
   );
 }
 
+function RecentReceiptRail({
+  latestReceipt,
+  recentReceipts,
+  onClear,
+}: {
+  latestReceipt: RecentReceiptEntry | null;
+  recentReceipts: RecentReceiptEntry[];
+  onClear: () => void;
+}) {
+  if (!latestReceipt && recentReceipts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-[1.5rem] border border-border bg-white/72 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-[0.22em] text-foreground/48">
+            Recently Opened Receipts
+          </p>
+          <p className="mt-2 text-sm text-foreground/62">
+            Jump back into the latest order or booking receipts you opened in this browser.
+          </p>
+        </div>
+        <button
+          className="rounded-full border border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground transition hover:border-accent hover:text-accent"
+          onClick={onClear}
+          type="button"
+        >
+          Clear saved receipt history
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        {recentReceipts.map((entry) => (
+          <Link
+            key={`${entry.kind}:${entry.id}`}
+            className={`rounded-[1.1rem] border px-4 py-3 transition hover:border-accent hover:text-accent ${
+              latestReceipt?.kind === entry.kind && latestReceipt?.id === entry.id
+                ? "border-accent bg-accent/5"
+                : "border-border bg-background"
+            }`}
+            href={entry.href}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                <p className="mt-1 text-xs uppercase tracking-[0.14em] text-foreground/58">
+                  {getReceiptKindLabel(entry.kind)} · {entry.detail}
+                </p>
+              </div>
+              {latestReceipt?.kind === entry.kind && latestReceipt?.id === entry.id ? (
+                <span className="rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
+                  Latest
+                </span>
+              ) : null}
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReviewSection({
   accessToken,
   comment,
@@ -913,10 +1117,12 @@ function ReceiptHero({
   eyebrow,
   title,
   subtitle,
+  latestReceiptHref,
 }: {
   eyebrow: string;
   title: string;
   subtitle: string;
+  latestReceiptHref: string | null;
 }) {
   return (
     <div className="rounded-[2rem] border border-border bg-surface-strong p-6">
@@ -926,6 +1132,14 @@ function ReceiptHero({
       </h2>
       <p className="mt-4 text-sm leading-7 text-foreground/72">{subtitle}</p>
       <div className="mt-6 flex flex-wrap gap-3">
+        {latestReceiptHref ? (
+          <Link
+            href={latestReceiptHref}
+            className="rounded-full border border-accent/20 bg-accent/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent transition hover:border-accent hover:bg-accent/15"
+          >
+            Open latest receipt
+          </Link>
+        ) : null}
         <Link
           href="/buyer"
           className="rounded-full border border-border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-foreground transition hover:border-accent hover:text-accent"

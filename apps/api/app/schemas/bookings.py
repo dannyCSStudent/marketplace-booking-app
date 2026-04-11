@@ -16,6 +16,17 @@ class BookingStatusUpdate(BaseModel):
     seller_response_note: str | None = None
 
 
+class BookingResponseAiAssistSuggestion(BaseModel):
+    suggested_note: str
+    summary: str
+
+
+class BookingResponseAiAssistResponse(BaseModel):
+    transaction_kind: str
+    transaction_id: str
+    suggestion: BookingResponseAiAssistSuggestion
+
+
 class BookingBulkStatusUpdateItem(BaseModel):
     booking_id: str
     status: str
@@ -58,6 +69,7 @@ class BookingRead(BaseModel):
     seller_response_note: str | None = None
     listing_title: str | None = None
     listing_type: str | None = None
+    is_local_only: bool | None = None
     status_history: list[BookingStatusEventRead] = []
 
 

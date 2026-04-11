@@ -22,7 +22,9 @@ type ResponseFor<Path extends KnownPath, Method extends keyof ApiOperations[Path
 type RequestBodyFor<Path extends KnownPath, Method extends keyof ApiOperations[Path]> =
   ApiOperations[Path][Method] extends { requestBody: infer Body } ? Body : never;
 
-export type Listing = ApiSchemaMap["ListingRead"];
+export type Listing = ApiSchemaMap["ListingRead"] & {
+  auto_accept_bookings?: boolean;
+};
 export type ListingType = ApiSchemaMap["ListingType"];
 export type ListingPricingScopeCount = ApiSchemaMap["ListingPricingScopeCount"];
 export type PlatformFeeRateRead = ApiSchemaMap["PlatformFeeRateRead"];
@@ -37,6 +39,9 @@ export type SellerLookupRead = ApiSchemaMap["SellerLookupRead"];
 export type SellerSubscriptionRead = ApiSchemaMap["SellerSubscriptionRead"];
 export type SellerSubscriptionAssign = ApiSchemaMap["SellerSubscriptionAssign"];
 export type SellerSubscriptionEventRead = ApiSchemaMap["SellerSubscriptionEventRead"];
+export type SellerListingSummary = ApiSchemaMap["SellerListingSummaryRead"];
+export type SellerTrustIntervention = ApiSchemaMap["SellerTrustInterventionRead"];
+export type TrustAlertSellerSummaryRead = ApiSchemaMap["TrustAlertSellerSummaryRead"];
 export type CategoryRead = {
   id: string;
   name: string;
@@ -85,6 +90,14 @@ export type ReviewCreateInput = {
 export type ReviewSellerResponseUpdateInput = {
   seller_response?: string | null;
 };
+export type ReviewResponseAiAssistSuggestion = {
+  suggested_response: string;
+  summary: string;
+};
+export type ReviewResponseAiAssistResponse = {
+  review_id: string;
+  suggestion: ReviewResponseAiAssistSuggestion;
+};
 export type ReviewReportCreateInput = {
   reason: string;
   notes?: string | null;
@@ -124,6 +137,31 @@ export type ReviewModerationItem = {
     created_at: string;
   }>;
 };
+export type ReviewAnomalyRead = {
+  seller_id: string;
+  seller_slug?: string | null;
+  seller_display_name?: string | null;
+  active_report_count: number;
+  open_report_count: number;
+  escalated_report_count: number;
+  hidden_open_count: number;
+  recent_report_count: number;
+  latest_report_at: string;
+  severity: string;
+  reasons: string[];
+};
+export type ReviewAnomalySellerSummaryRead = {
+  seller_id: string;
+  seller_slug?: string | null;
+  seller_display_name?: string | null;
+  active_report_count: number;
+  latest_report_at: string;
+  severity: string;
+  reasons: string[];
+};
+export type ReviewAnomalyAckInput = {
+  seller_id: string;
+};
 export type ReviewVisibilityUpdateInput = {
   is_hidden: boolean;
   report_id?: string | null;
@@ -141,13 +179,42 @@ export type ProfilePayload = ApiSchemaMap["ProfileCreate"];
 export type ProfileUpdateInput = ApiSchemaMap["ProfileUpdate"];
 export type BookingCreateInput = ApiSchemaMap["BookingCreate"];
 export type BookingStatusUpdateInput = ApiSchemaMap["BookingStatusUpdate"];
-export type ListingCreateInput = ApiSchemaMap["ListingCreate"];
+export type OrderResponseAiAssistSuggestion = {
+  suggested_note: string;
+  summary: string;
+};
+export type OrderResponseAiAssistResponse = {
+  transaction_kind: string;
+  transaction_id: string;
+  suggestion: OrderResponseAiAssistSuggestion;
+};
+export type BookingResponseAiAssistSuggestion = {
+  suggested_note: string;
+  summary: string;
+};
+export type BookingResponseAiAssistResponse = {
+  transaction_kind: string;
+  transaction_id: string;
+  suggestion: BookingResponseAiAssistSuggestion;
+};
+export type ListingCreateInput = ApiSchemaMap["ListingCreate"] & {
+  auto_accept_bookings?: boolean;
+};
 export type ListingImageCreateInput = ApiSchemaMap["ListingImageCreate"];
 export type ListingImageUploadCreateInput = ApiSchemaMap["ListingImageUploadCreate"];
-export type ListingUpdateInput = ApiSchemaMap["ListingUpdate"];
+export type ListingUpdateInput = ApiSchemaMap["ListingUpdate"] & {
+  auto_accept_bookings?: boolean;
+};
 export type ListingAiAssistRequest = ApiSchemaMap["ListingAiAssistRequest"];
 export type ListingAiAssistSuggestion = ApiSchemaMap["ListingAiAssistSuggestion"];
 export type ListingAiAssistResponse = ApiSchemaMap["ListingAiAssistResponse"];
+export type ListingBookingSuggestionRead = {
+  listing_id: string;
+  suggested_day_offset: number;
+  suggested_label: string;
+  summary: string;
+  rationale: string;
+};
 export type ListingPromotionSummary = ApiSchemaMap["ListingPromotionSummary"];
 export type ListingPromotionEvent = ApiSchemaMap["ListingPromotionEvent"];
 export type ListingPriceInsight = ApiSchemaMap["ListingPriceInsight"];
@@ -165,10 +232,9 @@ export type NotificationDeliveryBulkRetryResult =
   ApiSchemaMap["NotificationDeliveryBulkRetryResult"];
 export type NotificationDeliverySummary = ApiSchemaMap["NotificationDeliverySummaryRead"];
 export type NotificationWorkerHealth = ApiSchemaMap["NotificationWorkerHealthRead"];
+export type TrustAlertEventRead = ApiSchemaMap["TrustAlertEventRead"];
 export type ApiSchemas = ApiSchemaMap;
-export type BuyerDashboardData = {
-  listings: Listing[];
-  profile: Profile;
+export type BuyerEngagementContext = {
   orders: Order[];
   bookings: Booking[];
 };
@@ -218,6 +284,10 @@ type RequestOptions = {
 };
 
 type RequestConfig = Omit<RequestOptions, "method" | "body">;
+type PublicListingsPageParams = {
+  limit?: number;
+  offset?: number;
+};
 
 export function authHeaders(accessToken: string) {
   return {
@@ -228,11 +298,42 @@ export function authHeaders(accessToken: string) {
 
 export const apiRoutes = {
   sellerBySlug: (slug: string) => `/sellers/${slug}`,
+  sellerById: (sellerId: string) => `/sellers/by-id/${sellerId}`,
+  sellerListingSummaryBySlug: (slug: string) => `/sellers/${slug}/listings/summary`,
+  sellerListingsBySlug: (
+    slug: string,
+    params?: { query?: string; category?: string; type?: string; limit?: number; offset?: number },
+  ) => {
+    const searchParams = new URLSearchParams();
+    if (params?.query) {
+      searchParams.set("query", params.query);
+    }
+    if (params?.category) {
+      searchParams.set("category", params.category);
+    }
+    if (params?.type) {
+      searchParams.set("type", params.type);
+    }
+    if (typeof params?.limit === "number") {
+      searchParams.set("limit", String(params.limit));
+    }
+    if (typeof params?.offset === "number") {
+      searchParams.set("offset", String(params.offset));
+    }
+    const suffix = searchParams.toString();
+    return `/sellers/${slug}/listings${suffix ? `?${suffix}` : ""}`;
+  },
   sellerReviewsBySlug: (slug: string) => `/sellers/${slug}/reviews`,
   sellerSubscriptionBySlug: (slug: string) => `/sellers/${slug}/subscription`,
   mySellerSubscription: "/sellers/me/subscription",
   myReviewLookup: (query: string) => `/reviews/me/lookup?${query}`,
+  reviewResponseAiAssist: (reviewId: string) => `/reviews/${reviewId}/ai-assist`,
+  reviewAnomalies: (limit?: number) => `/reviews/anomalies${limit ? `?limit=${limit}` : ""}`,
+  reviewAnomalySellers: (limit?: number) => `/reviews/anomalies/sellers${limit ? `?limit=${limit}` : ""}`,
+  reviewAnomalyAcknowledge: (sellerId: string) => `/reviews/anomalies/${sellerId}/acknowledge`,
   reviewSellerResponse: (reviewId: string) => `/reviews/${reviewId}/seller-response`,
+  orderResponseAiAssist: (orderId: string) => `/orders/${orderId}/response-ai-assist`,
+  bookingResponseAiAssist: (bookingId: string) => `/bookings/${bookingId}/response-ai-assist`,
   reviewReport: (reviewId: string) => `/reviews/${reviewId}/report`,
   reviewVisibility: (reviewId: string) => `/reviews/${reviewId}/visibility`,
   listingById: (listingId: string) => `/listings/${listingId}`,
@@ -240,6 +341,7 @@ export const apiRoutes = {
   listingImages: (listingId: string) => `/listings/${listingId}/images`,
   listingImageUpload: (listingId: string) => `/listings/${listingId}/images/upload`,
   listingPriceInsight: (listingId: string) => `/listings/${listingId}/price-insights`,
+  listingBookingSuggestion: (listingId: string) => `/listings/${listingId}/booking-suggestion`,
   promotedListings: "/admin/listings/promoted",
   promotionSummary: "/admin/listings/promotions/summary",
   promotionEvents: "/admin/listings/promotions/events",
@@ -261,8 +363,23 @@ export const apiRoutes = {
   subscriptionTiers: "/admin/subscription-tiers",
   sellerSubscriptions: "/admin/seller-subscriptions",
   sellerSubscriptionEvents: "/admin/seller-subscription-events",
+  sellerTrustInterventions: (limit?: number) =>
+    `/admin/seller-trust/interventions${limit ? `?limit=${limit}` : ""}`,
   notificationDeliverySummary: "/notifications/admin/summary",
   notificationWorkerHealth: "/notifications/admin/worker-health",
+  acknowledgeTrustAlert: (sellerId: string) => `/notifications/admin/trust-alerts/${sellerId}/acknowledge`,
+  trustAlertEvents: (limit?: number) => `/notifications/admin/trust-alerts/events${limit ? `?limit=${limit}` : ""}`,
+  trustAlertSellerSummaries: (limit?: number, action?: "acknowledged" | "cleared") => {
+    const searchParams = new URLSearchParams();
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    if (action) {
+      searchParams.set("action", action);
+    }
+    const suffix = searchParams.toString();
+    return `/notifications/admin/trust-alerts/sellers${suffix ? `?${suffix}` : ""}`;
+  },
   deliveryFees: "/delivery-fees",
   listingPromotion: (listingId: string) => `/admin/listings/${listingId}/promotion`,
   orderById: (orderId: string) => `/orders/${orderId}`,
@@ -354,6 +471,22 @@ export function createApiClient(baseUrl: string) {
     return get<SellerProfile>(apiRoutes.sellerBySlug(slug), options);
   }
 
+  function getSellerById(sellerId: string, options?: RequestConfig) {
+    return get<SellerProfile>(apiRoutes.sellerById(sellerId), options);
+  }
+
+  function getSellerListingSummaryBySlug(slug: string, options?: RequestConfig) {
+    return get<SellerListingSummary>(apiRoutes.sellerListingSummaryBySlug(slug), options);
+  }
+
+  function getSellerListingsBySlug(
+    slug: string,
+    options?: RequestConfig,
+    params?: { query?: string; category?: string; type?: string; limit?: number; offset?: number },
+  ) {
+    return get<ListingResponse>(apiRoutes.sellerListingsBySlug(slug, params), options);
+  }
+
   function listCategories(options?: RequestConfig) {
     return get<CategoryRead[]>(apiRoutes.categories, options);
   }
@@ -367,7 +500,39 @@ export function createApiClient(baseUrl: string) {
   }
 
   function getMySellerSubscription(options: RequestConfig) {
-    return get<SellerSubscriptionRead>(apiRoutes.mySellerSubscription, options);
+    return get<SellerSubscriptionRead>(apiRoutes.mySellerSubscription, options).catch((error) => {
+      if (error instanceof ApiError && error.status === 404) {
+        return null;
+      }
+      throw error;
+    });
+  }
+
+  function acknowledgeAdminTrustAlert(sellerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      apiRoutes.acknowledgeTrustAlert(sellerId),
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminTrustAlertAcknowledgement(sellerId: string, options: RequestConfig) {
+    return del<NotificationDelivery[]>(apiRoutes.acknowledgeTrustAlert(sellerId), options);
+  }
+
+  function listAdminTrustAlertEvents(limit?: number, options?: RequestConfig) {
+    return get<TrustAlertEventRead[]>(apiRoutes.trustAlertEvents(limit), options);
+  }
+
+  function listAdminTrustAlertSellerSummaries(
+    limit?: number,
+    action?: "acknowledged" | "cleared",
+    options?: RequestConfig,
+  ) {
+    return get<TrustAlertSellerSummaryRead[]>(
+      apiRoutes.trustAlertSellerSummaries(limit, action),
+      options,
+    );
   }
 
   function getMyReviewLookup(
@@ -517,6 +682,33 @@ export function createApiClient(baseUrl: string) {
     return get<SellerLookupRead[]>(apiRoutes.adminSellers(query, limit), options);
   }
 
+  function listAdminSellerTrustInterventions(limit?: number, options?: RequestConfig) {
+    return get<SellerTrustIntervention[]>(
+      apiRoutes.sellerTrustInterventions(limit),
+      options,
+    );
+  }
+
+  function listReviewAnomalies(limit?: number, options?: RequestConfig) {
+    return get<ReviewAnomalyRead[]>(apiRoutes.reviewAnomalies(limit), options);
+  }
+
+  function listReviewAnomalySellerSummaries(limit?: number, options?: RequestConfig) {
+    return get<ReviewAnomalySellerSummaryRead[]>(apiRoutes.reviewAnomalySellers(limit), options);
+  }
+
+  function acknowledgeReviewAnomaly(sellerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      apiRoutes.reviewAnomalyAcknowledge(sellerId),
+      { seller_id: sellerId },
+      options,
+    );
+  }
+
+  function clearReviewAnomalyAcknowledgement(sellerId: string, options: RequestConfig) {
+    return del<NotificationDelivery[]>(apiRoutes.reviewAnomalyAcknowledge(sellerId), options);
+  }
+
   function createSubscriptionTier(body: SubscriptionTierCreate, options: RequestConfig) {
     return post<SubscriptionTierRead>(apiRoutes.subscriptionTiers, body, options);
   }
@@ -537,8 +729,16 @@ export function createApiClient(baseUrl: string) {
     return get<ListingPricingScopeCount[]>("/admin/listings/pricing-scope-summary", options);
   }
 
+  function listPricingScopeItems(scope: string, options?: RequestConfig) {
+    return get<Listing[]>(`/admin/listings/pricing-scope-items?scope=${encodeURIComponent(scope)}`, options);
+  }
+
   function getListingPriceInsight(listingId: string, options: RequestConfig) {
     return get<ListingPriceInsight>(apiRoutes.listingPriceInsight(listingId), options);
+  }
+
+  function getListingBookingSuggestion(listingId: string, options?: RequestConfig) {
+    return get<ListingBookingSuggestionRead>(apiRoutes.listingBookingSuggestion(listingId), options);
   }
 
   function assistListing(body: ListingAiAssistRequest, options: RequestConfig) {
@@ -589,6 +789,22 @@ export function createApiClient(baseUrl: string) {
     return patch<ReviewRead>(apiRoutes.reviewSellerResponse(reviewId), body, options);
   }
 
+  function requestReviewResponseAiAssist(reviewId: string, options: RequestConfig) {
+    return post<ReviewResponseAiAssistResponse>(apiRoutes.reviewResponseAiAssist(reviewId), undefined, options);
+  }
+
+  function requestOrderResponseAiAssist(orderId: string, options: RequestConfig) {
+    return post<OrderResponseAiAssistResponse>(apiRoutes.orderResponseAiAssist(orderId), undefined, options);
+  }
+
+  function requestBookingResponseAiAssist(bookingId: string, options: RequestConfig) {
+    return post<BookingResponseAiAssistResponse>(
+      apiRoutes.bookingResponseAiAssist(bookingId),
+      undefined,
+      options,
+    );
+  }
+
   function createReviewReport(
     reviewId: string,
     body: ReviewReportCreateInput,
@@ -612,22 +828,35 @@ export function createApiClient(baseUrl: string) {
     return patch<ReviewRead>(apiRoutes.reviewVisibility(reviewId), body, options);
   }
 
-  async function loadPublicListings(options?: RequestConfig) {
-    const response = await get<ListingResponse>("/listings", options);
+  async function loadPublicListingsPage(
+    params: PublicListingsPageParams = {},
+    options?: RequestConfig,
+  ) {
+    const searchParams = new URLSearchParams();
+    if (typeof params.limit === "number") {
+      searchParams.set("limit", String(params.limit));
+    }
+    if (typeof params.offset === "number") {
+      searchParams.set("offset", String(params.offset));
+    }
+    const response = await get<ListingResponse>(
+      `/listings${searchParams.toString() ? `?${searchParams.toString()}` : ""}`,
+      options,
+    );
     return response.items;
   }
 
-  async function loadBuyerDashboard(accessToken: string): Promise<BuyerDashboardData> {
-    const [listingResponse, profile, orders, bookings] = await Promise.all([
-      get<ListingResponse>("/listings"),
-      get<Profile>("/profiles/me", { accessToken }),
+  async function loadMyProfile(accessToken: string): Promise<Profile> {
+    return get<Profile>("/profiles/me", { accessToken });
+  }
+
+  async function loadBuyerEngagementContext(accessToken: string): Promise<BuyerEngagementContext> {
+    const [orders, bookings] = await Promise.all([
       get<Order[]>("/orders/me", { accessToken }),
       get<Booking[]>("/bookings/me", { accessToken }),
     ]);
 
     return {
-      listings: listingResponse.items,
-      profile,
       orders,
       bookings,
     };
@@ -652,12 +881,7 @@ export function createApiClient(baseUrl: string) {
       get<Order[]>("/orders/seller", { accessToken }),
       get<Booking[]>("/bookings/seller", { accessToken }),
       getSellerReviewsBySlug(seller.slug, { accessToken }).catch(() => []),
-      getMySellerSubscription({ accessToken }).catch((error) => {
-        if (error instanceof ApiError && error.status === 404) {
-          return null;
-        }
-        throw error;
-      }),
+      getMySellerSubscription({ accessToken }),
     ]);
 
     return {
@@ -775,13 +999,21 @@ export function createApiClient(baseUrl: string) {
     post,
     patch,
     getSellerBySlug,
+    getSellerById,
+    getSellerListingSummaryBySlug,
+    getSellerListingsBySlug,
     listCategories,
     getSellerReviewsBySlug,
     getSellerSubscriptionBySlug,
     getMySellerSubscription,
+    acknowledgeAdminTrustAlert,
+    clearAdminTrustAlertAcknowledgement,
+    listAdminTrustAlertEvents,
+    listAdminTrustAlertSellerSummaries,
     getMyReviewLookup,
     getListingById,
     getListingPriceInsight,
+    getListingBookingSuggestion,
     getOrderById,
     getBookingById,
     getPlatformFees,
@@ -808,9 +1040,12 @@ export function createApiClient(baseUrl: string) {
     createReviewReport,
     listAdminReviewReports,
     updateReviewSellerResponse,
+    requestReviewResponseAiAssist,
+    requestOrderResponseAiAssist,
+    requestBookingResponseAiAssist,
     updateReviewVisibility,
-    loadPublicListings,
-    loadBuyerDashboard,
+    loadPublicListingsPage,
+    loadBuyerEngagementContext,
     loadSellerWorkspace,
     listPromotedListings,
     listPromotionSummary,
@@ -818,14 +1053,21 @@ export function createApiClient(baseUrl: string) {
     listPlatformFeeHistory,
     listDeliveryFeeHistory,
     listAdminSellers,
+    listAdminSellerTrustInterventions,
+    listReviewAnomalies,
+    listReviewAnomalySellerSummaries,
+    acknowledgeReviewAnomaly,
+    clearReviewAnomalyAcknowledgement,
     listSubscriptionTiers,
     createSubscriptionTier,
     listSellerSubscriptions,
     listSellerSubscriptionEvents,
     assignSellerSubscription,
     listPricingScopeSummary,
+    listPricingScopeItems,
     loadAdminTransactions,
     loadAdminNotificationDeliveries,
+    loadMyProfile,
     loadMyNotificationDeliveries,
     retryNotificationDelivery,
     retryAdminNotificationDelivery,

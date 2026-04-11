@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
 
 import {
@@ -8,6 +9,7 @@ import {
   formatCurrency,
   type SellerLookupRead,
 } from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import {
   SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT,
   type SubscriptionAssignmentFocusDetail,
@@ -28,6 +30,7 @@ function formatSellerLocation(location: {
 }
 
 export default function SellerSubscriptionsPanel() {
+  const router = useRouter();
   const [sellerResults, setSellerResults] = useState<SellerLookupRead[]>([]);
   const [destructiveChangeConfirmed, setDestructiveChangeConfirmed] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -251,6 +254,8 @@ export default function SellerSubscriptionsPanel() {
           note: "",
         }));
         setMessage("Seller subscription updated.");
+        await invalidateMarketplaceCaches();
+        router.refresh();
       } catch (caught) {
         setMessage(caught instanceof ApiError ? caught.message : "Unable to assign seller subscription.");
       }

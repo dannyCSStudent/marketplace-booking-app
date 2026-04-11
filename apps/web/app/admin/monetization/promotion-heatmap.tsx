@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   PROMOTION_LISTING_FOCUS_EVENT,
@@ -11,7 +11,7 @@ import {
   type PromotionDashboardFilterDetail,
 } from "@/app/admin/monetization/promotion-dashboard-filters";
 import { usePromotionAnalytics } from "@/app/admin/monetization/promotion-analytics-context";
-import { escapeCsvValue } from "@/app/admin/monetization/promotion-formatting";
+import { escapeCsvValue, formatPromotionListingTypeLabel } from "@/app/admin/monetization/promotion-formatting";
 import {
   MONETIZATION_EXPORT_EVENT,
   type MonetizationExportDetail,
@@ -19,11 +19,83 @@ import {
 import { highlightMonetizationSection } from "@/app/admin/monetization/monetization-navigation";
 import { useMonetizationPreferences } from "@/app/admin/monetization/monetization-preferences-context";
 const WINDOW_OPTIONS = [7, 14, 30] as const;
+const PROMOTION_HEATMAP_ACTIVITY_KEY = "admin.promotion-heatmap.recent-activity";
+const PROMOTION_HEATMAP_ACTIVITY_FILTER_KEY = "admin.promotion-heatmap.recent-activity-filter";
+const MAX_RECENT_ACTIVITY_ENTRIES = 4;
+
+type RecentActivityFilter = "all" | "focus" | "export";
+
+type PromotionHeatmapRecentActivityEntry =
+  | {
+      id: string;
+      kind: "focus";
+      label: string;
+      detail: string;
+      createdAt: string;
+      type: PromotionListingTypeFilter;
+    }
+  | {
+      id: string;
+      kind: "export";
+      label: string;
+      detail: string;
+      createdAt: string;
+      windowDays: number;
+    };
 
 export default function PromotionHeatmap() {
   const { preferences, setPromotionDashboard } = useMonetizationPreferences();
   const { summary: buckets, events, listingTypeById, status, error } = usePromotionAnalytics();
   const { windowDays } = preferences.promotionDashboard;
+  const [recentActivity, setRecentActivity] = useState<PromotionHeatmapRecentActivityEntry[]>([]);
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(PROMOTION_HEATMAP_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as PromotionHeatmapRecentActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setRecentActivity(parsed);
+      }
+    } catch {
+      window.sessionStorage.removeItem(PROMOTION_HEATMAP_ACTIVITY_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const stored = window.sessionStorage.getItem(PROMOTION_HEATMAP_ACTIVITY_FILTER_KEY);
+    if (stored === "all" || stored === "focus" || stored === "export") {
+      setRecentActivityFilter(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(PROMOTION_HEATMAP_ACTIVITY_KEY, JSON.stringify(recentActivity));
+  }, [recentActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(PROMOTION_HEATMAP_ACTIVITY_FILTER_KEY, recentActivityFilter);
+  }, [recentActivityFilter]);
 
   useEffect(() => {
     const handleFilterEvent = (event: Event) => {
@@ -69,6 +141,19 @@ export default function PromotionHeatmap() {
     return counts;
   }, [events, listingTypeById, windowDays]);
 
+  const recordRecentActivity = (entry: Omit<PromotionHeatmapRecentActivityEntry, "id" | "createdAt">) => {
+    setRecentActivity((current) =>
+      [
+        {
+          ...entry,
+          id: `${entry.kind}:${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        },
+        ...current,
+      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+    );
+  };
+
   const exportCsv = () => {
     if (buckets.length === 0) {
       return;
@@ -95,6 +180,16 @@ export default function PromotionHeatmap() {
     URL.revokeObjectURL(url);
   };
 
+  const runExport = () => {
+    recordRecentActivity({
+      kind: "export",
+      label: `Exported ${buckets.length} heatmap buckets`,
+      detail: `${windowDays}d · ${grandTotal} boosted listings`,
+      windowDays,
+    });
+    exportCsv();
+  };
+
   useEffect(() => {
     const handleExportEvent = (event: Event) => {
       const detail = (event as CustomEvent<MonetizationExportDetail>).detail;
@@ -102,16 +197,22 @@ export default function PromotionHeatmap() {
         return;
       }
       highlightMonetizationSection("promotion-heatmap-panel");
-      exportCsv();
+      runExport();
     };
 
     window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [buckets, trendByType, windowDays]);
+  }, [buckets, runExport, trendByType, windowDays]);
 
   const focusPromotedListings = (type: PromotionListingTypeFilter) => {
+    recordRecentActivity({
+      kind: "focus",
+      label: `Focused ${formatPromotionListingTypeLabel(type)}`,
+      detail: `${formatPromotionListingTypeLabel(type)} heatmap`,
+      type,
+    });
     window.dispatchEvent(
       new CustomEvent(PROMOTION_LISTING_FOCUS_EVENT, {
         detail: { type },
@@ -149,12 +250,102 @@ export default function PromotionHeatmap() {
           <button
             type="button"
             className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
-            onClick={exportCsv}
+            onClick={runExport}
           >
             Export CSV
           </button>
         </div>
       </div>
+      {recentActivity.length > 0 ? (
+        <div className="mt-5 rounded-[1.6rem] border border-border/60 bg-background p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                Recent Activity
+              </p>
+              <p className="mt-2 text-sm text-foreground/72">
+                Re-open the latest type focus or rerun the last heatmap export.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
+              onClick={() => {
+                setRecentActivity([]);
+                window.sessionStorage.removeItem(PROMOTION_HEATMAP_ACTIVITY_KEY);
+              }}
+            >
+              Clear history
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {([
+              ["all", "All"],
+              ["focus", "Focus"],
+              ["export", "Export"],
+            ] as const).map(([value, label]) => {
+              const filteredCount = recentActivity.filter(
+                (entry) => value === "all" || entry.kind === value,
+              ).length;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition ${
+                    recentActivityFilter === value
+                      ? "border-accent bg-accent text-white"
+                      : "border-border text-foreground hover:border-accent hover:text-accent"
+                  }`}
+                  onClick={() => setRecentActivityFilter(value)}
+                >
+                  {label} ({filteredCount})
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-4 space-y-2">
+            {recentActivity
+              .filter((entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter)
+              .map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-[1.1rem] border border-border bg-white px-4 py-3"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-foreground/58">
+                      {entry.kind === "focus" ? "Listing focus" : "Export"} · {entry.detail}
+                    </p>
+                  </div>
+                  {entry.kind === "focus" ? (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() => focusPromotedListings(entry.type)}
+                      type="button"
+                    >
+                      Re-open focus
+                    </button>
+                  ) : (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={runExport}
+                      type="button"
+                    >
+                      Re-export slice
+                    </button>
+                  )}
+                </div>
+              ))}
+          </div>
+          {recentActivity.filter((entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter).length === 0 ? (
+            <div className="mt-4 rounded-[1.1rem] border border-dashed border-border bg-white/55 px-4 py-4 text-sm leading-6 text-foreground/66">
+              {recentActivityFilter === "all"
+                ? "No recent heatmap activity yet."
+                : `No ${recentActivityFilter} activity has been recorded in this session yet.`}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="mt-4 space-y-3">
         {status === "error" ? (
           <p className="text-sm text-rose-600">{error}</p>

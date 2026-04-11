@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { HomeResumeHeaderCue, HomeResumePanel } from "@/app/components/home-resume-panel";
 import { PublicCatalogPanel } from "@/app/components/public-catalog-panel";
 import { SellerWorkspace } from "@/app/components/seller-workspace";
-import { formatCurrency, getMarketplaceData } from "@/app/lib/api";
+import { formatCurrency } from "@/app/lib/api";
+import { getMarketplaceData } from "@/app/lib/server-data";
 
 const readinessItems = [
   "Live Supabase auth and table-backed API are active.",
@@ -23,17 +25,20 @@ const operationsChecklist = [
 ];
 
 export default async function Home() {
-  const { seller, listings, listingsTotal, apiBaseUrl } = await getMarketplaceData();
+  const { seller, sellerListingSummary, listings, listingsTotal, apiBaseUrl } =
+    await getMarketplaceData();
   const sellerListings = seller
     ? listings.filter((listing) => listing.seller_id === seller.id)
     : [];
-  const productCount = sellerListings.filter((listing) => listing.type === "product").length;
-  const serviceCount = sellerListings.filter((listing) => listing.type === "service").length;
-  const hybridCount = sellerListings.filter((listing) => listing.type === "hybrid").length;
-  const activeRevenueSurface = sellerListings.reduce(
-    (total, listing) => total + (listing.price_cents ?? 0),
-    0,
-  );
+  const productCount = sellerListingSummary?.product_count ?? sellerListings.filter((listing) => listing.type === "product").length;
+  const serviceCount = sellerListingSummary?.service_count ?? sellerListings.filter((listing) => listing.type === "service").length;
+  const hybridCount = sellerListingSummary?.hybrid_count ?? sellerListings.filter((listing) => listing.type === "hybrid").length;
+  const activeRevenueSurface = sellerListingSummary?.price_surface_cents ?? sellerListings.reduce((total, listing) => total + (listing.price_cents ?? 0), 0);
+  const resumeSections = [
+    { label: "Inventory Surface", href: "#inventory-surface" },
+    { label: "Seller Console", href: "#seller-console" },
+    ...(seller?.slug ? [{ label: "Open Storefront", href: `/sellers/${seller.slug}` }] : []),
+  ];
 
   return (
     <main className="grain min-h-screen px-5 py-6 sm:px-8 lg:px-12">
@@ -56,13 +61,16 @@ export default async function Home() {
                   It is the right shell for onboarding, listing management, and incoming
                   transaction workflows.
                 </p>
+                <div className="flex flex-wrap gap-2">
+                  <HomeResumeHeaderCue />
+                </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
-                <MetricCard
-                  label="Seeded Listings"
-                  value={String(sellerListings.length || listingsTotal)}
-                  tone="accent"
-                />
+              <MetricCard
+                label="Seeded Listings"
+                value={String(listingsTotal)}
+                tone="accent"
+              />
                 <MetricCard
                   label="Visible Revenue Surface"
                   value={formatCurrency(activeRevenueSurface, "USD")}
@@ -74,6 +82,7 @@ export default async function Home() {
                   tone="gold"
                 />
               </div>
+              <HomeResumePanel sections={resumeSections} />
             </div>
 
             <div className="card-shadow rounded-[1.6rem] border border-border bg-[#fff8ed] p-5">
@@ -119,7 +128,7 @@ export default async function Home() {
         </section>
 
         <section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="card-shadow rounded-[2rem] border border-border bg-surface p-6">
+          <div id="inventory-surface" className="card-shadow rounded-[2rem] border border-border bg-surface p-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
                 <p className="font-mono text-xs uppercase tracking-[0.24em] text-foreground/52">
@@ -152,6 +161,7 @@ export default async function Home() {
               <PublicCatalogPanel
                 emptyText="No seller-owned listings were returned. If the API is running, check that `NEXT_PUBLIC_API_BASE_URL` points at the FastAPI service."
                 listings={sellerListings}
+                listingsTotal={listingsTotal}
                 sellerSlug={seller?.slug}
               />
             </Suspense>
@@ -202,7 +212,9 @@ export default async function Home() {
         </section>
 
         <Suspense fallback={null}>
-          <SellerWorkspace />
+          <div id="seller-console">
+            <SellerWorkspace />
+          </div>
         </Suspense>
       </div>
     </main>

@@ -4,9 +4,12 @@ import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View
 
 import { formatCurrency, loadBuyerBooking, loadBuyerOrder, type Booking, type Order } from '@/lib/api';
 import {
+  clearBuyerRecentTransactionReceipts,
   getBuyerDeliveryRetryMode,
+  getBuyerRecentTransactionReceipts,
   setBuyerBrowseFilters,
   setBuyerDeliveryRetryMode,
+  setBuyerRecentTransactionReceipts,
 } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
@@ -210,6 +213,9 @@ export default function TransactionReceiptScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionDetails, setActionDetails] = useState<string[]>([]);
   const [deliveryRetryMode, setDeliveryRetryModeState] = useState<'best_effort' | 'atomic'>('best_effort');
+  const [recentTransactionReceiptIds, setRecentTransactionReceiptIds] = useState<string[]>([]);
+  const [recentTransactionReceiptFilter, setRecentTransactionReceiptFilter] = useState<'all' | 'order' | 'booking'>('all');
+  const currentReceiptKey = kind && id ? `${kind}:${id}` : null;
 
   const order = kind === 'order' && id ? orders.find((item) => item.id === id) : undefined;
   const booking = kind === 'booking' && id ? bookings.find((item) => item.id === id) : undefined;
@@ -280,11 +286,114 @@ export default function TransactionReceiptScreen() {
         : moreLikeThisListings,
     [currentSellerId, moreLikeThisListings],
   );
+  const latestRecentTransactionReceipt = useMemo(() => {
+    const latestKey = recentTransactionReceiptIds.find((item) => item !== currentReceiptKey) ?? null;
+    if (!latestKey) {
+      return null;
+    }
+
+    const [latestKind, latestId] = latestKey.split(':');
+    if (latestKind === 'order') {
+      const latestOrder = orders.find((item) => item.id === latestId);
+      if (latestOrder) {
+        return {
+          kind: 'order' as const,
+          id: latestOrder.id,
+          label: 'Order',
+          meta: latestOrder.status.replaceAll('_', ' '),
+        };
+      }
+    }
+
+    if (latestKind === 'booking') {
+      const latestBooking = bookings.find((item) => item.id === latestId);
+      if (latestBooking) {
+        return {
+          kind: 'booking' as const,
+          id: latestBooking.id,
+          label: 'Booking',
+          meta: latestBooking.status.replaceAll('_', ' '),
+        };
+      }
+    }
+
+    return null;
+  }, [bookings, currentReceiptKey, orders, recentTransactionReceiptIds]);
+  const recentTransactionReceipts = useMemo(() => {
+    return recentTransactionReceiptIds
+      .map((itemKey) => {
+        const [itemKind, itemId] = itemKey.split(':');
+        if (itemKind === 'order') {
+          const matchingOrder = orders.find((item) => item.id === itemId);
+          if (matchingOrder) {
+            return {
+              kind: 'order' as const,
+              id: matchingOrder.id,
+              label: 'Order',
+              meta: matchingOrder.status,
+            };
+          }
+        }
+
+        if (itemKind === 'booking') {
+          const matchingBooking = bookings.find((item) => item.id === itemId);
+          if (matchingBooking) {
+            return {
+              kind: 'booking' as const,
+              id: matchingBooking.id,
+              label: 'Booking',
+              meta: matchingBooking.status,
+            };
+          }
+        }
+
+        return null;
+      })
+      .filter(
+        (item): item is { kind: 'order' | 'booking'; id: string; label: string; meta: string } =>
+          Boolean(item),
+      );
+  }, [bookings, orders, recentTransactionReceiptIds]);
+  const visibleRecentTransactionReceipts = useMemo(
+    () =>
+      recentTransactionReceipts.filter(
+        (item) => recentTransactionReceiptFilter === 'all' || item.kind === recentTransactionReceiptFilter,
+      ),
+    [recentTransactionReceiptFilter, recentTransactionReceipts],
+  );
+  const recentTransactionReceiptCounts = useMemo(
+    () => ({
+      all: recentTransactionReceipts.length,
+      order: recentTransactionReceipts.filter((item) => item.kind === 'order').length,
+      booking: recentTransactionReceipts.filter((item) => item.kind === 'booking').length,
+    }),
+    [recentTransactionReceipts],
+  );
 
   useEffect(() => {
     void (async () => {
       const storedRetryMode = await getBuyerDeliveryRetryMode();
       setDeliveryRetryModeState(storedRetryMode === 'atomic' ? 'atomic' : 'best_effort');
+    })();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerRecentTransactionReceipts();
+      if (!storedValue) {
+        return;
+      }
+
+      try {
+        const storedRecentReceipts = JSON.parse(storedValue) as string[];
+        if (Array.isArray(storedRecentReceipts)) {
+          setRecentTransactionReceiptIds(
+            storedRecentReceipts.filter((item) => typeof item === 'string'),
+          );
+        }
+      } catch {
+        // Ignore corrupted recent-receipt state.
+      }
     })();
   }, []);
 
@@ -440,6 +549,26 @@ export default function TransactionReceiptScreen() {
     };
   }, [booking, id, kind, order, session?.access_token]);
 
+  useEffect(() => {
+    if (!kind || !id) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const receiptKey = `${kind}:${id}`;
+        const nextIds = [
+          receiptKey,
+          ...recentTransactionReceiptIds.filter((item) => item !== receiptKey),
+        ].slice(0, 4);
+        setRecentTransactionReceiptIds(nextIds);
+        await setBuyerRecentTransactionReceipts(JSON.stringify(nextIds));
+      } catch {
+        // Ignore unavailable recent-receipt state.
+      }
+    })();
+  }, [id, kind, recentTransactionReceiptIds]);
+
   if (kind === 'order') {
     const resolvedOrder = order ?? receiptOrder;
     if (loading && !resolvedOrder) {
@@ -462,12 +591,97 @@ export default function TransactionReceiptScreen() {
           <Text style={styles.subtitle}>
             The seller queue now has this order and can start moving it through the workflow.
           </Text>
+          {latestRecentTransactionReceipt ? (
+            <Pressable
+              style={styles.heroAction}
+              onPress={() => {
+                router.push({
+                  pathname: '/transactions/[kind]/[id]',
+                  params: { kind: latestRecentTransactionReceipt.kind, id: latestRecentTransactionReceipt.id },
+                });
+              }}>
+              <Text style={styles.heroActionText}>
+                Open latest receipt · {latestRecentTransactionReceipt.label} · {latestRecentTransactionReceipt.meta}
+              </Text>
+            </Pressable>
+          ) : null}
           {recommendedPreset ? (
             <Pressable style={styles.heroAction} onPress={handleKeepBrowsingLane}>
               <Text style={styles.heroActionText}>Keep Browsing This Lane</Text>
             </Pressable>
           ) : null}
         </View>
+
+        {recentTransactionReceiptIds.length > 0 ? (
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>Recently Opened Receipts</Text>
+              <Pressable
+                style={styles.inlineAction}
+                onPress={async () => {
+                  setRecentTransactionReceiptIds([]);
+                  await clearBuyerRecentTransactionReceipts();
+                }}>
+                <Text style={styles.inlineActionText}>Clear saved receipt history</Text>
+              </Pressable>
+            </View>
+            <View style={styles.modeSwitchRow}>
+              {(
+                [
+                  ['all', 'All'],
+                  ['order', 'Orders'],
+                  ['booking', 'Bookings'],
+                ] as const
+              ).map(([filter, label]) => (
+                <Pressable
+                  key={filter}
+                  style={[
+                    styles.inlineAction,
+                    recentTransactionReceiptFilter === filter && styles.inlineActionActive,
+                  ]}
+                  onPress={() => setRecentTransactionReceiptFilter(filter)}>
+                  <Text
+                    style={[
+                      styles.inlineActionText,
+                      recentTransactionReceiptFilter === filter && styles.inlineActionTextActive,
+                    ]}>
+                    {label}
+                    {' '}
+                    ·
+                    {' '}
+                    {filter === 'all'
+                      ? recentTransactionReceiptCounts.all
+                      : recentTransactionReceiptCounts[filter]}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.recentList}>
+              {visibleRecentTransactionReceipts.length > 0 ? (
+                visibleRecentTransactionReceipts.map((receipt) => (
+                  <Pressable
+                    key={`${receipt.kind}:${receipt.id}`}
+                    style={styles.recentCard}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/transactions/[kind]/[id]',
+                        params: { kind: receipt.kind, id: receipt.id },
+                      })
+                    }>
+                    <Text style={styles.lineTitle}>
+                      {receipt.label} · {receipt.meta}
+                    </Text>
+                    <Text style={styles.lineMeta}>
+                      {receipt.kind} · {receipt.id}
+                    </Text>
+                  </Pressable>
+                ))
+              ) : (
+                <Text style={styles.emptyText}>No saved receipts match this filter.</Text>
+              )}
+            </View>
+          </View>
+        ) : null}
 
         {moreLikeThisListings.length > 0 ? (
           <View style={styles.card}>
@@ -750,12 +964,97 @@ export default function TransactionReceiptScreen() {
           <Text style={styles.subtitle}>
             The seller can now confirm, decline, or move this booking into progress from the web workspace.
           </Text>
+          {latestRecentTransactionReceipt ? (
+            <Pressable
+              style={styles.heroAction}
+              onPress={() => {
+                router.push({
+                  pathname: '/transactions/[kind]/[id]',
+                  params: { kind: latestRecentTransactionReceipt.kind, id: latestRecentTransactionReceipt.id },
+                });
+              }}>
+              <Text style={styles.heroActionText}>
+                Open latest receipt · {latestRecentTransactionReceipt.label} · {latestRecentTransactionReceipt.meta}
+              </Text>
+            </Pressable>
+          ) : null}
           {recommendedPreset ? (
             <Pressable style={styles.heroAction} onPress={handleKeepBrowsingLane}>
               <Text style={styles.heroActionText}>Keep Browsing This Lane</Text>
             </Pressable>
           ) : null}
         </View>
+
+        {recentTransactionReceiptIds.length > 0 ? (
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>Recently Opened Receipts</Text>
+              <Pressable
+                style={styles.inlineAction}
+                onPress={async () => {
+                  setRecentTransactionReceiptIds([]);
+                  await clearBuyerRecentTransactionReceipts();
+                }}>
+                <Text style={styles.inlineActionText}>Clear saved receipt history</Text>
+              </Pressable>
+            </View>
+            <View style={styles.modeSwitchRow}>
+              {(
+                [
+                  ['all', 'All'],
+                  ['order', 'Orders'],
+                  ['booking', 'Bookings'],
+                ] as const
+              ).map(([filter, label]) => (
+                <Pressable
+                  key={filter}
+                  style={[
+                    styles.inlineAction,
+                    recentTransactionReceiptFilter === filter && styles.inlineActionActive,
+                  ]}
+                  onPress={() => setRecentTransactionReceiptFilter(filter)}>
+                  <Text
+                    style={[
+                      styles.inlineActionText,
+                      recentTransactionReceiptFilter === filter && styles.inlineActionTextActive,
+                    ]}>
+                    {label}
+                    {' '}
+                    ·
+                    {' '}
+                    {filter === 'all'
+                      ? recentTransactionReceiptCounts.all
+                      : recentTransactionReceiptCounts[filter]}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.recentList}>
+              {visibleRecentTransactionReceipts.length > 0 ? (
+                visibleRecentTransactionReceipts.map((receipt) => (
+                  <Pressable
+                    key={`${receipt.kind}:${receipt.id}`}
+                    style={styles.recentCard}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/transactions/[kind]/[id]',
+                        params: { kind: receipt.kind, id: receipt.id },
+                      })
+                    }>
+                    <Text style={styles.lineTitle}>
+                      {receipt.label} · {receipt.meta}
+                    </Text>
+                    <Text style={styles.lineMeta}>
+                      {receipt.kind} · {receipt.id}
+                    </Text>
+                  </Pressable>
+                ))
+              ) : (
+                <Text style={styles.emptyText}>No saved receipts match this filter.</Text>
+              )}
+            </View>
+          </View>
+        ) : null}
 
         {moreLikeThisListings.length > 0 ? (
           <View style={styles.card}>
@@ -1074,6 +1373,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  recentList: {
+    gap: 10,
+  },
+  recentCard: {
+    backgroundColor: '#fbf4e4',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e4d6bf',
+    gap: 6,
+    padding: 14,
   },
   cardTitle: {
     color: '#1f2319',

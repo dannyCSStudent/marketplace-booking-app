@@ -2,9 +2,18 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ApiError, createApiClient, type ReviewRead } from "@/app/lib/api";
+import {
+  ApiError,
+  createApiClient,
+  type ReviewAnomalyRead,
+  type Profile,
+  type ReviewRead,
+  type SellerProfile,
+  type SellerTrustIntervention,
+} from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 
 type ModerationStatus = "open" | "triaged" | "resolved";
@@ -23,7 +32,8 @@ type QueuePreset =
   | "resolved_with_notes"
   | "escalated_only"
   | "assigned_to_me"
-  | "unassigned";
+  | "unassigned"
+  | "seller_risk";
 type SortMode = "newest" | "oldest" | "rating_high" | "rating_low";
 type AssigneeFilter = "all" | "mine" | "unassigned" | "elsewhere";
 type EscalationFilter = "all" | "escalated" | "normal";
@@ -64,6 +74,8 @@ type ReviewModerationItem = {
     created_at: string;
   }>;
 };
+
+type ReviewAnomalySeverity = "all" | "high" | "medium" | "monitor";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const api = createApiClient(apiBaseUrl);
@@ -181,6 +193,80 @@ function formatAgeLabel(timestamp: string): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+function toTimestamp(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function isAfterBaseline(value: string | null | undefined, baseline: number | null) {
+  if (baseline === null) {
+    return false;
+  }
+
+  const timestamp = toTimestamp(value);
+  return timestamp !== null && timestamp > baseline;
+}
+
+function formatLastReviewedLabel(value: string | null) {
+  if (!value) {
+    return "First review";
+  }
+
+  const timestamp = toTimestamp(value);
+  if (timestamp === null) {
+    return "First review";
+  }
+
+  const diff = Date.now() - timestamp;
+  if (diff < 24 * 60 * 60 * 1000) {
+    return "Today";
+  }
+
+  if (diff < 2 * 24 * 60 * 60 * 1000) {
+    return "Yesterday";
+  }
+
+  return new Date(timestamp).toLocaleDateString();
+}
+
+function formatActivityDayLabel(value: string) {
+  const timestamp = toTimestamp(value);
+  if (timestamp === null) {
+    return "Unknown";
+  }
+
+  const now = new Date();
+  const date = new Date(timestamp);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+
+  if (timestamp >= startOfToday) {
+    return "Today";
+  }
+
+  if (timestamp >= startOfYesterday) {
+    return "Yesterday";
+  }
+
+  return date.toLocaleDateString();
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(Math.max(0, Math.min(value, 1)) * 100)}%`;
+}
+
+function TrustRiskStat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/66">
+      {label} · {value}
+    </div>
+  );
+}
+
 type ModerationShortcut = {
   label: string;
   preset: QueuePreset;
@@ -190,6 +276,261 @@ type ModerationShortcut = {
   priority: EscalationFilter;
   sort: SortMode;
 };
+
+type ModerationWatchlistAlert = {
+  id:
+    | "stale_unassigned"
+    | "stale_assigned"
+    | "escalated_unassigned"
+    | "hidden_open"
+    | "repeat_seller_reports";
+  label: string;
+  detail: string;
+  count: number;
+  newCount: number;
+  isNew: boolean;
+  tone: "high" | "medium" | "monitor";
+  apply: () => void;
+};
+
+type ReviewModerationActivityEntry = {
+  id: string;
+  kind: "view" | "watchlist" | "operation" | "export";
+  label: string;
+  created_at: string;
+  snapshot?: {
+    preset: QueuePreset;
+    status: ModerationStatus | "all";
+    visibility: VisibilityFilter;
+    reason: string;
+    sort: SortMode;
+    assignee: AssigneeFilter;
+    priority: EscalationFilter;
+    query: string;
+  } | null;
+};
+
+type SellerTrustRiskEntry = {
+  seller: SellerProfile;
+  reportCount: number;
+};
+type SellerTrustRiskLevel = "all" | "critical" | "elevated" | "watch" | "low";
+type SellerTrustTrendFilter = "all" | "worsening" | "steady" | "improving" | "new";
+type SellerTrustQueueMode = "all" | "intervention";
+
+type ReviewModerationPreferences = {
+  preset: QueuePreset;
+  status: ModerationStatus | "all";
+  visibility: VisibilityFilter;
+  reason: string;
+  sort: SortMode;
+  assignee: AssigneeFilter;
+  priority: EscalationFilter;
+  query: string;
+  watchlist_last_viewed_at: string | null;
+  watchlist_severity_filter: WatchlistSeverityFilter;
+  watchlist_new_only: boolean;
+  activity_filter: ModerationActivityFilter;
+  activity_entry_limit: 6 | 10;
+  activity_collapsed_groups: string[];
+  activity_log: ReviewModerationActivityEntry[];
+};
+
+type WatchlistSeverityFilter = "all" | "high" | "medium" | "monitor";
+type ModerationActivityFilter = "all" | "watchlist" | "view" | "operation" | "export";
+
+const DEFAULT_REVIEW_MODERATION_PREFERENCES: ReviewModerationPreferences = {
+  preset: "needs_action",
+  status: "open",
+  visibility: "all",
+  reason: "all",
+  sort: "newest",
+  assignee: "all",
+  priority: "all",
+  query: "",
+  watchlist_last_viewed_at: null,
+  watchlist_severity_filter: "all",
+  watchlist_new_only: false,
+  activity_filter: "all",
+  activity_entry_limit: 6,
+  activity_collapsed_groups: [],
+  activity_log: [],
+};
+
+function escapeCsvValue(value: string | number | boolean | null | undefined) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  const normalized = String(value).replaceAll('"', '""');
+  return /[",\n]/.test(normalized) ? `"${normalized}"` : normalized;
+}
+
+function downloadCsv(filename: string, rows: Array<Array<string | number | boolean | null | undefined>>) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const csv = rows.map((row) => row.map((value) => escapeCsvValue(value)).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const link = window.document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", filename);
+  window.document.body.appendChild(link);
+  link.click();
+  window.document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
+function normalizeActivityEntry(value: unknown): ReviewModerationActivityEntry | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const entry = value as Record<string, unknown>;
+  const kind =
+    entry.kind === "view" || entry.kind === "watchlist" || entry.kind === "operation" || entry.kind === "export"
+      ? entry.kind
+      : null;
+  if (!kind || typeof entry.id !== "string" || typeof entry.label !== "string" || typeof entry.created_at !== "string") {
+    return null;
+  }
+
+  const snapshotValue = entry.snapshot;
+  let snapshot: ReviewModerationActivityEntry["snapshot"] = null;
+  if (snapshotValue && typeof snapshotValue === "object") {
+    const value = snapshotValue as Record<string, unknown>;
+    const preset =
+      value.preset === "default" ||
+      value.preset === "needs_action" ||
+      value.preset === "hidden_reviews" ||
+      value.preset === "resolved_with_notes" ||
+      value.preset === "escalated_only" ||
+      value.preset === "assigned_to_me" ||
+      value.preset === "unassigned" ||
+      value.preset === "seller_risk"
+        ? value.preset
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.preset;
+    const status =
+      value.status === "open" || value.status === "triaged" || value.status === "resolved" || value.status === "all"
+        ? value.status
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.status;
+    const visibility =
+      value.visibility === "all" || value.visibility === "public" || value.visibility === "hidden"
+        ? value.visibility
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.visibility;
+    const sort =
+      value.sort === "newest" || value.sort === "oldest" || value.sort === "rating_high" || value.sort === "rating_low"
+        ? value.sort
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.sort;
+    const assignee =
+      value.assignee === "all" ||
+      value.assignee === "mine" ||
+      value.assignee === "unassigned" ||
+      value.assignee === "elsewhere"
+        ? value.assignee
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.assignee;
+    const priority =
+      value.priority === "all" || value.priority === "escalated" || value.priority === "normal"
+        ? value.priority
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.priority;
+
+    snapshot = {
+      preset,
+      status,
+      visibility,
+      reason: typeof value.reason === "string" && value.reason.trim() ? value.reason : "all",
+      sort,
+      assignee,
+      priority,
+      query: typeof value.query === "string" ? value.query : "",
+    };
+  }
+
+  return {
+    id: entry.id,
+    kind,
+    label: entry.label,
+    created_at: entry.created_at,
+    snapshot,
+  };
+}
+
+function normalizeReviewModerationPreferences(value: unknown): ReviewModerationPreferences {
+  if (!value || typeof value !== "object") {
+    return DEFAULT_REVIEW_MODERATION_PREFERENCES;
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    preset:
+      input.preset === "default" ||
+      input.preset === "needs_action" ||
+      input.preset === "hidden_reviews" ||
+      input.preset === "resolved_with_notes" ||
+      input.preset === "escalated_only" ||
+      input.preset === "assigned_to_me" ||
+      input.preset === "unassigned" ||
+      input.preset === "seller_risk"
+        ? input.preset
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.preset,
+    status:
+      input.status === "open" || input.status === "triaged" || input.status === "resolved" || input.status === "all"
+        ? input.status
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.status,
+    visibility:
+      input.visibility === "all" || input.visibility === "public" || input.visibility === "hidden"
+        ? input.visibility
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.visibility,
+    reason: typeof input.reason === "string" && input.reason.trim() ? input.reason : "all",
+    sort:
+      input.sort === "newest" || input.sort === "oldest" || input.sort === "rating_high" || input.sort === "rating_low"
+        ? input.sort
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.sort,
+    assignee:
+      input.assignee === "all" ||
+      input.assignee === "mine" ||
+      input.assignee === "unassigned" ||
+      input.assignee === "elsewhere"
+        ? input.assignee
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.assignee,
+    priority:
+      input.priority === "all" || input.priority === "escalated" || input.priority === "normal"
+        ? input.priority
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.priority,
+    query: typeof input.query === "string" ? input.query : "",
+    watchlist_last_viewed_at:
+      typeof input.watchlist_last_viewed_at === "string" ? input.watchlist_last_viewed_at : null,
+    watchlist_severity_filter:
+      input.watchlist_severity_filter === "all" ||
+      input.watchlist_severity_filter === "high" ||
+      input.watchlist_severity_filter === "medium" ||
+      input.watchlist_severity_filter === "monitor"
+        ? input.watchlist_severity_filter
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.watchlist_severity_filter,
+    watchlist_new_only:
+      typeof input.watchlist_new_only === "boolean"
+        ? input.watchlist_new_only
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.watchlist_new_only,
+    activity_filter:
+      input.activity_filter === "all" ||
+      input.activity_filter === "watchlist" ||
+      input.activity_filter === "view" ||
+      input.activity_filter === "operation" ||
+      input.activity_filter === "export"
+        ? input.activity_filter
+        : DEFAULT_REVIEW_MODERATION_PREFERENCES.activity_filter,
+    activity_entry_limit:
+      input.activity_entry_limit === 10 ? 10 : DEFAULT_REVIEW_MODERATION_PREFERENCES.activity_entry_limit,
+    activity_collapsed_groups: Array.isArray(input.activity_collapsed_groups)
+      ? input.activity_collapsed_groups.filter((value): value is string => typeof value === "string")
+      : DEFAULT_REVIEW_MODERATION_PREFERENCES.activity_collapsed_groups,
+    activity_log: Array.isArray(input.activity_log)
+      ? input.activity_log.map((entry) => normalizeActivityEntry(entry)).filter(Boolean) as ReviewModerationActivityEntry[]
+      : [],
+  };
+}
 
 export function ReviewModerationPanel() {
   const router = useRouter();
@@ -213,6 +554,24 @@ export function ReviewModerationPanel() {
   const [pendingBulkEscalation, setPendingBulkEscalation] = useState<PendingBulkEscalationAction | null>(null);
   const [bulkFeedback, setBulkFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activityLog, setActivityLog] = useState<ReviewModerationActivityEntry[]>([]);
+  const [sellerTrustWatchlist, setSellerTrustWatchlist] = useState<SellerTrustRiskEntry[]>([]);
+  const [sellerTrustInterventions, setSellerTrustInterventions] = useState<SellerTrustIntervention[]>([]);
+  const [reviewAnomalies, setReviewAnomalies] = useState<ReviewAnomalyRead[]>([]);
+  const [reviewAnomalySeverityFilter, setReviewAnomalySeverityFilter] =
+    useState<ReviewAnomalySeverity>("all");
+  const [sellerTrustRiskLevel, setSellerTrustRiskLevel] = useState<SellerTrustRiskLevel>("all");
+  const [sellerTrustTrendFilter, setSellerTrustTrendFilter] = useState<SellerTrustTrendFilter>("all");
+  const [sellerTrustQueueMode, setSellerTrustQueueMode] = useState<SellerTrustQueueMode>("all");
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
+  const [watchlistLastViewedAt, setWatchlistLastViewedAt] = useState<string | null>(null);
+  const [watchlistBaselineAt, setWatchlistBaselineAt] = useState<string | null>(null);
+  const [watchlistSeverityFilter, setWatchlistSeverityFilter] = useState<WatchlistSeverityFilter>("all");
+  const [watchlistNewOnly, setWatchlistNewOnly] = useState(false);
+  const [activityFilter, setActivityFilter] = useState<ModerationActivityFilter>("all");
+  const [activityEntryLimit, setActivityEntryLimit] = useState<6 | 10>(6);
+  const [collapsedActivityGroups, setCollapsedActivityGroups] = useState<string[]>([]);
+  const watchlistViewMarkedRef = useRef(false);
 
   const shortcuts: ModerationShortcut[] = [
     {
@@ -243,6 +602,63 @@ export function ReviewModerationPanel() {
       sort: "oldest",
     },
   ];
+
+  function buildCurrentSnapshot() {
+    return {
+      preset,
+      status: statusFilter,
+      visibility: visibilityFilter,
+      reason: reasonFilter,
+      sort: sortMode,
+      assignee: assigneeFilter,
+      priority: escalationFilter,
+      query: searchQuery,
+    } satisfies ReviewModerationActivityEntry["snapshot"];
+  }
+
+  function applySnapshot(
+    snapshot: NonNullable<ReviewModerationActivityEntry["snapshot"]>,
+    options?: { recordLabel?: string; kind?: ReviewModerationActivityEntry["kind"] },
+  ) {
+    setPreset(snapshot.preset);
+    setStatusFilter(snapshot.status);
+    setVisibilityFilter(snapshot.visibility);
+    setReasonFilter(snapshot.reason);
+    setSortMode(snapshot.sort);
+    setAssigneeFilter(snapshot.assignee);
+    setEscalationFilter(snapshot.priority);
+    setSearchQuery(snapshot.query);
+
+    if (options?.recordLabel) {
+      setActivityLog((current) => [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          kind: options.kind ?? "view",
+          label: options.recordLabel,
+          created_at: new Date().toISOString(),
+          snapshot,
+        },
+        ...current,
+      ].slice(0, 12));
+    }
+  }
+
+  function recordActivity(
+    kind: ReviewModerationActivityEntry["kind"],
+    label: string,
+    snapshot?: ReviewModerationActivityEntry["snapshot"],
+  ) {
+    setActivityLog((current) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind,
+        label,
+        created_at: new Date().toISOString(),
+        snapshot: snapshot ?? null,
+      },
+      ...current,
+    ].slice(0, 12));
+  }
 
   useEffect(() => {
     const nextPreset = searchParams.get("preset");
@@ -295,6 +711,82 @@ export function ReviewModerationPanel() {
   }, [searchParams]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const session = await restoreAdminSession();
+        if (!session) {
+          if (!cancelled) {
+            setPreferencesHydrated(true);
+          }
+          return;
+        }
+
+        const profile = await api.get<Profile>("/profiles/me", {
+          accessToken: session.access_token,
+        }).catch(() => null);
+        const interventions = await api
+          .listAdminSellerTrustInterventions(50, { accessToken: session.access_token })
+          .catch(() => [] as SellerTrustIntervention[]);
+        const anomalies = await api
+          .listReviewAnomalies(8, { accessToken: session.access_token })
+          .catch(() => [] as ReviewAnomalyRead[]);
+
+        if (cancelled) {
+          return;
+        }
+
+        const savedPreferences = normalizeReviewModerationPreferences(
+          profile?.admin_review_moderation_preferences ?? DEFAULT_REVIEW_MODERATION_PREFERENCES,
+        );
+        setActivityLog(savedPreferences.activity_log);
+        setWatchlistLastViewedAt(savedPreferences.watchlist_last_viewed_at);
+        setWatchlistBaselineAt(savedPreferences.watchlist_last_viewed_at);
+        setSellerTrustInterventions(interventions);
+        setReviewAnomalies(anomalies);
+        setWatchlistSeverityFilter(savedPreferences.watchlist_severity_filter);
+        setWatchlistNewOnly(savedPreferences.watchlist_new_only);
+        setActivityFilter(savedPreferences.activity_filter);
+        setActivityEntryLimit(savedPreferences.activity_entry_limit);
+        setCollapsedActivityGroups(savedPreferences.activity_collapsed_groups);
+
+        if (!searchParams.toString()) {
+          applySnapshot(
+            {
+              preset: savedPreferences.preset,
+              status: savedPreferences.status,
+              visibility: savedPreferences.visibility,
+              reason: savedPreferences.reason,
+              sort: savedPreferences.sort,
+              assignee: savedPreferences.assignee,
+              priority: savedPreferences.priority,
+              query: savedPreferences.query,
+            },
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setPreferencesHydrated(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!preferencesHydrated || loading || watchlistViewMarkedRef.current) {
+      return;
+    }
+
+    watchlistViewMarkedRef.current = true;
+    setWatchlistLastViewedAt(new Date().toISOString());
+  }, [loading, preferencesHydrated]);
+
+  useEffect(() => {
     const params = new URLSearchParams();
     if (preset !== "needs_action") {
       params.set("preset", preset);
@@ -337,6 +829,68 @@ export function ReviewModerationPanel() {
     sortMode,
     statusFilter,
     visibilityFilter,
+  ]);
+
+  useEffect(() => {
+    if (!preferencesHydrated) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const session = await restoreAdminSession();
+          if (!session) {
+            return;
+          }
+
+          await api.patch<Profile>(
+            "/profiles/me",
+            {
+              admin_review_moderation_preferences: {
+                preset,
+                status: statusFilter,
+                visibility: visibilityFilter,
+                reason: reasonFilter,
+                sort: sortMode,
+                assignee: assigneeFilter,
+                priority: escalationFilter,
+                query: searchQuery,
+                watchlist_last_viewed_at: watchlistLastViewedAt,
+                watchlist_severity_filter: watchlistSeverityFilter,
+                watchlist_new_only: watchlistNewOnly,
+                activity_filter: activityFilter,
+                activity_entry_limit: activityEntryLimit,
+                activity_collapsed_groups: collapsedActivityGroups,
+                activity_log: activityLog,
+              },
+            },
+            { accessToken: session.access_token },
+          );
+        } catch {
+          // Keep local moderation state even if remote persistence fails.
+        }
+      })();
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    activityLog,
+    assigneeFilter,
+    escalationFilter,
+    preferencesHydrated,
+    preset,
+    reasonFilter,
+    searchQuery,
+    sortMode,
+    statusFilter,
+    visibilityFilter,
+    watchlistLastViewedAt,
+    watchlistNewOnly,
+    watchlistSeverityFilter,
+    activityFilter,
+    activityEntryLimit,
+    collapsedActivityGroups,
   ]);
 
   async function loadReports() {
@@ -451,6 +1005,152 @@ export function ReviewModerationPanel() {
     );
   }, [reports]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const nextSellerRows = sellerCounts.filter((seller) => seller.slug).slice(0, 6);
+
+    if (!nextSellerRows.length) {
+      setSellerTrustWatchlist([]);
+      return;
+    }
+
+    void (async () => {
+      const loaded = await Promise.allSettled(
+        nextSellerRows.map(async (seller) => ({
+          seller: await api.getSellerBySlug(seller.slug ?? "", { cache: "no-store" }),
+          reportCount: seller.count,
+        })),
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      setSellerTrustWatchlist(
+        loaded.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])).sort(
+          (left, right) =>
+            (left.seller.trust_score?.score ?? 100) - (right.seller.trust_score?.score ?? 100) ||
+            right.reportCount - left.reportCount ||
+            left.seller.display_name.localeCompare(right.seller.display_name),
+        ),
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sellerCounts]);
+
+  const sellerTrustInterventionSellerIds = useMemo(
+    () => new Set(sellerTrustInterventions.map((entry) => entry.seller.id)),
+    [sellerTrustInterventions],
+  );
+
+  const sellerTrustRiskCounts = useMemo(
+    () => ({
+      tracked: sellerTrustWatchlist.length,
+      critical: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.risk_level === "critical").length,
+      elevated: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.risk_level === "elevated").length,
+      watch: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.risk_level === "watch").length,
+      low: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.risk_level === "low").length,
+      at_risk: sellerTrustWatchlist.filter((entry) => {
+        const level = entry.seller.trust_score?.risk_level;
+        return level === "critical" || level === "elevated";
+      }).length,
+      verified: sellerTrustWatchlist.filter((entry) => entry.seller.is_verified).length,
+      needs_attention: sellerTrustWatchlist.filter(
+        (entry) => entry.seller.trust_score?.label === "Needs attention",
+      ).length,
+      worsening: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.trend_direction === "worsening").length,
+      steady: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.trend_direction === "steady").length,
+      improving: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.trend_direction === "improving").length,
+      new: sellerTrustWatchlist.filter((entry) => entry.seller.trust_score?.trend_direction === "new").length,
+      intervention: sellerTrustWatchlist.filter((entry) => sellerTrustInterventionSellerIds.has(entry.seller.id)).length,
+    }),
+    [sellerTrustInterventionSellerIds, sellerTrustWatchlist],
+  );
+
+  function focusSellerTrustRisk(seller: SellerProfile) {
+    setPreset("seller_risk");
+    setSellerTrustRiskLevel("all");
+    setSellerTrustTrendFilter("all");
+    setSellerTrustQueueMode("all");
+    setStatusFilter("all");
+    setVisibilityFilter("all");
+    setReasonFilter("all");
+    setSortMode("newest");
+    setAssigneeFilter("all");
+    setEscalationFilter("all");
+    setSearchQuery(seller.slug || seller.display_name);
+    recordActivity(
+      "watchlist",
+      `Focused seller trust risk: ${seller.display_name}`,
+      {
+        preset: "seller_risk",
+        status: "all",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "all",
+        priority: "all",
+        query: seller.slug || seller.display_name,
+      },
+    );
+  }
+
+  function focusSellerTrustIntervention() {
+    setPreset("seller_risk");
+    setSellerTrustRiskLevel("all");
+    setSellerTrustTrendFilter("worsening");
+    setSellerTrustQueueMode("intervention");
+    setStatusFilter("all");
+    setVisibilityFilter("all");
+    setReasonFilter("all");
+    setSortMode("newest");
+    setAssigneeFilter("all");
+    setEscalationFilter("all");
+    setSearchQuery("");
+    recordActivity("watchlist", "Opened seller trust intervention queue", {
+      preset: "seller_risk",
+      status: "all",
+      visibility: "all",
+      reason: "all",
+      sort: "newest",
+      assignee: "all",
+      priority: "all",
+      query: "",
+    });
+  }
+
+  function focusReviewAnomaly(anomaly: ReviewAnomalyRead) {
+    setPreset("needs_action");
+    setStatusFilter("open");
+    setVisibilityFilter("all");
+    setReasonFilter("all");
+    setSortMode("newest");
+    setAssigneeFilter("all");
+    setEscalationFilter("all");
+    setSellerTrustRiskLevel("all");
+    setSellerTrustTrendFilter("all");
+    setSellerTrustQueueMode("all");
+    setReviewAnomalySeverityFilter("all");
+    setSearchQuery(anomaly.seller_slug ?? anomaly.seller_display_name ?? anomaly.seller_id);
+    recordActivity(
+      "watchlist",
+      `Focused review anomaly: ${anomaly.seller_display_name ?? anomaly.seller_slug ?? anomaly.seller_id}`,
+      {
+        preset: "needs_action",
+        status: "open",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "all",
+        priority: "all",
+        query: anomaly.seller_slug ?? anomaly.seller_display_name ?? anomaly.seller_id,
+      },
+    );
+  }
+
   const presetCounts = useMemo(
     () => ({
       default: reports.length,
@@ -464,8 +1164,9 @@ export function ReviewModerationPanel() {
         ? reports.filter((report) => report.assignee_user_id === currentAdminUserId).length
         : 0,
       unassigned: reports.filter((report) => !report.assignee_user_id).length,
+      seller_risk: sellerTrustWatchlist.length,
     }),
-    [currentAdminUserId, reports],
+    [currentAdminUserId, reports, sellerTrustWatchlist.length],
   );
 
   const assignmentCounts = useMemo(
@@ -541,6 +1242,9 @@ export function ReviewModerationPanel() {
     }),
     [reports],
   );
+
+  const repeatSellerAlert = useMemo(() => sellerCounts.find((seller) => seller.count >= 3) ?? null, [sellerCounts]);
+  const watchlistBaselineTimestamp = useMemo(() => toTimestamp(watchlistBaselineAt), [watchlistBaselineAt]);
 
   const filteredReports = useMemo(
     () => {
@@ -652,6 +1356,403 @@ export function ReviewModerationPanel() {
     ],
   );
 
+  const watchlistAlerts = useMemo<ModerationWatchlistAlert[]>(() => {
+    const alerts: ModerationWatchlistAlert[] = [];
+
+    if (agingCounts.stale_unassigned > 0) {
+      const matchingReports = reports.filter(
+        (report) =>
+          !report.assignee_user_id &&
+          report.status !== "resolved" &&
+          hoursSince(report.created_at) >= STALE_UNASSIGNED_HOURS,
+      );
+      const newCount = matchingReports.filter((report) =>
+        isAfterBaseline(report.created_at, watchlistBaselineTimestamp),
+      ).length;
+      alerts.push({
+        id: "stale_unassigned",
+        label: "Stale unassigned reports",
+        detail: `Open reports older than ${STALE_UNASSIGNED_HOURS}h without an owner.`,
+        count: agingCounts.stale_unassigned,
+        newCount,
+        isNew: newCount > 0,
+        tone: "high",
+        apply: () => {
+          applySnapshot(
+            {
+              preset: "unassigned",
+              status: "open",
+              visibility: "all",
+              reason: "all",
+              sort: "oldest",
+              assignee: "unassigned",
+              priority: "all",
+              query: "",
+            },
+            { recordLabel: "Opened stale unassigned watchlist", kind: "watchlist" },
+          );
+        },
+      });
+    }
+
+    if (agingCounts.stale_assigned > 0) {
+      const matchingReports = reports.filter((report) => {
+        if (!report.assignee_user_id || report.status === "resolved") {
+          return false;
+        }
+
+        return hoursSince(report.assigned_at ?? report.created_at) >= STALE_ASSIGNED_HOURS;
+      });
+      const newCount = matchingReports.filter((report) =>
+        isAfterBaseline(report.assigned_at ?? report.created_at, watchlistBaselineTimestamp),
+      ).length;
+      alerts.push({
+        id: "stale_assigned",
+        label: "Stale assigned reports",
+        detail: `Assigned reports older than ${STALE_ASSIGNED_HOURS}h still waiting on moderation.`,
+        count: agingCounts.stale_assigned,
+        newCount,
+        isNew: newCount > 0,
+        tone: "medium",
+        apply: () => {
+          applySnapshot(
+            {
+              preset: "default",
+              status: "all",
+              visibility: "all",
+              reason: "all",
+              sort: "oldest",
+              assignee: "all",
+              priority: "all",
+              query: "",
+            },
+            { recordLabel: "Opened stale assigned watchlist", kind: "watchlist" },
+          );
+        },
+      });
+    }
+
+    if (escalationCounts.unassigned > 0) {
+      const matchingReports = reports.filter((report) => report.is_escalated && !report.assignee_user_id);
+      const newCount = matchingReports.filter((report) =>
+        isAfterBaseline(report.escalated_at ?? report.created_at, watchlistBaselineTimestamp),
+      ).length;
+      alerts.push({
+        id: "escalated_unassigned",
+        label: "Escalated without owner",
+        detail: "Escalated trust cases are sitting unassigned.",
+        count: escalationCounts.unassigned,
+        newCount,
+        isNew: newCount > 0,
+        tone: "high",
+        apply: () => {
+          applySnapshot(
+            {
+              preset: "escalated_only",
+              status: "all",
+              visibility: "all",
+              reason: "all",
+              sort: "oldest",
+              assignee: "unassigned",
+              priority: "escalated",
+              query: "",
+            },
+            { recordLabel: "Opened escalated unassigned watchlist", kind: "watchlist" },
+          );
+        },
+      });
+    }
+
+    const hiddenOpenCount = reports.filter(
+      (report) => report.review.is_hidden && report.status !== "resolved",
+    ).length;
+    if (hiddenOpenCount > 0) {
+      const matchingReports = reports.filter(
+        (report) => report.review.is_hidden && report.status !== "resolved",
+      );
+      const newCount = matchingReports.filter((report) => {
+        const hiddenEventTimestamp =
+          report.history
+            ?.filter((event) => event.action === "visibility:hidden")
+            .sort((left, right) => right.created_at.localeCompare(left.created_at))[0]?.created_at ?? null;
+        return isAfterBaseline(hiddenEventTimestamp ?? report.created_at, watchlistBaselineTimestamp);
+      }).length;
+      alerts.push({
+        id: "hidden_open",
+        label: "Hidden reviews still open",
+        detail: "Moderators hid these reviews but have not closed the report workflow.",
+        count: hiddenOpenCount,
+        newCount,
+        isNew: newCount > 0,
+        tone: "monitor",
+        apply: () => {
+          applySnapshot(
+            {
+              preset: "hidden_reviews",
+              status: "open",
+              visibility: "hidden",
+              reason: "all",
+              sort: "newest",
+              assignee: "all",
+              priority: "all",
+              query: "",
+            },
+            { recordLabel: "Opened hidden open review watchlist", kind: "watchlist" },
+          );
+        },
+      });
+    }
+
+    if (repeatSellerAlert) {
+      const matchingReports = reports.filter(
+        (report) =>
+          report.seller_slug === repeatSellerAlert.slug ||
+          report.seller_display_name === repeatSellerAlert.label,
+      );
+      const newCount = matchingReports.filter((report) =>
+        isAfterBaseline(report.created_at, watchlistBaselineTimestamp),
+      ).length;
+      alerts.push({
+        id: "repeat_seller_reports",
+        label: "Repeat seller reporting",
+        detail: `${repeatSellerAlert.label} has ${repeatSellerAlert.count} active reports in queue.`,
+        count: repeatSellerAlert.count,
+        newCount,
+        isNew: newCount > 0,
+        tone: "medium",
+        apply: () => {
+          applySnapshot(
+            {
+              preset: "default",
+              status: "all",
+              visibility: "all",
+              reason: "all",
+              sort: "newest",
+              assignee: "all",
+              priority: "all",
+              query: repeatSellerAlert.slug ?? repeatSellerAlert.label,
+            },
+            { recordLabel: "Opened repeat seller moderation watchlist", kind: "watchlist" },
+          );
+        },
+      });
+    }
+
+    return alerts.sort((left, right) => {
+      const toneOrder = { high: 0, medium: 1, monitor: 2 };
+      return toneOrder[left.tone] - toneOrder[right.tone] || Number(right.isNew) - Number(left.isNew) || right.count - left.count;
+    });
+  }, [
+    agingCounts.stale_assigned,
+    agingCounts.stale_unassigned,
+    escalationCounts.unassigned,
+    repeatSellerAlert,
+    reports,
+    watchlistBaselineTimestamp,
+  ]);
+
+  const visibleWatchlistAlerts = useMemo(
+    () =>
+      watchlistAlerts.filter((alert) => {
+        if (watchlistSeverityFilter !== "all" && alert.tone !== watchlistSeverityFilter) {
+          return false;
+        }
+
+        if (watchlistNewOnly && !alert.isNew) {
+          return false;
+        }
+
+        return true;
+      }),
+    [watchlistAlerts, watchlistNewOnly, watchlistSeverityFilter],
+  );
+
+  const visibleReviewAnomalies = useMemo(
+    () =>
+      reviewAnomalies.filter((anomaly) => {
+        if (reviewAnomalySeverityFilter !== "all" && anomaly.severity !== reviewAnomalySeverityFilter) {
+          return false;
+        }
+
+        return true;
+      }),
+    [reviewAnomalySeverityFilter, reviewAnomalies],
+  );
+
+  const reviewAnomalyCounts = useMemo(
+    () => ({
+      all: reviewAnomalies.length,
+      high: reviewAnomalies.filter((anomaly) => anomaly.severity === "high").length,
+      medium: reviewAnomalies.filter((anomaly) => anomaly.severity === "medium").length,
+      monitor: reviewAnomalies.filter((anomaly) => anomaly.severity === "monitor").length,
+    }),
+    [reviewAnomalies],
+  );
+
+  const visibleSellerTrustWatchlist = useMemo(
+    () =>
+      sellerTrustWatchlist.filter((entry) => {
+        const trustScore = entry.seller.trust_score;
+
+        if (sellerTrustQueueMode === "intervention") {
+          if (!sellerTrustInterventionSellerIds.has(entry.seller.id)) {
+            return false;
+          }
+        }
+
+        if (sellerTrustRiskLevel === "all") {
+          // fall through to trend filtering
+        } else if (trustScore?.risk_level !== sellerTrustRiskLevel) {
+          return false;
+        }
+
+        if (sellerTrustTrendFilter === "all") {
+          return true;
+        }
+
+        return trustScore?.trend_direction === sellerTrustTrendFilter;
+      }),
+    [
+      sellerTrustInterventionSellerIds,
+      sellerTrustQueueMode,
+      sellerTrustRiskLevel,
+      sellerTrustTrendFilter,
+      sellerTrustWatchlist,
+    ],
+  );
+
+  const activityCounts = useMemo(
+    () => ({
+      all: activityLog.length,
+      watchlist: activityLog.filter((entry) => entry.kind === "watchlist").length,
+      view: activityLog.filter((entry) => entry.kind === "view").length,
+      operation: activityLog.filter((entry) => entry.kind === "operation").length,
+      export: activityLog.filter((entry) => entry.kind === "export").length,
+    }),
+    [activityLog],
+  );
+
+  const visibleActivityLog = useMemo(
+    () =>
+      activityLog.filter((entry) => {
+        if (activityFilter === "all") {
+          return true;
+        }
+
+        return entry.kind === activityFilter;
+      }),
+    [activityFilter, activityLog],
+  );
+
+  const visibleActivityGroups = useMemo(() => {
+    const groups: Array<{ label: string; entries: ReviewModerationActivityEntry[] }> = [];
+    for (const entry of visibleActivityLog.slice(0, activityEntryLimit)) {
+      const label = formatActivityDayLabel(entry.created_at);
+      const current = groups[groups.length - 1];
+      if (current?.label === label) {
+        current.entries.push(entry);
+      } else {
+        groups.push({ label, entries: [entry] });
+      }
+    }
+
+    return groups;
+  }, [activityEntryLimit, visibleActivityLog]);
+
+  const collapsedActivityGroupSet = useMemo(
+    () => new Set(collapsedActivityGroups),
+    [collapsedActivityGroups],
+  );
+
+  const hasOlderActivityGroups = useMemo(
+    () => visibleActivityGroups.some((group) => group.label !== "Today"),
+    [visibleActivityGroups],
+  );
+  const allOlderActivityGroupsCollapsed = useMemo(
+    () =>
+      visibleActivityGroups
+        .filter((group) => group.label !== "Today")
+        .every((group) => collapsedActivityGroupSet.has(group.label)),
+    [collapsedActivityGroupSet, visibleActivityGroups],
+  );
+  const hasCollapsedVisibleActivityGroups = useMemo(
+    () => visibleActivityGroups.some((group) => collapsedActivityGroupSet.has(group.label)),
+    [collapsedActivityGroupSet, visibleActivityGroups],
+  );
+
+  function toggleActivityGroup(label: string) {
+    setCollapsedActivityGroups((current) =>
+      current.includes(label) ? current.filter((value) => value !== label) : [...current, label],
+    );
+  }
+
+  function collapseOlderActivityGroups() {
+    setCollapsedActivityGroups((current) => {
+      const next = new Set(current);
+      for (const group of visibleActivityGroups) {
+        if (group.label !== "Today") {
+          next.add(group.label);
+        }
+      }
+
+      return Array.from(next);
+    });
+  }
+
+  function expandAllActivityGroups() {
+    setCollapsedActivityGroups((current) =>
+      current.filter((label) => !visibleActivityGroups.some((group) => group.label === label)),
+    );
+  }
+
+  function exportFilteredReportsCsv() {
+    if (!filteredReports.length) {
+      return;
+    }
+
+    downloadCsv("review-moderation-queue.csv", [
+      [
+        "report_id",
+        "review_id",
+        "seller",
+        "seller_slug",
+        "status",
+        "visibility",
+        "rating",
+        "reason",
+        "resolution_reason",
+        "assignee",
+        "escalated",
+        "reported_at",
+        "report_age",
+        "notes",
+        "moderator_note",
+        "comment",
+        "seller_response",
+      ],
+      ...filteredReports.map((report) => [
+        report.id,
+        report.review_id,
+        report.seller_display_name ?? "Unknown seller",
+        report.seller_slug ?? "",
+        report.status,
+        report.review.is_hidden ? "hidden" : "public",
+        report.review.rating,
+        report.reason,
+        report.resolution_reason ?? "",
+        report.assignee_user_id ?? "",
+        Boolean(report.is_escalated),
+        report.created_at,
+        formatAgeLabel(report.created_at),
+        report.notes ?? "",
+        moderatorNotes[report.id] ?? report.moderator_note ?? "",
+        report.review.comment ?? "",
+        report.review.seller_response ?? "",
+      ]),
+    ]);
+    recordActivity("export", "Exported moderation queue CSV", buildCurrentSnapshot());
+  }
+
   function applyPreset(nextPreset: QueuePreset) {
     setPreset(nextPreset);
 
@@ -662,6 +1763,16 @@ export function ReviewModerationPanel() {
       setAssigneeFilter("all");
       setEscalationFilter("all");
       setSortMode("newest");
+      recordActivity("view", "Opened default moderation view", {
+        preset: "default",
+        status: "all",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "all",
+        priority: "all",
+        query: "",
+      });
       return;
     }
 
@@ -672,6 +1783,16 @@ export function ReviewModerationPanel() {
       setAssigneeFilter("all");
       setEscalationFilter("all");
       setSortMode("newest");
+      recordActivity("view", "Opened needs action moderation view", {
+        preset: "needs_action",
+        status: "open",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "all",
+        priority: "all",
+        query: "",
+      });
       return;
     }
 
@@ -682,6 +1803,16 @@ export function ReviewModerationPanel() {
       setAssigneeFilter("all");
       setEscalationFilter("all");
       setSortMode("newest");
+      recordActivity("view", "Opened hidden reviews moderation view", {
+        preset: "hidden_reviews",
+        status: "all",
+        visibility: "hidden",
+        reason: "all",
+        sort: "newest",
+        assignee: "all",
+        priority: "all",
+        query: "",
+      });
       return;
     }
 
@@ -692,6 +1823,16 @@ export function ReviewModerationPanel() {
       setAssigneeFilter("mine");
       setEscalationFilter("all");
       setSortMode("newest");
+      recordActivity("view", "Opened assigned to me moderation view", {
+        preset: "assigned_to_me",
+        status: "all",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "mine",
+        priority: "all",
+        query: "",
+      });
       return;
     }
 
@@ -702,6 +1843,16 @@ export function ReviewModerationPanel() {
       setAssigneeFilter("all");
       setEscalationFilter("escalated");
       setSortMode("newest");
+      recordActivity("view", "Opened escalated moderation view", {
+        preset: "escalated_only",
+        status: "all",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "all",
+        priority: "escalated",
+        query: "",
+      });
       return;
     }
 
@@ -712,6 +1863,36 @@ export function ReviewModerationPanel() {
       setAssigneeFilter("unassigned");
       setEscalationFilter("all");
       setSortMode("newest");
+      recordActivity("view", "Opened unassigned moderation view", {
+        preset: "unassigned",
+        status: "all",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "unassigned",
+        priority: "all",
+        query: "",
+      });
+      return;
+    }
+
+    if (nextPreset === "seller_risk") {
+      setStatusFilter("all");
+      setVisibilityFilter("all");
+      setReasonFilter("all");
+      setAssigneeFilter("all");
+      setEscalationFilter("all");
+      setSortMode("newest");
+      recordActivity("view", "Opened seller trust risk moderation view", {
+        preset: "seller_risk",
+        status: "all",
+        visibility: "all",
+        reason: "all",
+        sort: "newest",
+        assignee: "all",
+        priority: "all",
+        query: "",
+      });
       return;
     }
 
@@ -721,6 +1902,16 @@ export function ReviewModerationPanel() {
     setAssigneeFilter("all");
     setEscalationFilter("all");
     setSortMode("oldest");
+    recordActivity("view", "Opened resolved with notes moderation view", {
+      preset: "resolved_with_notes",
+      status: "resolved",
+      visibility: "all",
+      reason: "all",
+      sort: "oldest",
+      assignee: "all",
+      priority: "all",
+      query: "",
+    });
   }
 
   async function updateStatus(reportId: string, status: ModerationStatus) {
@@ -747,6 +1938,9 @@ export function ReviewModerationPanel() {
         ...current,
         [reportId]: updated.resolution_reason ?? "",
       }));
+      recordActivity("operation", `Updated report status to ${status}`, buildCurrentSnapshot());
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (updateError) {
       setError(
         updateError instanceof ApiError
@@ -785,6 +1979,13 @@ export function ReviewModerationPanel() {
             : report,
         ),
       );
+      recordActivity(
+        "operation",
+        `${isHidden ? "Hidden" : "Restored"} reported review`,
+        buildCurrentSnapshot(),
+      );
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (updateError) {
       setError(
         updateError instanceof ApiError
@@ -825,6 +2026,13 @@ export function ReviewModerationPanel() {
       );
 
       setReports((current) => current.map((report) => (report.id === reportId ? updated : report)));
+      recordActivity(
+        "operation",
+        assigneeUserId ? "Assigned review report" : "Cleared review assignment",
+        buildCurrentSnapshot(),
+      );
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (updateError) {
       setError(
         updateError instanceof ApiError
@@ -866,6 +2074,13 @@ export function ReviewModerationPanel() {
       );
 
       setReports((current) => current.map((report) => (report.id === reportId ? updated : report)));
+      recordActivity(
+        "operation",
+        isEscalated ? "Escalated review report" : "Cleared review escalation",
+        buildCurrentSnapshot(),
+      );
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (updateError) {
       setError(
         updateError instanceof ApiError
@@ -933,6 +2148,8 @@ export function ReviewModerationPanel() {
             ? `. ${unchanged} already ${mode === "assign" ? "matched" : "were unassigned"}.`
             : "."),
       });
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (updateError) {
       setError(
         updateError instanceof ApiError
@@ -1005,6 +2222,8 @@ export function ReviewModerationPanel() {
             ? `. ${unchanged} already ${nextEscalated ? "matched" : "were clear"}.`
             : "."),
       });
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (updateError) {
       setError(
         updateError instanceof ApiError
@@ -1078,14 +2297,19 @@ export function ReviewModerationPanel() {
   }
 
   function applyShortcut(shortcut: ModerationShortcut) {
-    setPreset(shortcut.preset);
-    setStatusFilter(shortcut.status);
-    setVisibilityFilter(shortcut.visibility);
-    setReasonFilter("all");
-    setAssigneeFilter(shortcut.assignee);
-    setEscalationFilter(shortcut.priority);
-    setSortMode(shortcut.sort);
-    setSearchQuery("");
+    applySnapshot(
+      {
+        preset: shortcut.preset,
+        status: shortcut.status,
+        visibility: shortcut.visibility,
+        reason: "all",
+        sort: shortcut.sort,
+        assignee: shortcut.assignee,
+        priority: shortcut.priority,
+        query: "",
+      },
+      { recordLabel: `Opened ${shortcut.label} shortcut`, kind: "view" },
+    );
   }
 
   return (
@@ -1100,6 +2324,14 @@ export function ReviewModerationPanel() {
           </h2>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!filteredReports.length}
+            onClick={exportFilteredReportsCsv}
+            type="button"
+          >
+            Export CSV
+          </button>
           {(["open", "triaged", "resolved", "all"] as const).map((status) => (
             <button
               key={status}
@@ -1115,6 +2347,496 @@ export function ReviewModerationPanel() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="mt-5 rounded-[1.2rem] border border-border bg-[#f7f4ec] px-4 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/46">
+              Trust Watchlist
+            </p>
+            <p className="mt-2 text-sm text-foreground/72">
+              Highest-friction moderation risks that need routing or closure first.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              Active alerts · {watchlistAlerts.length}
+            </div>
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              New since review · {watchlistAlerts.reduce((sum, alert) => sum + alert.newCount, 0)}
+            </div>
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              Last reviewed · {formatLastReviewedLabel(watchlistBaselineAt)}
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["all", "All alerts", watchlistAlerts.length],
+              [
+                "high",
+                "High",
+                watchlistAlerts.filter((alert) => alert.tone === "high").length,
+              ],
+              [
+                "medium",
+                "Medium",
+                watchlistAlerts.filter((alert) => alert.tone === "medium").length,
+              ],
+              [
+                "monitor",
+                "Monitor",
+                watchlistAlerts.filter((alert) => alert.tone === "monitor").length,
+              ],
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                watchlistSeverityFilter === value
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+              }`}
+              onClick={() => setWatchlistSeverityFilter(value)}
+              type="button"
+            >
+              {label} · {count}
+            </button>
+          ))}
+          <button
+            className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+              watchlistNewOnly
+                ? "border-red-300 bg-red-50 text-red-700"
+                : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+            }`}
+            disabled={!watchlistAlerts.some((alert) => alert.isNew)}
+            onClick={() => setWatchlistNewOnly((current) => !current)}
+            type="button"
+          >
+            New since review · {watchlistAlerts.filter((alert) => alert.isNew).length}
+          </button>
+          {(watchlistSeverityFilter !== "all" || watchlistNewOnly) ? (
+            <button
+              className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+              onClick={() => {
+                setWatchlistSeverityFilter("all");
+                setWatchlistNewOnly(false);
+              }}
+              type="button"
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {visibleWatchlistAlerts.length ? (
+            visibleWatchlistAlerts.map((alert) => (
+              <button
+                key={alert.id}
+                className={`rounded-[1.1rem] border px-4 py-4 text-left transition ${
+                  alert.tone === "high"
+                    ? "border-red-200 bg-red-50 hover:border-red-300"
+                    : alert.tone === "medium"
+                      ? "border-amber-200 bg-amber-50 hover:border-amber-300"
+                      : "border-border bg-white hover:border-accent"
+                }`}
+                onClick={alert.apply}
+                type="button"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span
+                    className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                      alert.tone === "high"
+                        ? "bg-white text-red-700"
+                        : alert.tone === "medium"
+                          ? "bg-white text-amber-700"
+                          : "bg-[#eef4ff] text-[#214d9b]"
+                    }`}
+                  >
+                    {alert.tone}
+                  </span>
+                  <span className="text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    {alert.count}
+                  </span>
+                </div>
+                <p className="mt-3 text-sm font-semibold text-foreground">{alert.label}</p>
+                <p className="mt-2 text-sm leading-6 text-foreground/68">{alert.detail}</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {alert.isNew ? (
+                    <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-red-700">
+                      New since review · {alert.newCount}
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+                      Ongoing
+                    </span>
+                  )}
+                </div>
+                <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+                  Open slice
+                </p>
+              </button>
+            ))
+          ) : (
+            <div className="rounded-[1.1rem] border border-dashed border-border bg-white/65 px-4 py-4 text-sm text-foreground/62">
+              {watchlistAlerts.length
+                ? "No trust watchlist alerts match the current filter."
+                : "No active trust watchlist alerts right now."}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-[1.2rem] border border-border bg-[#f5f2ff] px-4 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/46">
+              Review Anomalies
+            </p>
+            <p className="mt-2 text-sm text-foreground/72">
+              Backend-derived seller clusters with repeated, hidden, or bursty report pressure.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              Sellers · {reviewAnomalies.length}
+            </div>
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              High · {reviewAnomalyCounts.high}
+            </div>
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              Medium · {reviewAnomalyCounts.medium}
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["all", "All", reviewAnomalyCounts.all],
+              ["high", "High", reviewAnomalyCounts.high],
+              ["medium", "Medium", reviewAnomalyCounts.medium],
+              ["monitor", "Monitor", reviewAnomalyCounts.monitor],
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                reviewAnomalySeverityFilter === value
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+              }`}
+              onClick={() => setReviewAnomalySeverityFilter(value)}
+              type="button"
+            >
+              {label} · {count}
+            </button>
+          ))}
+          {reviewAnomalySeverityFilter !== "all" ? (
+            <button
+              className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+              onClick={() => setReviewAnomalySeverityFilter("all")}
+              type="button"
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {visibleReviewAnomalies.length ? (
+            visibleReviewAnomalies.map((anomaly) => (
+              <button
+                key={anomaly.seller_id}
+                className={`rounded-[1.1rem] border px-4 py-4 text-left transition ${
+                  anomaly.severity === "high"
+                    ? "border-red-200 bg-red-50 hover:border-red-300"
+                    : anomaly.severity === "medium"
+                      ? "border-amber-200 bg-amber-50 hover:border-amber-300"
+                      : "border-border bg-white hover:border-accent"
+                }`}
+                onClick={() => focusReviewAnomaly(anomaly)}
+                type="button"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span
+                    className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                      anomaly.severity === "high"
+                        ? "bg-white text-red-700"
+                        : anomaly.severity === "medium"
+                          ? "bg-white text-amber-700"
+                          : "bg-[#eef4ff] text-[#214d9b]"
+                    }`}
+                  >
+                    {anomaly.severity}
+                  </span>
+                  <span className="text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    {anomaly.active_report_count}
+                  </span>
+                </div>
+                <p className="mt-3 text-sm font-semibold text-foreground">
+                  {anomaly.seller_display_name ?? anomaly.seller_slug ?? anomaly.seller_id}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-foreground/68">
+                  {anomaly.reasons.join(" · ")}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+                    Open · {anomaly.open_report_count}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+                    Escalated · {anomaly.escalated_report_count}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+                    Hidden open · {anomaly.hidden_open_count}
+                  </span>
+                </div>
+                <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+                  Latest report · {formatAgeLabel(anomaly.latest_report_at)}
+                </p>
+              </button>
+            ))
+          ) : (
+            <div className="rounded-[1.1rem] border border-dashed border-border bg-white/65 px-4 py-4 text-sm text-foreground/62">
+              {reviewAnomalies.length
+                ? "No review anomalies match the current filter."
+                : "No review anomalies detected right now."}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-[1.2rem] border border-border bg-[#f8f2ea] px-4 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/46">
+              Seller Trust Risk
+            </p>
+            <p className="mt-2 text-sm text-foreground/72">
+              Sellers with the heaviest report pressure and their computed trust score.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              Tracked sellers · {sellerTrustRiskCounts.tracked}
+            </div>
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              At risk · {sellerTrustRiskCounts.at_risk}
+            </div>
+            <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+              Verified · {sellerTrustRiskCounts.verified}
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["all", "All Levels"],
+              ["critical", "Critical"],
+              ["elevated", "Elevated"],
+              ["watch", "Watch"],
+              ["low", "Low Risk"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                sellerTrustRiskLevel === value
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+              }`}
+              onClick={() => setSellerTrustRiskLevel(value)}
+              type="button"
+            >
+              {label} · {sellerTrustRiskCounts[value === "all" ? "tracked" : value]}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["all", "All Trends"],
+              ["worsening", "Worsening"],
+              ["steady", "Steady"],
+              ["improving", "Improving"],
+              ["new", "New"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                sellerTrustTrendFilter === value
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+              }`}
+              onClick={() => setSellerTrustTrendFilter(value)}
+              type="button"
+            >
+              {label} · {sellerTrustRiskCounts[value === "all" ? "tracked" : value]}
+            </button>
+          ))}
+          <button
+            className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+              sellerTrustQueueMode === "intervention"
+                ? "border-red-300 bg-red-50 text-red-700"
+                : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+            }`}
+            onClick={() => {
+              if (sellerTrustQueueMode === "intervention") {
+                setSellerTrustQueueMode("all");
+                return;
+              }
+
+              focusSellerTrustIntervention();
+            }}
+            type="button"
+          >
+            Intervention · {sellerTrustRiskCounts.intervention}
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {visibleSellerTrustWatchlist.length ? (
+            visibleSellerTrustWatchlist.map(({ seller, reportCount }) => {
+              const trustScore = seller.trust_score;
+              const score = trustScore?.score ?? 0;
+              const riskTone =
+                trustScore?.risk_level === "critical"
+                  ? "border-red-200 bg-red-50"
+                  : trustScore?.risk_level === "elevated"
+                    ? "border-amber-200 bg-amber-50"
+                    : "border-border bg-white";
+
+              return (
+                <article key={seller.id} className={`rounded-[1.1rem] border px-4 py-4 ${riskTone}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{seller.display_name}</p>
+                      <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/56">
+                        {seller.slug}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/72">
+                        Reports · {reportCount}
+                      </span>
+                      <span
+                        className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                          trustScore?.risk_level === "low"
+                            ? "bg-[#eef4ff] text-[#214d9b]"
+                            : trustScore?.risk_level === "watch"
+                              ? "bg-white text-amber-700"
+                              : "bg-white text-red-700"
+                        }`}
+                      >
+                        Trust score · {score} · {trustScore?.label ?? "Unknown"}
+                      </span>
+                      {trustScore?.trend_direction ? (
+                        <span
+                          className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                            trustScore.trend_direction === "improving"
+                              ? "bg-[#eef4ff] text-[#214d9b]"
+                              : trustScore.trend_direction === "worsening"
+                                ? "bg-white text-red-700"
+                                : trustScore.trend_direction === "new"
+                                  ? "bg-white text-foreground/72"
+                                  : "bg-white text-amber-700"
+                          }`}
+                        >
+                          Trend · {trustScore.trend_direction}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-foreground/70">
+                    {trustScore?.summary ?? "No trust summary available yet."}
+                  </p>
+                  {trustScore?.trend_summary ? (
+                    <p className="mt-2 text-sm leading-6 text-foreground/64">
+                      {trustScore.trend_summary}
+                    </p>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <TrustRiskStat label="Reviews" value={trustScore?.review_count ?? 0} />
+                    <TrustRiskStat
+                      label="Response"
+                      value={formatPercent(trustScore?.response_rate ?? 0)}
+                    />
+                    <TrustRiskStat
+                      label="Completion"
+                      value={formatPercent(trustScore?.completion_rate ?? 0)}
+                    />
+                    <TrustRiskStat
+                      label="Delivery"
+                      value={formatPercent(trustScore?.delivery_success_rate ?? 0)}
+                    />
+                  </div>
+                  {trustScore?.risk_reasons?.length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {trustScore.risk_reasons.map((reason) => (
+                        <span
+                          key={reason}
+                          className="rounded-full border border-border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62"
+                        >
+                          {reason}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+                      {trustScore?.hidden_review_count
+                        ? `Hidden reviews · ${trustScore.hidden_review_count}`
+                        : "No hidden reviews"}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {trustScore?.trend_direction === "worsening" &&
+                      (trustScore?.risk_level === "critical" || trustScore?.risk_level === "elevated") ? (
+                        <button
+                          className="rounded-full border border-red-300 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-red-700 transition hover:border-red-400 hover:text-red-800"
+                          onClick={focusSellerTrustIntervention}
+                          type="button"
+                        >
+                          Route intervention
+                        </button>
+                      ) : null}
+                      <button
+                        className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                        onClick={() => focusSellerTrustRisk(seller)}
+                        type="button"
+                      >
+                        Focus reports
+                      </button>
+                      <Link
+                        className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                        href={`/sellers/${seller.slug}`}
+                      >
+                        Open seller
+                      </Link>
+                    </div>
+                  </div>
+                </article>
+              );
+            })
+          ) : (
+            <div className="rounded-[1.1rem] border border-dashed border-border bg-white/70 px-4 py-4 text-sm text-foreground/62">
+              {sellerTrustQueueMode === "intervention"
+                ? "No sellers are currently in the trust intervention queue."
+                : sellerTrustWatchlist.length
+                ? "No seller trust risk entries match the current level filter."
+                : "No seller trust risk watchlist data loaded yet."}
+            </div>
+          )}
+        </div>
+        {sellerTrustRiskCounts.needs_attention ? (
+          <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/56">
+            {sellerTrustRiskCounts.needs_attention} sellers are marked needs attention right now.
+          </p>
+        ) : null}
+        {sellerTrustRiskCounts.worsening ? (
+          <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700">
+            {sellerTrustRiskCounts.worsening} sellers are worsening across the last trust windows.
+          </p>
+        ) : null}
       </div>
 
       <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -1149,6 +2871,7 @@ export function ReviewModerationPanel() {
             ["escalated_only", "Escalated Only"],
             ["assigned_to_me", "Assigned To Me"],
             ["unassigned", "Unassigned"],
+            ["seller_risk", "Seller Risk"],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -1160,7 +2883,14 @@ export function ReviewModerationPanel() {
                   ? "border-red-300 bg-red-50 text-red-700 hover:border-accent hover:text-accent"
                   : "border-border text-foreground hover:border-accent hover:text-accent"
             }`}
-            onClick={() => applyPreset(value)}
+            onClick={() => {
+              if (value === "seller_risk" && sellerTrustWatchlist.length) {
+                focusSellerTrustRisk(sellerTrustWatchlist[0].seller);
+                return;
+              }
+
+              applyPreset(value);
+            }}
             type="button"
           >
             {label} · {presetCounts[value]}
@@ -1617,6 +3347,151 @@ export function ReviewModerationPanel() {
           {bulkFeedback.message}
         </div>
       ) : null}
+
+      <div className="mt-5 rounded-[1.2rem] border border-border bg-white/65 px-4 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/46">
+              Recent Moderation Activity
+            </p>
+            <p className="mt-2 text-sm text-foreground/66">
+              Saved review queue actions from this admin workspace.
+            </p>
+          </div>
+          <div className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/62">
+            Entries · {activityLog.length}
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["all", "All", activityCounts.all],
+              ["watchlist", "Watchlist", activityCounts.watchlist],
+              ["view", "Views", activityCounts.view],
+              ["operation", "Operations", activityCounts.operation],
+              ["export", "Exports", activityCounts.export],
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                activityFilter === value
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+              }`}
+              onClick={() => setActivityFilter(value)}
+              type="button"
+            >
+              {label} · {count}
+            </button>
+          ))}
+          {([6, 10] as const).map((value) => (
+            <button
+              key={value}
+              className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                activityEntryLimit === value
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-white text-foreground hover:border-accent hover:text-accent"
+              }`}
+              onClick={() => setActivityEntryLimit(value)}
+              type="button"
+            >
+              Show {value}
+            </button>
+          ))}
+          <button
+            className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!hasOlderActivityGroups || allOlderActivityGroupsCollapsed}
+            onClick={collapseOlderActivityGroups}
+            type="button"
+          >
+            Collapse older days
+          </button>
+          <button
+            className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!hasCollapsedVisibleActivityGroups}
+            onClick={expandAllActivityGroups}
+            type="button"
+          >
+            Expand all days
+          </button>
+        </div>
+        <div className="mt-4 space-y-3">
+          {visibleActivityLog.length ? (
+            visibleActivityGroups.map((group) => (
+              <div key={group.label} className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/46">
+                    {group.label}
+                  </p>
+                  <div className="h-px flex-1 bg-border" />
+                  <button
+                    className="rounded-full border border-border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={() => toggleActivityGroup(group.label)}
+                    type="button"
+                  >
+                    {collapsedActivityGroupSet.has(group.label) ? "Expand" : "Collapse"}
+                  </button>
+                </div>
+                {collapsedActivityGroupSet.has(group.label) ? (
+                  <div className="rounded-[1rem] border border-dashed border-border bg-white/60 px-4 py-3 text-sm text-foreground/62">
+                    {group.entries.length} hidden entr{group.entries.length === 1 ? "y" : "ies"}
+                  </div>
+                ) : (
+                  group.entries.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-[1rem] border border-border bg-white px-3 py-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                              entry.kind === "watchlist"
+                                ? "bg-red-50 text-red-700"
+                                : entry.kind === "view"
+                                  ? "bg-[#eef4ff] text-[#214d9b]"
+                                  : entry.kind === "export"
+                                    ? "bg-[#f7f0e2] text-[#7c3a10]"
+                                    : "bg-[#e8f7ef] text-[#166534]"
+                            }`}
+                          >
+                            {entry.kind}
+                          </span>
+                          <p className="text-xs text-foreground/52">
+                            {new Date(entry.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                        <p className="mt-2 text-sm font-medium text-foreground">{entry.label}</p>
+                      </div>
+                      {entry.snapshot ? (
+                        <button
+                          className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() =>
+                            applySnapshot(entry.snapshot!, {
+                              recordLabel: `Re-opened ${entry.label.toLowerCase()}`,
+                              kind: entry.kind === "watchlist" ? "watchlist" : "view",
+                            })
+                          }
+                          type="button"
+                        >
+                          Re-open
+                        </button>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="rounded-[1rem] border border-dashed border-border bg-white/60 px-4 py-4 text-sm text-foreground/62">
+              {activityLog.length
+                ? "No moderation activity matches the current filter."
+                : "No saved moderation activity yet."}
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="mt-6 space-y-4">
         {loading ? (

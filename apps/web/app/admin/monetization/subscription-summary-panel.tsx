@@ -31,9 +31,48 @@ import {
 } from "@/app/admin/monetization/subscription-formatting";
 
 const WINDOW_OPTIONS: SubscriptionHistoryWindowDays[] = [7, 14, 30];
+const SUBSCRIPTION_SUMMARY_ACTIVITY_KEY = "admin.subscription-summary.recent-activity";
+const SUBSCRIPTION_SUMMARY_ACTIVITY_FILTER_KEY = "admin.subscription-summary.recent-activity-filter";
+const MAX_RECENT_ACTIVITY_ENTRIES = 4;
+
+type RecentActivityFilter = "all" | "history" | "assignment" | "export";
+
+type SubscriptionSummaryRecentActivityEntry =
+  | {
+      id: string;
+      kind: "history";
+      label: string;
+      detail: string;
+      createdAt: string;
+      reason: string;
+      destructiveOnly?: boolean;
+      destructiveType?: "value_drop" | "perk_removal";
+      windowDays: SubscriptionHistoryWindowDays;
+    }
+  | {
+      id: string;
+      kind: "assignment";
+      label: string;
+      detail: string;
+      createdAt: string;
+      sellerSlug?: string;
+      tierId?: string;
+      tierName?: string;
+      reasonCode?: string;
+    }
+  | {
+      id: string;
+      kind: "export";
+      label: string;
+      detail: string;
+      createdAt: string;
+      windowDays: SubscriptionHistoryWindowDays;
+    };
 
 export default function SubscriptionSummaryPanel() {
   const [windowDays, setWindowDays] = useState<SubscriptionHistoryWindowDays>(30);
+  const [recentActivity, setRecentActivity] = useState<SubscriptionSummaryRecentActivityEntry[]>([]);
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
   const {
     tiers,
     subscriptions: allSubscriptions,
@@ -48,13 +87,114 @@ export default function SubscriptionSummaryPanel() {
     [allSubscriptions],
   );
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(SUBSCRIPTION_SUMMARY_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as SubscriptionSummaryRecentActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setRecentActivity(parsed);
+      }
+    } catch {
+      window.sessionStorage.removeItem(SUBSCRIPTION_SUMMARY_ACTIVITY_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const stored = window.sessionStorage.getItem(SUBSCRIPTION_SUMMARY_ACTIVITY_FILTER_KEY);
+    if (stored === "all" || stored === "history" || stored === "assignment" || stored === "export") {
+      setRecentActivityFilter(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SUBSCRIPTION_SUMMARY_ACTIVITY_KEY,
+      JSON.stringify(recentActivity),
+    );
+  }, [recentActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SUBSCRIPTION_SUMMARY_ACTIVITY_FILTER_KEY,
+      recentActivityFilter,
+    );
+  }, [recentActivityFilter]);
+
   const openHistoryView = (detail: SubscriptionHistoryFilterDetail) => {
+    setRecentActivity((current) =>
+      [
+        {
+          id: `history:${Date.now()}`,
+          kind: "history",
+          label: `${detail.windowDays ?? windowDays}d history`,
+          detail: `${detail.reason} · ${detail.destructiveOnly ? "destructive" : "all changes"}`,
+          createdAt: new Date().toISOString(),
+          reason: detail.reason,
+          destructiveOnly: detail.destructiveOnly,
+          destructiveType: detail.destructiveType,
+          windowDays: detail.windowDays ?? windowDays,
+        },
+        ...current,
+      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+    );
     window.dispatchEvent(new CustomEvent(SUBSCRIPTION_HISTORY_FILTER_EVENT, { detail }));
     scrollToMonetizationSection("subscription-history-panel");
   };
 
   const openAssignmentView = (detail: SubscriptionAssignmentFocusDetail) => {
+    setRecentActivity((current) =>
+      [
+        {
+          id: `assignment:${Date.now()}`,
+          kind: "assignment",
+          label: detail.sellerSlug ?? detail.tierName ?? "Seller assignment",
+          detail: [detail.tierName, detail.reasonCode].filter(Boolean).join(" · "),
+          createdAt: new Date().toISOString(),
+          sellerSlug: detail.sellerSlug,
+          tierId: detail.tierId,
+          tierName: detail.tierName,
+          reasonCode: detail.reasonCode,
+        },
+        ...current,
+      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+    );
     window.dispatchEvent(new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, { detail }));
+  };
+
+  const recordExportActivity = () => {
+    setRecentActivity((current) =>
+      [
+        {
+          id: `export:${Date.now()}`,
+          kind: "export",
+          label: `${windowDays}d summary export`,
+          detail: `${summary.filteredChanges.length} filtered changes`,
+          createdAt: new Date().toISOString(),
+          windowDays,
+        },
+        ...current,
+      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+    );
   };
 
   const summary = useMemo(() => {
@@ -217,6 +357,11 @@ export default function SubscriptionSummaryPanel() {
     URL.revokeObjectURL(url);
   };
 
+  const runExportSummaryCsv = () => {
+    recordExportActivity();
+    exportSummaryCsv();
+  };
+
   useEffect(() => {
     const handleExportEvent = (event: Event) => {
       const detail = (event as CustomEvent<MonetizationExportDetail>).detail;
@@ -224,14 +369,31 @@ export default function SubscriptionSummaryPanel() {
         return;
       }
       highlightMonetizationSection("subscription-summary-panel");
-      exportSummaryCsv();
+      runExportSummaryCsv();
     };
 
     window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [summary, windowDays]);
+  }, [runExportSummaryCsv, summary, windowDays]);
+
+  const recentActivityCounts = useMemo(
+    () => ({
+      all: recentActivity.length,
+      history: recentActivity.filter((entry) => entry.kind === "history").length,
+      assignment: recentActivity.filter((entry) => entry.kind === "assignment").length,
+      export: recentActivity.filter((entry) => entry.kind === "export").length,
+    }),
+    [recentActivity],
+  );
+  const filteredRecentActivity = useMemo(
+    () =>
+      recentActivity.filter(
+        (entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter,
+      ),
+    [recentActivity, recentActivityFilter],
+  );
 
   return (
     <section id="subscription-summary-panel" className="rounded-4xl border border-border bg-white p-6">
@@ -265,7 +427,7 @@ export default function SubscriptionSummaryPanel() {
           <button
             type="button"
             className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
-            onClick={exportSummaryCsv}
+            onClick={runExportSummaryCsv}
           >
             Export CSV
           </button>
@@ -285,6 +447,114 @@ export default function SubscriptionSummaryPanel() {
       </div>
 
       {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
+
+      {recentActivity.length > 0 ? (
+        <div className="mt-5 rounded-[1.8rem] border border-border/60 bg-background p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                Recent Activity
+              </p>
+              <p className="mt-2 text-sm text-foreground/72">
+                Re-open the last history slice, assignment focus, or summary export.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
+              onClick={() => {
+                setRecentActivity([]);
+                window.sessionStorage.removeItem(SUBSCRIPTION_SUMMARY_ACTIVITY_KEY);
+              }}
+            >
+              Clear history
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {([
+              ["all", "All"],
+              ["history", "History"],
+              ["assignment", "Assignment"],
+              ["export", "Export"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition ${
+                  recentActivityFilter === value
+                    ? "border-accent bg-accent text-white"
+                    : "border-border text-foreground hover:border-accent hover:text-accent"
+                }`}
+                onClick={() => setRecentActivityFilter(value)}
+              >
+                {label} ({recentActivityCounts[value]})
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 space-y-2">
+            {filteredRecentActivity.length > 0 ? (
+              filteredRecentActivity.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-[1.1rem] border border-border bg-white px-4 py-3"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-foreground/58">
+                      {entry.kind} · {entry.detail}
+                    </p>
+                  </div>
+                  {entry.kind === "history" ? (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() =>
+                        openHistoryView({
+                          reason: entry.reason as SubscriptionHistoryFilterDetail["reason"],
+                          destructiveOnly: entry.destructiveOnly,
+                          destructiveType: entry.destructiveType,
+                          windowDays: entry.windowDays,
+                        })
+                      }
+                      type="button"
+                    >
+                      Re-open history
+                    </button>
+                  ) : entry.kind === "assignment" ? (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() =>
+                        openAssignmentView({
+                          sellerSlug: entry.sellerSlug,
+                          tierId: entry.tierId,
+                          tierName: entry.tierName,
+                          reasonCode: entry.reasonCode,
+                        })
+                      }
+                      type="button"
+                    >
+                      Re-open assignment
+                    </button>
+                  ) : (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={runExportSummaryCsv}
+                      type="button"
+                    >
+                      Re-export slice
+                    </button>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="rounded-[1.1rem] border border-dashed border-border bg-white/55 px-4 py-4 text-sm leading-6 text-foreground/66">
+                {recentActivityFilter === "all"
+                  ? "No recent subscription summary actions yet."
+                  : `No ${recentActivityFilter} activity has been recorded in this session yet.`}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryStat label="Assigned MRR" value={formatCurrency(summary.assignedMrrCents, "USD")} />

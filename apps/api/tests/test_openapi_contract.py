@@ -13,7 +13,12 @@ class OpenAPIContractTests(unittest.TestCase):
             "/profiles/me",
             "/sellers",
             "/sellers/me",
+            "/sellers/by-id/{seller_id}",
             "/sellers/{slug}",
+            "/sellers/{slug}/listings/summary",
+            "/sellers/{slug}/listings",
+            "/sellers/{slug}/reviews",
+            "/sellers/{slug}/subscription",
             "/listings",
             "/listings/me",
             "/listings/ai-assist",
@@ -39,6 +44,7 @@ class OpenAPIContractTests(unittest.TestCase):
             "/notifications/{delivery_id}/retry",
             "/notifications/bulk-retry",
             "/admin/users",
+            "/admin/seller-trust/interventions",
         }
 
         self.assertTrue(expected_paths.issubset(paths.keys()))
@@ -51,6 +57,9 @@ class OpenAPIContractTests(unittest.TestCase):
             "CategoryRead",
             "ProfileRead",
             "SellerRead",
+            "SellerTrustScoreRead",
+            "SellerTrustInterventionRead",
+            "SellerListingSummaryRead",
             "ListingRead",
             "ListingListResponse",
             "OrderRead",
@@ -71,6 +80,7 @@ class OpenAPIContractTests(unittest.TestCase):
 
         profile_read = components["ProfileRead"]["properties"]
         profile_update = components["ProfileUpdate"]["properties"]
+        seller_read = components["SellerRead"]["properties"]
 
         self.assertIn("expo_push_token", profile_read)
         self.assertIn("expo_push_token", profile_update)
@@ -78,6 +88,7 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("admin_monetization_preferences", profile_update)
         self.assertIn("admin_delivery_ops_preferences", profile_read)
         self.assertIn("admin_delivery_ops_preferences", profile_update)
+        self.assertIn("trust_score", seller_read)
 
     def test_marketplace_routes_have_expected_methods(self):
         schema = app.openapi()
@@ -86,6 +97,9 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("get", paths["/listings"])
         self.assertIn("get", paths["/listings/admin"])
         self.assertIn("post", paths["/listings"])
+        self.assertIn("get", paths["/sellers/by-id/{seller_id}"])
+        self.assertIn("get", paths["/sellers/{slug}/listings/summary"])
+        self.assertIn("get", paths["/sellers/{slug}/listings"])
         self.assertIn("patch", paths["/orders/{order_id}"])
         self.assertIn("post", paths["/orders/bulk-status"])
         self.assertIn("patch", paths["/bookings/{booking_id}"])
@@ -97,6 +111,7 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("post", paths["/notifications/admin/bulk-retry"])
         self.assertIn("post", paths["/notifications/admin/{delivery_id}/retry"])
         self.assertIn("get", paths["/admin/users"])
+        self.assertIn("get", paths["/admin/seller-trust/interventions"])
 
     def test_listing_schema_exposes_real_contract_fields(self):
         schema = app.openapi()

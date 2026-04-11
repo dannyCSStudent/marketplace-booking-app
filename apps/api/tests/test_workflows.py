@@ -7,8 +7,8 @@ from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.schemas.bookings import BookingStatusUpdate
 from app.schemas.orders import OrderStatusUpdate
-from app.services.bookings import update_booking_status
-from app.services.orders import update_order_status
+from app.services.bookings import generate_booking_response_ai_assist, update_booking_status
+from app.services.orders import generate_order_response_ai_assist, update_order_status
 
 
 SELLER_USER = CurrentUser(id="seller-user-id", email="seller@example.com", access_token="seller-token")
@@ -104,6 +104,31 @@ class OrderWorkflowTests(unittest.TestCase):
         self.assertIn("Invalid order transition for buyer", context.exception.detail)
         self.assertEqual(fake_supabase.update_calls, 0)
 
+    def test_seller_can_generate_order_response_suggestion(self):
+        current_order = {
+            "id": "order-1",
+            "buyer_id": BUYER_USER.id,
+            "seller_id": "seller-profile-id",
+            "status": "pending",
+            "fulfillment": "pickup",
+            "subtotal_cents": 1800,
+            "total_cents": 1800,
+            "currency": "USD",
+            "notes": "Can you make sure it is ready after 5pm?",
+            "buyer_browse_context": "Quick booking lane",
+            "seller_response_note": None,
+            "order_items": [],
+        }
+        fake_supabase = _FakeSupabase(select_side_effect=[current_order])
+
+        with patch("app.services.orders.get_supabase_client", return_value=fake_supabase):
+            result = generate_order_response_ai_assist(SELLER_USER, "order-1")
+
+        self.assertEqual(result.transaction_kind, "order")
+        self.assertEqual(result.transaction_id, "order-1")
+        self.assertIn("order reply", result.suggestion.summary.lower())
+        self.assertIn("make sure it is ready after 5pm", result.suggestion.suggested_note.lower())
+
 
 class BookingWorkflowTests(unittest.TestCase):
     def test_seller_can_confirm_requested_booking(self):
@@ -195,6 +220,32 @@ class BookingWorkflowTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("Invalid booking transition for buyer", context.exception.detail)
         self.assertEqual(fake_supabase.update_calls, 0)
+
+    def test_seller_can_generate_booking_response_suggestion(self):
+        current_booking = {
+            "id": "booking-1",
+            "buyer_id": BUYER_USER.id,
+            "seller_id": "seller-profile-id",
+            "listing_id": "listing-1",
+            "status": "requested",
+            "scheduled_start": "2026-03-31T15:00:00+00:00",
+            "scheduled_end": "2026-03-31T16:30:00+00:00",
+            "total_cents": 4500,
+            "currency": "USD",
+            "notes": "Please confirm if Tuesday works.",
+            "buyer_browse_context": "Services lane",
+            "seller_response_note": None,
+            "listings": {"title": "Repair Visit", "type": "service"},
+        }
+        fake_supabase = _FakeSupabase(select_side_effect=[current_booking])
+
+        with patch("app.services.bookings.get_supabase_client", return_value=fake_supabase):
+            result = generate_booking_response_ai_assist(SELLER_USER, "booking-1")
+
+        self.assertEqual(result.transaction_kind, "booking")
+        self.assertEqual(result.transaction_id, "booking-1")
+        self.assertIn("booking reply", result.suggestion.summary.lower())
+        self.assertIn("tuesday works", result.suggestion.suggested_note.lower())
 
 
 class _FakeSupabase:

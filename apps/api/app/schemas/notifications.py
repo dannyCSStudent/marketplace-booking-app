@@ -61,3 +61,28 @@ class NotificationDeliveryBulkActionFailure(BaseModel):
 class NotificationDeliveryBulkRetryResult(BaseModel):
     succeeded_ids: list[str]
     failed: list[NotificationDeliveryBulkActionFailure]
+
+
+class TrustAlertEventRead(BaseModel):
+    id: str
+    seller_id: str
+    seller_slug: str
+    seller_display_name: str
+    delivery_id: str | None = None
+    actor_user_id: str
+    action: str
+    alert_signature: str
+    risk_level: str
+    trend_direction: str
+    created_at: datetime
+
+
+class TrustAlertSellerSummaryRead(BaseModel):
+    seller_id: str
+    seller_slug: str
+    seller_display_name: str
+    event_count: int
+    latest_event_action: str
+    latest_event_risk_level: str
+    latest_event_trend_direction: str
+    latest_event_created_at: datetime

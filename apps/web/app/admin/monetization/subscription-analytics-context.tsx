@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   ApiError,
@@ -18,6 +19,7 @@ import {
   type SubscriptionTierCreate,
   type SubscriptionTierRead,
 } from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 
 const CLIENT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -37,6 +39,7 @@ type SubscriptionAnalyticsContextValue = {
 const SubscriptionAnalyticsContext = createContext<SubscriptionAnalyticsContextValue | null>(null);
 
 export function SubscriptionAnalyticsProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const [tiers, setTiers] = useState<SubscriptionTierRead[]>([]);
   const [subscriptions, setSubscriptions] = useState<SellerSubscriptionRead[]>([]);
   const [events, setEvents] = useState<SellerSubscriptionEventRead[]>([]);
@@ -87,6 +90,8 @@ export function SubscriptionAnalyticsProvider({ children }: { children: ReactNod
 
     await api.createSubscriptionTier(body, { accessToken: session.access_token });
     await fetchAll();
+    await invalidateMarketplaceCaches();
+    router.refresh();
   };
 
   const assignSubscription = async (body: SellerSubscriptionAssign) => {
@@ -97,6 +102,8 @@ export function SubscriptionAnalyticsProvider({ children }: { children: ReactNod
 
     await api.assignSellerSubscription(body, { accessToken: session.access_token });
     await fetchAll();
+    await invalidateMarketplaceCaches();
+    router.refresh();
   };
 
   const value = useMemo<SubscriptionAnalyticsContextValue>(

@@ -24,6 +24,7 @@ from app.services.platform_fees import (
     calculate_platform_fee,
     get_active_platform_fee_rate_value,
 )
+from app.services.response_ai import build_transaction_response_ai_response
 from app.services.workflows import ORDER_TRANSITIONS_BY_ACTOR, validate_transition
 from app.services.notifications import queue_transaction_notification_jobs
 
@@ -35,7 +36,7 @@ FULFILLMENT_FIELD_BY_METHOD = {
 }
 ORDER_SELECT = (
     "id,buyer_id,seller_id,status,fulfillment,subtotal_cents,total_cents,currency,delivery_fee_cents,platform_fee_cents,platform_fee_rate,notes,buyer_browse_context,seller_response_note,"
-    "order_items(id,listing_id,quantity,unit_price_cents,total_price_cents,listings(title)),"
+    "order_items(id,listing_id,quantity,unit_price_cents,total_price_cents,listings(title,type,is_local_only)),"
     "order_status_events(id,status,actor_role,note,created_at)"
 )
 ORDER_ADMIN_SELECT = (
@@ -53,6 +54,8 @@ def _serialize_order(row: dict, *, include_admin: bool = False) -> OrderRead | O
             unit_price_cents=item["unit_price_cents"],
             total_price_cents=item["total_price_cents"],
             listing_title=(item.get("listings") or {}).get("title"),
+            listing_type=(item.get("listings") or {}).get("type"),
+            is_local_only=(item.get("listings") or {}).get("is_local_only"),
         )
         for item in row.get("order_items", [])
     ]
@@ -560,6 +563,21 @@ def update_order_status(current_user: CurrentUser, order_id: str, payload: Order
     )
 
     return _get_order_by_id(order_id=order_id, access_token=current_user.access_token)
+
+
+def generate_order_response_ai_assist(current_user: CurrentUser, order_id: str):
+    current_order = _get_order_row_by_id(
+        order_id=order_id,
+        access_token=current_user.access_token,
+    )
+    return build_transaction_response_ai_response(
+        transaction_kind="order",
+        transaction_id=order_id,
+        transaction_status=current_order["status"],
+        buyer_notes=current_order.get("notes"),
+        buyer_context=current_order.get("buyer_browse_context"),
+        transaction_label=current_order.get("listing_title") or current_order.get("fulfillment"),
+    )
 
 
 def _validate_order_status_update(

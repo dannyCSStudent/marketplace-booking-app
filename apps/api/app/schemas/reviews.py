@@ -29,6 +29,16 @@ class ReviewSellerResponseUpdate(BaseModel):
     seller_response: str | None = None
 
 
+class ReviewResponseAiAssistSuggestion(BaseModel):
+    suggested_response: str
+    summary: str
+
+
+class ReviewResponseAiAssistResponse(BaseModel):
+    review_id: str
+    suggestion: ReviewResponseAiAssistSuggestion
+
+
 class ReviewReportCreate(BaseModel):
     reason: str
     notes: str | None = None
@@ -79,6 +89,30 @@ class ReviewModerationItem(BaseModel):
     seller_display_name: str | None = None
     seller_slug: str | None = None
     history: list[ReviewModerationEventRead] = []
+
+
+class ReviewAnomalyRead(BaseModel):
+    seller_id: str
+    seller_slug: str | None = None
+    seller_display_name: str | None = None
+    active_report_count: int
+    open_report_count: int
+    escalated_report_count: int
+    hidden_open_count: int
+    recent_report_count: int
+    latest_report_at: datetime
+    severity: str
+    reasons: list[str]
+
+
+class ReviewAnomalySellerSummaryRead(BaseModel):
+    seller_id: str
+    seller_slug: str | None = None
+    seller_display_name: str | None = None
+    active_report_count: int
+    latest_report_at: datetime
+    severity: str
+    reasons: list[str]
 
 
 class ReviewVisibilityUpdate(BaseModel):

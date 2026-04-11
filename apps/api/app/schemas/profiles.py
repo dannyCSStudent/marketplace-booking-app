@@ -15,6 +15,8 @@ class ProfileCreate(BaseModel):
     expo_push_token: str | None = None
     admin_monetization_preferences: dict[str, Any] = Field(default_factory=dict)
     admin_delivery_ops_preferences: dict[str, Any] = Field(default_factory=dict)
+    admin_review_moderation_preferences: dict[str, Any] = Field(default_factory=dict)
+    admin_transaction_support_preferences: dict[str, Any] = Field(default_factory=dict)
 
 class ProfileUpdate(BaseModel):
     full_name: str | None = None
@@ -29,6 +31,8 @@ class ProfileUpdate(BaseModel):
     expo_push_token: str | None = None
     admin_monetization_preferences: dict[str, Any] | None = None
     admin_delivery_ops_preferences: dict[str, Any] | None = None
+    admin_review_moderation_preferences: dict[str, Any] | None = None
+    admin_transaction_support_preferences: dict[str, Any] | None = None
 
 class ProfileRead(BaseModel):
     id: str
@@ -44,3 +48,5 @@ class ProfileRead(BaseModel):
     expo_push_token: str | None = None
     admin_monetization_preferences: dict[str, Any] = Field(default_factory=dict)
     admin_delivery_ops_preferences: dict[str, Any] = Field(default_factory=dict)
+    admin_review_moderation_preferences: dict[str, Any] = Field(default_factory=dict)
+    admin_transaction_support_preferences: dict[str, Any] = Field(default_factory=dict)

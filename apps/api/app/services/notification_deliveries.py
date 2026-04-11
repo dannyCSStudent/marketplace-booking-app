@@ -13,6 +13,8 @@ from app.schemas.notifications import (
     NotificationDeliveryRead,
     NotificationDeliverySummaryRead,
     NotificationWorkerHealthRead,
+    TrustAlertEventRead,
+    TrustAlertSellerSummaryRead,
 )
 
 
@@ -448,3 +450,225 @@ def retry_admin_notification_deliveries(
         succeeded_ids=succeeded_ids,
         failed=failed,
     )
+
+
+def acknowledge_admin_trust_alert(
+    seller_id: str,
+    actor_user_id: str | None = None,
+) -> list[NotificationDeliveryRead]:
+    return _update_trust_alert_acknowledgement(
+        seller_id=seller_id,
+        actor_user_id=actor_user_id,
+        acknowledged=True,
+    )
+
+
+def clear_admin_trust_alert_acknowledgement(
+    seller_id: str,
+    actor_user_id: str | None = None,
+) -> list[NotificationDeliveryRead]:
+    return _update_trust_alert_acknowledgement(
+        seller_id=seller_id,
+        actor_user_id=actor_user_id,
+        acknowledged=False,
+    )
+
+
+def _update_trust_alert_acknowledgement(
+    *,
+    seller_id: str,
+    actor_user_id: str | None,
+    acknowledged: bool,
+) -> list[NotificationDeliveryRead]:
+    supabase = get_supabase_client()
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": (
+                    "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                    "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                ),
+                "payload->>alert_type": "eq.seller_trust_intervention",
+                "payload->>seller_id": f"eq.{seller_id}",
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    updated_rows: list[dict] = []
+    for row in rows:
+        payload = dict(row.get("payload") or {})
+        if acknowledged:
+            payload["acknowledged_at"] = now
+            if actor_user_id:
+                payload["acknowledged_by_user_id"] = actor_user_id
+            payload["acknowledged_signature"] = payload.get("alert_signature") or payload.get("acknowledged_signature")
+        else:
+            payload.pop("acknowledged_at", None)
+            payload.pop("acknowledged_by_user_id", None)
+            payload.pop("acknowledged_signature", None)
+        try:
+            updated = supabase.update(
+                "notification_deliveries",
+                {"payload": payload},
+                query={
+                    "id": f"eq.{row['id']}",
+                    "select": (
+                        "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                        "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                    ),
+                },
+                use_service_role=True,
+            )
+        except SupabaseError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+        if updated:
+            updated_rows.extend(updated)
+
+    if updated_rows and actor_user_id:
+        _insert_trust_alert_events(
+            rows=updated_rows,
+            action="acknowledged" if acknowledged else "cleared",
+            actor_user_id=actor_user_id,
+        )
+
+    return [NotificationDeliveryRead(**row) for row in updated_rows]
+
+
+def _insert_trust_alert_events(
+    *,
+    rows: list[dict],
+    action: str,
+    actor_user_id: str,
+) -> None:
+    supabase = get_supabase_client()
+    events: list[dict[str, str]] = []
+
+    for row in rows:
+        payload = row.get("payload") or {}
+        seller_id = str(payload.get("seller_id") or "").strip()
+        seller_slug = str(payload.get("seller_slug") or "").strip()
+        seller_display_name = str(payload.get("seller_display_name") or "").strip()
+        alert_signature = str(payload.get("acknowledged_signature") or payload.get("alert_signature") or "").strip()
+        risk_level = str(payload.get("risk_level") or "").strip()
+        trend_direction = str(payload.get("trend_direction") or "").strip()
+        if not seller_id or not seller_slug or not seller_display_name or not alert_signature:
+            continue
+
+        events.append(
+            {
+                "seller_id": seller_id,
+                "seller_slug": seller_slug,
+                "seller_display_name": seller_display_name,
+                "delivery_id": str(row.get("id")),
+                "actor_user_id": actor_user_id,
+                "action": action,
+                "alert_signature": alert_signature,
+                "risk_level": risk_level or "unknown",
+                "trend_direction": trend_direction or "steady",
+            }
+        )
+
+    if not events:
+        return
+
+    try:
+        supabase.insert("trust_alert_events", events, use_service_role=True)
+    except SupabaseError:
+        return
+
+
+def list_admin_trust_alert_events(limit: int = 20) -> list[TrustAlertEventRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "trust_alert_events",
+            query={
+                "select": (
+                    "id,seller_id,seller_slug,seller_display_name,delivery_id,actor_user_id,"
+                    "action,alert_signature,risk_level,trend_direction,created_at"
+                ),
+                "order": "created_at.desc",
+                "limit": str(max(1, min(limit, 100))),
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [TrustAlertEventRead(**row) for row in rows]
+
+
+def list_admin_trust_alert_seller_summaries(
+    limit: int = 8,
+    action: str | None = None,
+) -> list[TrustAlertSellerSummaryRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "trust_alert_events",
+            query={
+                "select": (
+                    "seller_id,seller_slug,seller_display_name,action,risk_level,trend_direction,created_at"
+                ),
+                "order": "created_at.desc",
+                "limit": "200",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    grouped: dict[str, dict[str, object]] = {}
+    allowed_actions = {"acknowledged", "cleared"} if action is None else {action}
+
+    for row in rows:
+        row_action = str(row.get("action") or "").strip()
+        if allowed_actions and row_action not in allowed_actions:
+            continue
+
+        seller_id = str(row.get("seller_id") or "").strip()
+        seller_slug = str(row.get("seller_slug") or "").strip()
+        seller_display_name = str(row.get("seller_display_name") or "").strip()
+        created_at = _parse_timestamp(row.get("created_at"))
+        if not seller_id or not seller_slug or not seller_display_name or created_at is None:
+            continue
+
+        current = grouped.get(seller_id)
+        if current is None:
+            grouped[seller_id] = {
+                "seller_id": seller_id,
+                "seller_slug": seller_slug,
+                "seller_display_name": seller_display_name,
+                "event_count": 1,
+                "latest_event_action": str(row.get("action") or "unknown"),
+                "latest_event_risk_level": str(row.get("risk_level") or "unknown"),
+                "latest_event_trend_direction": str(row.get("trend_direction") or "steady"),
+                "latest_event_created_at": created_at,
+            }
+            continue
+
+        current["event_count"] = int(current.get("event_count", 0)) + 1
+        current_created_at = current.get("latest_event_created_at")
+        if isinstance(current_created_at, datetime):
+            if created_at is not None and created_at > current_created_at:
+                current["latest_event_action"] = str(row.get("action") or "unknown")
+                current["latest_event_risk_level"] = str(row.get("risk_level") or "unknown")
+                current["latest_event_trend_direction"] = str(row.get("trend_direction") or "steady")
+                current["latest_event_created_at"] = created_at
+
+    summaries = [TrustAlertSellerSummaryRead(**summary) for summary in grouped.values()]
+    summaries.sort(
+        key=lambda summary: (
+            -summary.event_count,
+            -summary.latest_event_created_at.timestamp(),
+            summary.seller_display_name.lower(),
+        )
+    )
+    return summaries[: max(1, min(limit, 20))]

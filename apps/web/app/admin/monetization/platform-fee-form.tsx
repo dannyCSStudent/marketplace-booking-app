@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { createApiClient, PlatformFeeRateRead } from "@repo/api-client";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 
 type MonetizationFormProps = {
   activeFee: PlatformFeeRateRead;
@@ -11,6 +13,7 @@ type MonetizationFormProps = {
 type Status = "idle" | "pending" | "success" | "error";
 
 export default function PlatformFeeForm({ activeFee, apiBaseUrl }: MonetizationFormProps) {
+  const router = useRouter();
   const [label, setLabel] = useState(activeFee.name);
   const initialPercent = useMemo(() => {
     const parsed = Number(activeFee.rate);
@@ -56,6 +59,8 @@ export default function PlatformFeeForm({ activeFee, apiBaseUrl }: MonetizationF
         const updated = await apiClient.createPlatformFeeRate(payload);
         setLatestFee(updated);
         setPercentInput((Number(updated.rate) * 100).toFixed(2));
+        await invalidateMarketplaceCaches();
+        router.refresh();
         setStatus("success");
         setMessage("Platform fee saved.");
       } catch (error) {

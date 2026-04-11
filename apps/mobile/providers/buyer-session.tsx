@@ -16,9 +16,10 @@ import {
   createBuyerBooking,
   createBuyerOrder,
   createBuyerProfile,
-  loadBuyerDashboard,
+  loadBuyerEngagementContext,
   loadBuyerNotificationDeliveries,
-  loadPublicListings,
+  loadBuyerProfile,
+  loadPublicListingsPage,
   refreshBuyerSession,
   registerBuyerExpoPushToken,
   retryBuyerNotificationDelivery,
@@ -49,10 +50,14 @@ import {
   setBuyerRefreshToken,
 } from '@/lib/session-storage';
 
+const MOBILE_PUBLIC_LISTING_LIMIT = 100;
+
 type BuyerSessionValue = {
   session: BuyerSession | null;
   profile: Profile | null;
   listings: Listing[];
+  hasMoreListings: boolean;
+  loadingMoreListings: boolean;
   orders: Order[];
   bookings: Booking[];
   notifications: NotificationItem[];
@@ -66,6 +71,7 @@ type BuyerSessionValue = {
   signUp: (email: string, password: string, profile: ProfilePayload) => Promise<void>;
   signOut: () => Promise<void>;
   refreshMarketplace: () => Promise<void>;
+  loadMoreListings: () => Promise<void>;
   markNotificationsSeen: () => Promise<void>;
   updateNotificationPreferences: (input: {
     email_notifications_enabled?: boolean;
@@ -115,6 +121,8 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<BuyerSession | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
+  const [hasMoreListings, setHasMoreListings] = useState(true);
+  const [loadingMoreListings, setLoadingMoreListings] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [notificationDeliveries, setNotificationDeliveries] = useState<NotificationDelivery[]>([]);
@@ -131,6 +139,8 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       setOrders([]);
       setBookings([]);
+      setHasMoreListings(true);
+      setLoadingMoreListings(false);
       setNotificationDeliveries([]);
       setNotificationsSeenAtState(null);
       setError(message ?? null);
@@ -142,23 +152,25 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      const listings = await loadPublicListings();
+      const listings = await loadPublicListingsPage(MOBILE_PUBLIC_LISTING_LIMIT, 0);
       startTransition(() => {
         setListings(listings);
+        setHasMoreListings(listings.length === MOBILE_PUBLIC_LISTING_LIMIT);
       });
 
       if (session) {
-        const [dashboard, deliveries] = await Promise.all([
-          loadBuyerDashboard(session.access_token),
+        const [profile, engagement, deliveries] = await Promise.all([
+          loadBuyerProfile(session.access_token),
+          loadBuyerEngagementContext(session.access_token),
           loadBuyerNotificationDeliveries(session.access_token),
         ]);
 
         startTransition(() => {
-          setListings(dashboard.listings);
-          setProfile(dashboard.profile);
-          setOrders(dashboard.orders);
-          setBookings(dashboard.bookings);
+          setProfile(profile);
+          setOrders(engagement.orders);
+          setBookings(engagement.bookings);
           setNotificationDeliveries(deliveries);
+          setHasMoreListings(listings.length === MOBILE_PUBLIC_LISTING_LIMIT);
         });
       }
     } catch (err) {
@@ -174,6 +186,24 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       setRefreshing(false);
     }
   }, [clearSessionState, session]);
+
+  const loadMoreListings = useCallback(async () => {
+    if (loadingMoreListings || !hasMoreListings) {
+      return;
+    }
+
+    setLoadingMoreListings(true);
+
+    try {
+      const moreListings = await loadPublicListingsPage(MOBILE_PUBLIC_LISTING_LIMIT, listings.length);
+      startTransition(() => {
+        setListings((current) => [...current, ...moreListings]);
+        setHasMoreListings(moreListings.length === MOBILE_PUBLIC_LISTING_LIMIT);
+      });
+    } finally {
+      setLoadingMoreListings(false);
+    }
+  }, [hasMoreListings, listings.length, loadingMoreListings]);
 
   const notifications = useMemo(
     () => buildNotifications({ audience: 'buyer', orders, bookings }),
@@ -195,8 +225,10 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
 
     try {
       const nextSession = await signInBuyer(email, password);
-      const [dashboard, deliveries] = await Promise.all([
-        loadBuyerDashboard(nextSession.access_token),
+      const [listings, profile, engagement, deliveries] = await Promise.all([
+        loadPublicListingsPage(MOBILE_PUBLIC_LISTING_LIMIT, 0),
+        loadBuyerProfile(nextSession.access_token),
+        loadBuyerEngagementContext(nextSession.access_token),
         loadBuyerNotificationDeliveries(nextSession.access_token),
       ]);
       await setBuyerAccessToken(nextSession.access_token);
@@ -204,11 +236,12 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
 
       startTransition(() => {
         setSession(nextSession);
-        setListings(dashboard.listings);
-        setProfile(dashboard.profile);
-        setOrders(dashboard.orders);
-        setBookings(dashboard.bookings);
+        setListings(listings);
+        setProfile(profile);
+        setOrders(engagement.orders);
+        setBookings(engagement.bookings);
         setNotificationDeliveries(deliveries);
+        setHasMoreListings(listings.length === MOBILE_PUBLIC_LISTING_LIMIT);
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign in');
@@ -225,8 +258,10 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     try {
       const nextSession = await signUpBuyer(email, password);
       await createBuyerProfile(nextSession.access_token, profileInput);
-      const [dashboard, deliveries] = await Promise.all([
-        loadBuyerDashboard(nextSession.access_token),
+      const [listings, profile, engagement, deliveries] = await Promise.all([
+        loadPublicListingsPage(MOBILE_PUBLIC_LISTING_LIMIT, 0),
+        loadBuyerProfile(nextSession.access_token),
+        loadBuyerEngagementContext(nextSession.access_token),
         loadBuyerNotificationDeliveries(nextSession.access_token),
       ]);
       await setBuyerAccessToken(nextSession.access_token);
@@ -234,11 +269,12 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
 
       startTransition(() => {
         setSession(nextSession);
-        setListings(dashboard.listings);
-        setProfile(dashboard.profile);
-        setOrders(dashboard.orders);
-        setBookings(dashboard.bookings);
+        setListings(listings);
+        setProfile(profile);
+        setOrders(engagement.orders);
+        setBookings(engagement.bookings);
         setNotificationDeliveries(deliveries);
+        setHasMoreListings(listings.length === MOBILE_PUBLIC_LISTING_LIMIT);
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create account');
@@ -340,9 +376,10 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
         const token = await getBuyerAccessToken();
         const refreshToken = await getBuyerRefreshToken();
         const storedNotificationsSeenAt = await getBuyerNotificationsSeenAt();
-        const listings = await loadPublicListings();
+        const listings = await loadPublicListingsPage(MOBILE_PUBLIC_LISTING_LIMIT, 0);
         if (!token || !refreshToken) {
           setListings(listings);
+          setHasMoreListings(listings.length === MOBILE_PUBLIC_LISTING_LIMIT);
           setNotificationsSeenAtState(storedNotificationsSeenAt);
           return;
         }
@@ -353,7 +390,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
         };
 
         try {
-          await loadBuyerDashboard(token);
+          await Promise.all([loadBuyerProfile(token), loadBuyerEngagementContext(token)]);
         } catch (err) {
           if (!isExpiredAuthError(err)) {
             throw err;
@@ -364,18 +401,21 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
           await setBuyerRefreshToken(restoredSession.refresh_token);
         }
 
-        const [dashboard, deliveries] = await Promise.all([
-          loadBuyerDashboard(restoredSession.access_token),
+        const [listings, profile, engagement, deliveries] = await Promise.all([
+          loadPublicListingsPage(MOBILE_PUBLIC_LISTING_LIMIT, 0),
+          loadBuyerProfile(restoredSession.access_token),
+          loadBuyerEngagementContext(restoredSession.access_token),
           loadBuyerNotificationDeliveries(restoredSession.access_token),
         ]);
 
         startTransition(() => {
           setSession(restoredSession);
-          setListings(dashboard.listings);
-          setProfile(dashboard.profile);
-          setOrders(dashboard.orders);
-          setBookings(dashboard.bookings);
+          setListings(listings);
+          setProfile(profile);
+          setOrders(engagement.orders);
+          setBookings(engagement.bookings);
           setNotificationDeliveries(deliveries);
+          setHasMoreListings(listings.length === MOBILE_PUBLIC_LISTING_LIMIT);
           setNotificationsSeenAtState(storedNotificationsSeenAt);
         });
       } catch (err) {
@@ -515,6 +555,8 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       session,
       profile,
       listings,
+      hasMoreListings,
+      loadingMoreListings,
       orders,
       bookings,
       notifications,
@@ -528,6 +570,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       refreshMarketplace,
+      loadMoreListings,
       markNotificationsSeen,
       updateNotificationPreferences,
       syncPushToken,
@@ -539,6 +582,8 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       session,
       profile,
       listings,
+      hasMoreListings,
+      loadingMoreListings,
       orders,
       bookings,
       notifications,
@@ -552,6 +597,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       refreshMarketplace,
+      loadMoreListings,
       markNotificationsSeen,
       updateNotificationPreferences,
       syncPushToken,

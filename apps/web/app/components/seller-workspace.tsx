@@ -10,6 +10,7 @@ import {
 } from "@repo/auth";
 
 import { ApiError, buildNotifications, createApiClient, formatCurrency } from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import type {
   Booking,
   CategoryRead,
@@ -23,11 +24,15 @@ import type {
   NotificationDelivery,
   NotificationItem,
   Order,
+  OrderResponseAiAssistResponse,
   PlatformFeeRateRead,
   Profile,
   ProfilePayload,
   ProfileUpdateInput,
   ReviewRead,
+  BookingResponseAiAssistResponse,
+  ReviewResponseAiAssistResponse,
+  ReviewResponseAiAssistSuggestion,
   SellerCreateInput,
   SellerProfile,
   SellerSubscriptionRead,
@@ -47,7 +52,9 @@ type WorkspaceState = {
 type ListingDraft = {
   category_id: string;
   price_cents: string;
+  inventory_count: string;
   requires_booking: boolean;
+  auto_accept_bookings: boolean;
   duration_minutes: string;
   lead_time_hours: string;
   is_local_only: boolean;
@@ -67,6 +74,12 @@ type ListingAiState = {
   loading: boolean;
   error: string | null;
   suggestion: ListingAiAssistSuggestion | null;
+};
+
+type ReviewResponseAiState = {
+  loading: boolean;
+  error: string | null;
+  suggestion: ReviewResponseAiAssistSuggestion | null;
 };
 
 type ListingPriceInsightState = {
@@ -90,6 +103,59 @@ type PendingBulkAction = {
   label: string;
 };
 
+type ListingControlTarget = "pricing" | "inventory" | "booking" | "fulfillment";
+
+type ListingWorkspaceWatchItem = {
+  id: "sold-out" | "low-stock" | "inventory-untracked" | "availability-gap";
+  title: string;
+  description: string;
+  count: number;
+  listingIds: string[];
+  topListing: Listing;
+  target: ListingControlTarget;
+  actionLabel: string;
+  toneClass: string;
+};
+
+type ListingWatchlistFilter = "all" | "inventory" | "availability";
+type SellerWatchlistActivityFilter = "all" | "inventory" | "availability";
+type InventoryAlertBucketFilter = "all" | "low_stock" | "out_of_stock";
+type InventoryAlertStatusFilter = "all" | "queued" | "sent" | "failed";
+type InventoryAlertRecencyFilter = "today" | "7d" | "all";
+type InventoryAlertActivityGroup = "Recent";
+type InventoryAlertActivityFilter = "all" | "low_stock" | "out_of_stock";
+
+type SellerWatchlistActivityEntry = {
+  id: string;
+  createdAt: string;
+  watchItemId: ListingWorkspaceWatchItem["id"];
+  watchlistFilter: ListingWatchlistFilter;
+  listingId: string;
+  listingTitle: string;
+  actionLabel: string;
+  target: ListingControlTarget;
+};
+
+type InventoryAlertGroup = {
+  signature: string;
+  listingId: string;
+  listingTitle: string;
+  listingSlug: string;
+  inventoryBucket: "low_stock" | "out_of_stock";
+  inventoryCount: number | null;
+  latestCreatedAt: string;
+  deliveries: NotificationDelivery[];
+};
+
+type SellerInventoryAlertActivityEntry = {
+  id: string;
+  createdAt: string;
+  listingId: string;
+  listingTitle: string;
+  inventoryBucket: "low_stock" | "out_of_stock";
+  inventoryCount: number | null;
+};
+
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -98,6 +164,17 @@ const api = createApiClient(apiBaseUrl);
 const SELLER_ACCESS_TOKEN_KEY = "seller_access_token";
 const SELLER_REFRESH_TOKEN_KEY = "seller_refresh_token";
 const SELLER_NOTIFICATIONS_SEEN_AT_KEY = "seller_notifications_seen_at";
+const SELLER_WATCHLIST_ACTIVITY_KEY = "seller_listing_watchlist_activity";
+const SELLER_WATCHLIST_ACTIVITY_FILTER_KEY = "seller_listing_watchlist_activity_filter";
+const SELLER_WATCHLIST_ACTIVITY_COLLAPSED_KEY = "seller_listing_watchlist_activity_collapsed";
+const SELLER_INVENTORY_ALERT_BUCKET_FILTER_KEY = "seller_inventory_alert_bucket_filter";
+const SELLER_INVENTORY_ALERT_STATUS_FILTER_KEY = "seller_inventory_alert_status_filter";
+const SELLER_INVENTORY_ALERT_RECENCY_FILTER_KEY = "seller_inventory_alert_recency_filter";
+const SELLER_INVENTORY_ALERT_ACTIVITY_KEY = "seller_inventory_alert_activity";
+const SELLER_INVENTORY_ALERT_ACTIVITY_FILTER_KEY = "seller_inventory_alert_activity_filter";
+const SELLER_INVENTORY_ALERT_ACTIVITY_COLLAPSED_KEY =
+  "seller_inventory_alert_activity_collapsed";
+const SELLER_DELIVERY_ALERT_FILTER_KEY = "seller_delivery_alert_filter";
 
 function isExpiredAuthError(error: unknown) {
   if (error instanceof ApiError) {
@@ -311,6 +388,53 @@ function getPremiumStorefrontRecommendations(listing: Listing) {
   }
 
   return recommendations.slice(0, 3);
+}
+
+function getListingInventoryBadge(listing: Listing) {
+  const inventoryCount = listing.inventory_count;
+  const tracksInventory = inventoryCount != null && listing.type !== "service";
+  if (!tracksInventory) {
+    return listing.type === "service"
+      ? null
+      : {
+          label: "Inventory untracked",
+          className: "border-border bg-background/60 text-foreground/62",
+        };
+  }
+
+  if (inventoryCount <= 0) {
+    return {
+      label: "Sold out",
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+    };
+  }
+
+  if (inventoryCount <= 3) {
+    return {
+      label: `Low stock · ${inventoryCount} left`,
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+    };
+  }
+
+  return {
+    label: `Stock · ${inventoryCount}`,
+    className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  };
+}
+
+function getWatchlistActivityDayLabel(value: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return "Earlier";
+  }
+
+  const now = new Date();
+  const sameDay =
+    timestamp.getFullYear() === now.getFullYear() &&
+    timestamp.getMonth() === now.getMonth() &&
+    timestamp.getDate() === now.getDate();
+
+  return sameDay ? "Today" : "Earlier";
 }
 
 function titleCaseWorkspaceLabel(value: string) {
@@ -909,6 +1033,19 @@ export function SellerWorkspace() {
   );
   const [listingAiState, setListingAiState] = useState<Record<string, ListingAiState>>({});
   const [listingCreateAiState, setListingCreateAiState] = useState<ListingAiState | null>(null);
+  const [reviewResponseAiState, setReviewResponseAiState] = useState<
+    Record<string, ReviewResponseAiState>
+  >({});
+  const [transactionResponseAiState, setTransactionResponseAiState] = useState<
+    Record<
+      string,
+      {
+        loading: boolean;
+        error: string | null;
+        suggestion: { suggested_note: string; summary: string } | null;
+      }
+    >
+  >({});
   const [listingPriceInsights, setListingPriceInsights] = useState<
     Record<string, ListingPriceInsightState>
   >({});
@@ -999,8 +1136,12 @@ export function SellerWorkspace() {
     () => (searchParams.get("activityRecovery") as "all" | "easing") ?? "all",
   );
   type DeliveryStatusFilter = "all" | "queued" | "sent" | "failed";
+  type DeliveryAlertFilter = "all" | "inventory" | "trust" | "booking" | "other";
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<DeliveryStatusFilter>(
     () => (searchParams.get("deliveryStatus") as DeliveryStatusFilter) ?? "all",
+  );
+  const [deliveryAlertFilter, setDeliveryAlertFilter] = useState<DeliveryAlertFilter>(
+    () => (searchParams.get("deliveryAlert") as DeliveryAlertFilter) ?? "all",
   );
   type DeliveryRecencyFilter = "today" | "7d" | "all";
   const [deliveryRecencyFilter, setDeliveryRecencyFilter] = useState<DeliveryRecencyFilter>(
@@ -1024,6 +1165,49 @@ export function SellerWorkspace() {
         searchParams.get("preset") as WorkspacePreset
       ) ?? "default",
   );
+  const [listingWatchlistFilter, setListingWatchlistFilter] = useState<ListingWatchlistFilter>(
+    () =>
+      (
+        searchParams.get("listingWatch") as ListingWatchlistFilter
+      ) ?? "all",
+  );
+  const [watchlistActivityFilter, setWatchlistActivityFilter] =
+    useState<SellerWatchlistActivityFilter>("all");
+  const [collapsedWatchlistActivityGroups, setCollapsedWatchlistActivityGroups] = useState<{
+    Today: boolean;
+    Earlier: boolean;
+  }>({
+    Today: false,
+    Earlier: false,
+  });
+  const [inventoryAlertBucketFilter, setInventoryAlertBucketFilter] =
+    useState<InventoryAlertBucketFilter>(
+      () =>
+        (searchParams.get("inventoryAlertBucket") as InventoryAlertBucketFilter) ?? "all",
+    );
+  const [inventoryAlertStatusFilter, setInventoryAlertStatusFilter] =
+    useState<InventoryAlertStatusFilter>(
+      () =>
+        (searchParams.get("inventoryAlertStatus") as InventoryAlertStatusFilter) ?? "all",
+    );
+  const [inventoryAlertRecencyFilter, setInventoryAlertRecencyFilter] =
+    useState<InventoryAlertRecencyFilter>(
+      () =>
+        (searchParams.get("inventoryAlertWindow") as InventoryAlertRecencyFilter) ?? "all",
+    );
+  const [inventoryAlertActivity, setInventoryAlertActivity] = useState<
+    SellerInventoryAlertActivityEntry[]
+  >([]);
+  const [inventoryAlertActivityFilter, setInventoryAlertActivityFilter] =
+    useState<InventoryAlertActivityFilter>(
+      () =>
+        (searchParams.get("inventoryAlertActivity") as InventoryAlertActivityFilter) ?? "all",
+    );
+  const [collapsedInventoryAlertActivityGroups, setCollapsedInventoryAlertActivityGroups] =
+    useState<Record<InventoryAlertActivityGroup, boolean>>({
+      Recent: false,
+    });
+  const [watchlistActivity, setWatchlistActivity] = useState<SellerWatchlistActivityEntry[]>([]);
 
   type ListingAdjustmentFilter =
     | "all"
@@ -1128,6 +1312,10 @@ export function SellerWorkspace() {
           | "no-signal"
       ) ?? "all",
   );
+  const [pendingListingControlFocus, setPendingListingControlFocus] = useState<{
+    listingId: string;
+    target: ListingControlTarget;
+  } | null>(null);
   const [highlightedListingControlKey, setHighlightedListingControlKey] = useState<string | null>(null);
   const [highlightedFocusedPanelKey, setHighlightedFocusedPanelKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1149,6 +1337,7 @@ export function SellerWorkspace() {
   const [listingType, setListingType] = useState<ListingType>(
     "product",
   );
+  const [createAutoAcceptBookings, setCreateAutoAcceptBookings] = useState(false);
   const [listingCategoryId, setListingCategoryId] = useState("");
   const [price, setPrice] = useState("2400");
 
@@ -1169,6 +1358,7 @@ export function SellerWorkspace() {
     setCreateError(null);
     setCreateMessage(null);
     setListingPriceInsights({});
+    setCreateAutoAcceptBookings(false);
   }, []);
 
   const loadWorkspace = useCallback(async (accessToken: string) => {
@@ -1195,7 +1385,9 @@ export function SellerWorkspace() {
         {
           category_id: listing.category_id ?? "",
           price_cents: listing.price_cents?.toString() ?? "",
+          inventory_count: listing.inventory_count?.toString() ?? "",
           requires_booking: listing.requires_booking ?? false,
+          auto_accept_bookings: listing.auto_accept_bookings ?? false,
           duration_minutes: listing.duration_minutes?.toString() ?? "",
           lead_time_hours: listing.lead_time_hours?.toString() ?? "",
           is_local_only: listing.is_local_only ?? true,
@@ -1390,6 +1582,320 @@ export function SellerWorkspace() {
   }, [searchParams]);
 
   useEffect(() => {
+    const storedBucketFilter = searchParams.get("inventoryAlertBucket");
+    if (
+      storedBucketFilter === "all" ||
+      storedBucketFilter === "low_stock" ||
+      storedBucketFilter === "out_of_stock"
+    ) {
+      setInventoryAlertBucketFilter(storedBucketFilter);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const storedStatusFilter = searchParams.get("inventoryAlertStatus");
+    if (
+      storedStatusFilter === "all" ||
+      storedStatusFilter === "queued" ||
+      storedStatusFilter === "sent" ||
+      storedStatusFilter === "failed"
+    ) {
+      setInventoryAlertStatusFilter(storedStatusFilter);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const storedRecencyFilter = searchParams.get("inventoryAlertWindow");
+    if (
+      storedRecencyFilter === "today" ||
+      storedRecencyFilter === "7d" ||
+      storedRecencyFilter === "all"
+    ) {
+      setInventoryAlertRecencyFilter(storedRecencyFilter);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(SELLER_INVENTORY_ALERT_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as SellerInventoryAlertActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setInventoryAlertActivity(parsed.slice(0, 6));
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_INVENTORY_ALERT_ACTIVITY_KEY);
+    }
+
+    const storedActivityFilter = window.sessionStorage.getItem(
+      SELLER_INVENTORY_ALERT_ACTIVITY_FILTER_KEY,
+    );
+    if (storedActivityFilter === "all" || storedActivityFilter === "low_stock" || storedActivityFilter === "out_of_stock") {
+      setInventoryAlertActivityFilter(storedActivityFilter);
+    }
+
+    try {
+      const storedCollapsed = window.sessionStorage.getItem(
+        SELLER_INVENTORY_ALERT_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedCollapsed) {
+        const parsed = JSON.parse(storedCollapsed) as { Recent?: boolean };
+        setCollapsedInventoryAlertActivityGroups({
+          Recent: Boolean(parsed.Recent),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_INVENTORY_ALERT_ACTIVITY_COLLAPSED_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(SELLER_WATCHLIST_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as SellerWatchlistActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setWatchlistActivity(parsed.slice(0, 6));
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_WATCHLIST_ACTIVITY_KEY);
+    }
+
+    const storedFilter = window.sessionStorage.getItem(SELLER_WATCHLIST_ACTIVITY_FILTER_KEY);
+    if (storedFilter === "inventory" || storedFilter === "availability") {
+      setWatchlistActivityFilter(storedFilter);
+    }
+
+    try {
+      const storedCollapsed = window.sessionStorage.getItem(
+        SELLER_WATCHLIST_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedCollapsed) {
+        const parsed = JSON.parse(storedCollapsed) as { Today?: boolean; Earlier?: boolean };
+        setCollapsedWatchlistActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_WATCHLIST_ACTIVITY_COLLAPSED_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const hasInventoryBucketParam = searchParams.has("inventoryAlertBucket");
+    const hasInventoryStatusParam = searchParams.has("inventoryAlertStatus");
+    const hasInventoryRecencyParam = searchParams.has("inventoryAlertWindow");
+
+    if (!hasInventoryBucketParam) {
+      const storedBucketFilter = window.sessionStorage.getItem(
+        SELLER_INVENTORY_ALERT_BUCKET_FILTER_KEY,
+      );
+      if (
+        storedBucketFilter === "all" ||
+        storedBucketFilter === "low_stock" ||
+        storedBucketFilter === "out_of_stock"
+      ) {
+        setInventoryAlertBucketFilter(storedBucketFilter);
+      }
+    }
+
+    if (!hasInventoryStatusParam) {
+      const storedStatusFilter = window.sessionStorage.getItem(
+        SELLER_INVENTORY_ALERT_STATUS_FILTER_KEY,
+      );
+      if (
+        storedStatusFilter === "all" ||
+        storedStatusFilter === "queued" ||
+        storedStatusFilter === "sent" ||
+        storedStatusFilter === "failed"
+      ) {
+        setInventoryAlertStatusFilter(storedStatusFilter);
+      }
+    }
+
+    if (!hasInventoryRecencyParam) {
+      const storedRecencyFilter = window.sessionStorage.getItem(
+        SELLER_INVENTORY_ALERT_RECENCY_FILTER_KEY,
+      );
+      if (
+        storedRecencyFilter === "today" ||
+        storedRecencyFilter === "7d" ||
+        storedRecencyFilter === "all"
+      ) {
+        setInventoryAlertRecencyFilter(storedRecencyFilter);
+      }
+    }
+
+    const storedActivityFilter = searchParams.get("inventoryAlertActivity");
+    if (
+      storedActivityFilter === "all" ||
+      storedActivityFilter === "low_stock" ||
+      storedActivityFilter === "out_of_stock"
+    ) {
+      setInventoryAlertActivityFilter(storedActivityFilter);
+    } else {
+      const fallbackActivityFilter = window.sessionStorage.getItem(
+        SELLER_INVENTORY_ALERT_ACTIVITY_FILTER_KEY,
+      );
+      if (
+        fallbackActivityFilter === "all" ||
+        fallbackActivityFilter === "low_stock" ||
+        fallbackActivityFilter === "out_of_stock"
+      ) {
+        setInventoryAlertActivityFilter(fallbackActivityFilter);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const storedDeliveryAlertFilter = searchParams.get("deliveryAlert");
+    if (
+      storedDeliveryAlertFilter === "all" ||
+      storedDeliveryAlertFilter === "inventory" ||
+      storedDeliveryAlertFilter === "trust" ||
+      storedDeliveryAlertFilter === "other"
+    ) {
+      setDeliveryAlertFilter(storedDeliveryAlertFilter);
+    } else if (typeof window !== "undefined") {
+      const storedFilter = window.sessionStorage.getItem(SELLER_DELIVERY_ALERT_FILTER_KEY);
+      if (
+        storedFilter === "all" ||
+        storedFilter === "inventory" ||
+        storedFilter === "trust" ||
+        storedFilter === "other"
+      ) {
+        setDeliveryAlertFilter(storedFilter);
+      }
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(SELLER_DELIVERY_ALERT_FILTER_KEY, deliveryAlertFilter);
+  }, [deliveryAlertFilter]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_WATCHLIST_ACTIVITY_KEY,
+      JSON.stringify(watchlistActivity.slice(0, 6)),
+    );
+  }, [watchlistActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_WATCHLIST_ACTIVITY_FILTER_KEY,
+      watchlistActivityFilter,
+    );
+  }, [watchlistActivityFilter]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_WATCHLIST_ACTIVITY_COLLAPSED_KEY,
+      JSON.stringify(collapsedWatchlistActivityGroups),
+    );
+  }, [collapsedWatchlistActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_INVENTORY_ALERT_BUCKET_FILTER_KEY,
+      inventoryAlertBucketFilter,
+    );
+  }, [inventoryAlertBucketFilter]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_INVENTORY_ALERT_STATUS_FILTER_KEY,
+      inventoryAlertStatusFilter,
+    );
+  }, [inventoryAlertStatusFilter]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_INVENTORY_ALERT_RECENCY_FILTER_KEY,
+      inventoryAlertRecencyFilter,
+    );
+  }, [inventoryAlertRecencyFilter]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_INVENTORY_ALERT_ACTIVITY_KEY,
+      JSON.stringify(inventoryAlertActivity.slice(0, 6)),
+    );
+  }, [inventoryAlertActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_INVENTORY_ALERT_ACTIVITY_FILTER_KEY,
+      inventoryAlertActivityFilter,
+    );
+  }, [inventoryAlertActivityFilter]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SELLER_INVENTORY_ALERT_ACTIVITY_COLLAPSED_KEY,
+      JSON.stringify(collapsedInventoryAlertActivityGroups),
+    );
+  }, [collapsedInventoryAlertActivityGroups]);
+
+  useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
 
     if (activityTypeFilter === "all") {
@@ -1458,10 +1964,22 @@ export function SellerWorkspace() {
       params.set("deliveryStatus", deliveryStatusFilter);
     }
 
+    if (deliveryAlertFilter === "all") {
+      params.delete("deliveryAlert");
+    } else {
+      params.set("deliveryAlert", deliveryAlertFilter);
+    }
+
     if (workspacePreset === "default") {
       params.delete("preset");
     } else {
       params.set("preset", workspacePreset);
+    }
+
+    if (listingWatchlistFilter === "all") {
+      params.delete("listingWatch");
+    } else {
+      params.set("listingWatch", listingWatchlistFilter);
     }
 
     if (listingAdjustmentFilter === "all") {
@@ -1474,6 +1992,30 @@ export function SellerWorkspace() {
       params.delete("listingTrend");
     } else {
       params.set("listingTrend", listingTrendFilter);
+    }
+
+    if (inventoryAlertBucketFilter === "all") {
+      params.delete("inventoryAlertBucket");
+    } else {
+      params.set("inventoryAlertBucket", inventoryAlertBucketFilter);
+    }
+
+    if (inventoryAlertStatusFilter === "all") {
+      params.delete("inventoryAlertStatus");
+    } else {
+      params.set("inventoryAlertStatus", inventoryAlertStatusFilter);
+    }
+
+    if (inventoryAlertRecencyFilter === "all") {
+      params.delete("inventoryAlertWindow");
+    } else {
+      params.set("inventoryAlertWindow", inventoryAlertRecencyFilter);
+    }
+
+    if (inventoryAlertActivityFilter === "all") {
+      params.delete("inventoryAlertActivity");
+    } else {
+      params.set("inventoryAlertActivity", inventoryAlertActivityFilter);
     }
 
     if (bulkExecutionMode === "best_effort") {
@@ -1500,7 +2042,13 @@ export function SellerWorkspace() {
     bulkExecutionMode,
     deliveryStatusFilter,
     deliveryRecencyFilter,
+    deliveryAlertFilter,
+    inventoryAlertBucketFilter,
+    inventoryAlertActivityFilter,
+    inventoryAlertRecencyFilter,
+    inventoryAlertStatusFilter,
     listingAdjustmentFilter,
+    listingWatchlistFilter,
     listingTrendFilter,
     pathname,
     router,
@@ -1539,12 +2087,14 @@ export function SellerWorkspace() {
               full_name: fullName || null,
               username: username || null,
               city,
-              state: stateRegion,
-              country,
-            };
+          state: stateRegion,
+          country,
+        };
             await api.createProfile(profilePayload, {
               accessToken: session.access_token,
             });
+            await invalidateMarketplaceCaches();
+            router.refresh();
           } else {
             throw err;
           }
@@ -1606,17 +2156,18 @@ export function SellerWorkspace() {
       title,
       description,
       type: listingType,
-      price_cents: Number(price),
-      currency: "USD",
-      city: workspace.seller.city,
-      state: workspace.seller.state,
-      country: workspace.seller.country,
+          price_cents: Number(price),
+          currency: "USD",
+          city: workspace.seller.city,
+          state: workspace.seller.state,
+          country: workspace.seller.country,
       pickup_enabled: listingType !== "service",
       meetup_enabled: true,
       delivery_enabled: listingType === "hybrid",
-      shipping_enabled: false,
-      requires_booking: listingType !== "product",
-    };
+          shipping_enabled: false,
+          requires_booking: listingType !== "product",
+          auto_accept_bookings: createAutoAcceptBookings,
+        };
 
     executeSellerApiAction({
       missingAccessTokenMessage: "Sign in again before creating a listing.",
@@ -1658,6 +2209,7 @@ export function SellerWorkspace() {
       try {
         await args.execute(accessToken);
         await loadWorkspace(accessToken);
+        router.refresh();
         setActionFeedback({
           tone: "success",
           message: `${args.kind === "order" ? "Order" : "Booking"} moved to ${args.status.replaceAll("_", " ")}.`,
@@ -1698,6 +2250,8 @@ export function SellerWorkspace() {
         if (args.reloadWorkspace ?? true) {
           await loadWorkspace(accessToken);
         }
+        await invalidateMarketplaceCaches();
+        router.refresh();
         const feedback = args.onSuccess?.(result) ?? args.successFeedback;
         if (feedback) {
           setActionFeedback(feedback);
@@ -1815,7 +2369,9 @@ export function SellerWorkspace() {
         api.updateListing(listing.id, {
           category_id: draft.category_id || null,
           price_cents: draft.price_cents === "" ? null : Number(draft.price_cents),
+          inventory_count: draft.inventory_count === "" ? null : Number(draft.inventory_count),
           requires_booking: draft.requires_booking,
+          auto_accept_bookings: draft.auto_accept_bookings,
           duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
           lead_time_hours: draft.lead_time_hours === "" ? null : Number(draft.lead_time_hours),
           is_local_only: draft.is_local_only,
@@ -2105,6 +2661,153 @@ export function SellerWorkspace() {
           },
           { accessToken },
         ),
+    });
+  }
+
+  function requestReviewResponseAiAssist(review: ReviewRead) {
+    executeSellerApiAction<ReviewResponseAiAssistResponse>({
+      missingAccessTokenMessage: "Sign in again before generating a review reply.",
+      errorMessage: "Unable to generate response suggestion",
+      onStart: () =>
+        setReviewResponseAiState((current) => ({
+          ...current,
+          [review.id]: {
+            loading: true,
+            error: null,
+            suggestion: current[review.id]?.suggestion ?? null,
+          },
+        })),
+      onFinally: () =>
+        setReviewResponseAiState((current) => ({
+          ...current,
+          [review.id]: {
+            loading: false,
+            error: current[review.id]?.error ?? null,
+            suggestion: current[review.id]?.suggestion ?? null,
+          },
+        })),
+      onSuccess: (result) => {
+        setReviewResponseDrafts((current) => ({
+          ...current,
+          [review.id]: result.suggestion.suggested_response,
+        }));
+        setReviewResponseAiState((current) => ({
+          ...current,
+          [review.id]: {
+            loading: false,
+            error: null,
+            suggestion: result.suggestion,
+          },
+        }));
+      },
+      onError: (message) =>
+        setReviewResponseAiState((current) => ({
+          ...current,
+          [review.id]: {
+            loading: false,
+            error: message,
+            suggestion: current[review.id]?.suggestion ?? null,
+          },
+        })),
+      execute: (accessToken) => api.requestReviewResponseAiAssist(review.id, { accessToken }),
+    });
+  }
+
+  function requestOrderResponseAiAssist(order: Order) {
+    executeSellerApiAction<OrderResponseAiAssistResponse>({
+      missingAccessTokenMessage: "Sign in again before generating an order reply.",
+      errorMessage: "Unable to generate order response suggestion",
+      onStart: () =>
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [order.id]: {
+            loading: true,
+            error: null,
+            suggestion: current[order.id]?.suggestion ?? null,
+          },
+        })),
+      onFinally: () =>
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [order.id]: {
+            loading: false,
+            error: current[order.id]?.error ?? null,
+            suggestion: current[order.id]?.suggestion ?? null,
+          },
+        })),
+      onSuccess: (result) => {
+        setResponseNotes((current) => ({
+          ...current,
+          [order.id]: result.suggestion.suggested_note,
+        }));
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [order.id]: {
+            loading: false,
+            error: null,
+            suggestion: result.suggestion,
+          },
+        }));
+      },
+      onError: (message) =>
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [order.id]: {
+            loading: false,
+            error: message,
+            suggestion: current[order.id]?.suggestion ?? null,
+          },
+        })),
+      execute: (accessToken) => api.requestOrderResponseAiAssist(order.id, { accessToken }),
+    });
+  }
+
+  function requestBookingResponseAiAssist(booking: Booking) {
+    executeSellerApiAction<BookingResponseAiAssistResponse>({
+      missingAccessTokenMessage: "Sign in again before generating a booking reply.",
+      errorMessage: "Unable to generate booking response suggestion",
+      onStart: () =>
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [booking.id]: {
+            loading: true,
+            error: null,
+            suggestion: current[booking.id]?.suggestion ?? null,
+          },
+        })),
+      onFinally: () =>
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [booking.id]: {
+            loading: false,
+            error: current[booking.id]?.error ?? null,
+            suggestion: current[booking.id]?.suggestion ?? null,
+          },
+        })),
+      onSuccess: (result) => {
+        setResponseNotes((current) => ({
+          ...current,
+          [booking.id]: result.suggestion.suggested_note,
+        }));
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [booking.id]: {
+            loading: false,
+            error: null,
+            suggestion: result.suggestion,
+          },
+        }));
+      },
+      onError: (message) =>
+        setTransactionResponseAiState((current) => ({
+          ...current,
+          [booking.id]: {
+            loading: false,
+            error: message,
+            suggestion: current[booking.id]?.suggestion ?? null,
+          },
+        })),
+      execute: (accessToken) => api.requestBookingResponseAiAssist(booking.id, { accessToken }),
     });
   }
 
@@ -2873,21 +3576,221 @@ export function SellerWorkspace() {
           return false;
         }
 
+        if (deliveryAlertFilter !== "all") {
+          const deliveryAlertType = delivery.payload?.alert_type;
+          if (deliveryAlertFilter === "inventory" && deliveryAlertType !== "inventory_alert") {
+            return false;
+          }
+          if (deliveryAlertFilter === "trust" && deliveryAlertType !== "seller_trust_intervention") {
+            return false;
+          }
+          if (deliveryAlertFilter === "booking" && deliveryAlertType !== "booking_conflict") {
+            return false;
+          }
+          if (
+            deliveryAlertFilter === "other" &&
+            (deliveryAlertType === "inventory_alert" ||
+              deliveryAlertType === "seller_trust_intervention" ||
+              deliveryAlertType === "booking_conflict")
+          ) {
+            return false;
+          }
+        }
+
         if (deliveryStatusFilter === "all") {
           return true;
         }
 
         return delivery.delivery_status === deliveryStatusFilter;
       }),
-    [deliveryRecencyFilter, deliveryStatusFilter, notificationDeliveries],
+    [deliveryAlertFilter, deliveryRecencyFilter, deliveryStatusFilter, notificationDeliveries],
   );
   const queuedDeliveryCount = useMemo(
     () => notificationDeliveries.filter((delivery) => delivery.delivery_status === "queued").length,
     [notificationDeliveries],
   );
+  const inventoryAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "inventory_alert",
+      ).length,
+    [notificationDeliveries],
+  );
+  const trustAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "seller_trust_intervention",
+      ).length,
+    [notificationDeliveries],
+  );
+  const bookingConflictAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "booking_conflict",
+      ).length,
+    [notificationDeliveries],
+  );
+  const otherAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter((delivery) => {
+        const alertType = delivery.payload?.alert_type;
+        return (
+          Boolean(alertType) &&
+          alertType !== "inventory_alert" &&
+          alertType !== "seller_trust_intervention" &&
+          alertType !== "booking_conflict"
+        );
+      }).length,
+    [notificationDeliveries],
+  );
   const failedDeliveryCount = useMemo(
     () => notificationDeliveries.filter((delivery) => delivery.delivery_status === "failed").length,
     [notificationDeliveries],
+  );
+  const inventoryAlertGroups = useMemo(() => {
+    const groupedDeliveries = new Map<string, InventoryAlertGroup>();
+
+    notificationDeliveries
+      .filter((delivery) => delivery.payload?.alert_type === "inventory_alert")
+      .forEach((delivery) => {
+        const payload = delivery.payload ?? {};
+        const signature = String(
+          payload.alert_signature ??
+            `${payload.listing_id ?? delivery.transaction_id}:${payload.inventory_bucket ?? "low_stock"}`,
+        );
+        const listingId = String(payload.listing_id ?? delivery.transaction_id ?? "").trim();
+        const listingTitle = String(payload.listing_title ?? "Inventory alert").trim();
+        const listingSlug = String(payload.listing_slug ?? "").trim();
+        const inventoryBucket =
+          payload.inventory_bucket === "out_of_stock" ? "out_of_stock" : "low_stock";
+        const inventoryCount =
+          payload.inventory_count === null || payload.inventory_count === undefined
+            ? null
+            : Number(payload.inventory_count);
+        const existing = groupedDeliveries.get(signature);
+        if (existing) {
+          existing.deliveries.push(delivery);
+          if (new Date(delivery.created_at).getTime() > new Date(existing.latestCreatedAt).getTime()) {
+            existing.latestCreatedAt = delivery.created_at;
+          }
+          return;
+        }
+
+        groupedDeliveries.set(signature, {
+          signature,
+          listingId,
+          listingTitle,
+          listingSlug,
+          inventoryBucket,
+          inventoryCount: Number.isNaN(inventoryCount) ? null : inventoryCount,
+          latestCreatedAt: delivery.created_at,
+          deliveries: [delivery],
+        });
+      });
+
+    return Array.from(groupedDeliveries.values()).sort(
+      (left, right) =>
+        new Date(right.latestCreatedAt).getTime() - new Date(left.latestCreatedAt).getTime(),
+    );
+  }, [notificationDeliveries]);
+  const inventoryAlertQueuedCount = useMemo(
+    () =>
+      inventoryAlertGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "queued").length,
+        0,
+      ),
+    [inventoryAlertGroups],
+  );
+  const inventoryAlertFailedCount = useMemo(
+    () =>
+      inventoryAlertGroups.reduce(
+        (count, group) =>
+          count + group.deliveries.filter((delivery) => delivery.delivery_status === "failed").length,
+        0,
+      ),
+    [inventoryAlertGroups],
+  );
+  const inventoryAlertLowStockCount = useMemo(
+    () => inventoryAlertGroups.filter((group) => group.inventoryBucket === "low_stock").length,
+    [inventoryAlertGroups],
+  );
+  const inventoryAlertOutOfStockCount = useMemo(
+    () => inventoryAlertGroups.filter((group) => group.inventoryBucket === "out_of_stock").length,
+    [inventoryAlertGroups],
+  );
+  const inventoryAlertSentCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) =>
+          delivery.payload?.alert_type === "inventory_alert" && delivery.delivery_status === "sent",
+      ).length,
+    [notificationDeliveries],
+  );
+  const filteredInventoryAlertGroups = useMemo(
+    () =>
+      inventoryAlertGroups.filter((group) => {
+        if (!matchesDeliveryRecency(group.latestCreatedAt, inventoryAlertRecencyFilter)) {
+          return false;
+        }
+
+        if (inventoryAlertBucketFilter !== "all" && group.inventoryBucket !== inventoryAlertBucketFilter) {
+          return false;
+        }
+
+        if (inventoryAlertStatusFilter === "all") {
+          return true;
+        }
+
+        return group.deliveries.some((delivery) => delivery.delivery_status === inventoryAlertStatusFilter);
+      }),
+    [
+      inventoryAlertBucketFilter,
+      inventoryAlertGroups,
+      inventoryAlertRecencyFilter,
+      inventoryAlertStatusFilter,
+    ],
+  );
+  const latestInventoryAlertGroup = filteredInventoryAlertGroups[0] ?? null;
+  const inventoryAlertSummaryByListingId = useMemo(() => {
+    return inventoryAlertGroups.reduce<Record<string, {
+      count: number;
+      latestBucket: "low_stock" | "out_of_stock";
+      latestCreatedAt: string;
+    }>>((acc, group) => {
+      const current = acc[group.listingId];
+      const count = group.deliveries.length + (current?.count ?? 0);
+      if (!current || new Date(group.latestCreatedAt).getTime() >= new Date(current.latestCreatedAt).getTime()) {
+        acc[group.listingId] = {
+          count,
+          latestBucket: group.inventoryBucket,
+          latestCreatedAt: group.latestCreatedAt,
+        };
+        return acc;
+      }
+
+      acc[group.listingId] = {
+        ...current,
+        count,
+      };
+      return acc;
+    }, {});
+  }, [inventoryAlertGroups]);
+  const filteredInventoryAlertActivity = useMemo(
+    () =>
+      inventoryAlertActivity.filter(
+        (entry) =>
+          inventoryAlertActivityFilter === "all" || entry.inventoryBucket === inventoryAlertActivityFilter,
+      ),
+    [inventoryAlertActivity, inventoryAlertActivityFilter],
+  );
+  const inventoryAlertActivityCounts = useMemo(
+    () => ({
+      all: inventoryAlertActivity.length,
+      low_stock: inventoryAlertActivity.filter((entry) => entry.inventoryBucket === "low_stock").length,
+      out_of_stock: inventoryAlertActivity.filter((entry) => entry.inventoryBucket === "out_of_stock").length,
+    }),
+    [inventoryAlertActivity],
   );
   const failedDeliveryRecentCount = useMemo(
     () =>
@@ -3624,38 +4527,254 @@ export function SellerWorkspace() {
   );
   const filteredWorkspaceListings = useMemo(
     () =>
-      (workspace?.listings ?? []).filter((listing) => {
-        if (listingAdjustmentFilter === "all") {
+      [...(workspace?.listings ?? [])]
+        .filter((listing) => {
+          if (listingAdjustmentFilter === "all") {
+            if (listingTrendFilter === "all") {
+              return true;
+            }
+          } else if (
+            getListingAdjustmentType(listing.last_operating_adjustment_summary) !==
+            listingAdjustmentFilter
+          ) {
+            return false;
+          }
+
           if (listingTrendFilter === "all") {
             return true;
           }
-        } else if (
-          getListingAdjustmentType(listing.last_operating_adjustment_summary) !==
-          listingAdjustmentFilter
-        ) {
-          return false;
-        }
 
-        if (listingTrendFilter === "all") {
-          return true;
-        }
+          const listingRetention = listingFollowOnBreakdownById[listing.id];
+          const trendKey = listingRetention
+            ? getListingRetentionTrendKey({
+                sameSellerCount: listingRetention.sameSellerCount,
+                crossSellerCount: listingRetention.crossSellerCount,
+                sameSellerRecentCount: listingRetention.sameSellerRecentCount,
+                crossSellerRecentCount: listingRetention.crossSellerRecentCount,
+                sameSellerPostAdjustmentCount: listingRetention.sameSellerPostAdjustmentCount,
+                crossSellerPostAdjustmentCount: listingRetention.crossSellerPostAdjustmentCount,
+              })
+            : "no-signal";
 
-        const listingRetention = listingFollowOnBreakdownById[listing.id];
-        const trendKey = listingRetention
-          ? getListingRetentionTrendKey({
-              sameSellerCount: listingRetention.sameSellerCount,
-              crossSellerCount: listingRetention.crossSellerCount,
-              sameSellerRecentCount: listingRetention.sameSellerRecentCount,
-              crossSellerRecentCount: listingRetention.crossSellerRecentCount,
-              sameSellerPostAdjustmentCount: listingRetention.sameSellerPostAdjustmentCount,
-              crossSellerPostAdjustmentCount: listingRetention.crossSellerPostAdjustmentCount,
-            })
-          : "no-signal";
+          return trendKey === listingTrendFilter;
+        })
+        .sort((left, right) => {
+          const leftAlert = inventoryAlertSummaryByListingId[left.id];
+          const rightAlert = inventoryAlertSummaryByListingId[right.id];
+          const leftPriority = leftAlert
+            ? leftAlert.count * 10 + (leftAlert.latestBucket === "out_of_stock" ? 5 : 1)
+            : 0;
+          const rightPriority = rightAlert
+            ? rightAlert.count * 10 + (rightAlert.latestBucket === "out_of_stock" ? 5 : 1)
+            : 0;
 
-        return trendKey === listingTrendFilter;
-      }),
-    [listingAdjustmentFilter, listingFollowOnBreakdownById, listingTrendFilter, workspace?.listings],
+          if (rightPriority !== leftPriority) {
+            return rightPriority - leftPriority;
+          }
+
+          if (right.available_today !== left.available_today) {
+            return Number(right.available_today) - Number(left.available_today);
+          }
+
+          const titleOrder = left.title.localeCompare(right.title);
+          if (titleOrder !== 0) {
+            return titleOrder;
+          }
+
+          return left.id.localeCompare(right.id);
+        }),
+    [inventoryAlertSummaryByListingId, listingAdjustmentFilter, listingFollowOnBreakdownById, listingTrendFilter, workspace?.listings],
   );
+  const listingInventoryAvailabilityWatchItems = useMemo<ListingWorkspaceWatchItem[]>(() => {
+    if (!workspace) {
+      return [];
+    }
+
+    const activeListings = workspace.listings.filter((listing) => listing.status === "active");
+    const soldOutListings = activeListings.filter(
+      (listing) =>
+        listing.type !== "service" &&
+        listing.inventory_count != null &&
+        listing.inventory_count <= 0,
+    );
+    const lowStockListings = activeListings.filter(
+      (listing) =>
+        listing.type !== "service" &&
+        listing.inventory_count != null &&
+        listing.inventory_count > 0 &&
+        listing.inventory_count <= 3 &&
+        (listing.recent_transaction_count ?? 0) >= 2,
+    );
+    const untrackedInventoryListings = activeListings.filter(
+      (listing) =>
+        listing.type !== "service" &&
+        listing.inventory_count == null &&
+        (listing.recent_transaction_count ?? 0) >= 1,
+    );
+    const availabilityGapListings = activeListings.filter(
+      (listing) =>
+        getListingOperatingRole(listing) !== "order-led" &&
+        !listing.available_today &&
+        (listing.recent_transaction_count ?? 0) >= 2,
+    );
+
+    const watchItems: ListingWorkspaceWatchItem[] = [];
+
+    if (soldOutListings.length > 0) {
+      watchItems.push({
+        id: "sold-out",
+        title: "Sold out listings",
+        description: `${soldOutListings.length} active listing${
+          soldOutListings.length === 1 ? "" : "s"
+        } hit zero tracked inventory.`,
+        count: soldOutListings.length,
+        listingIds: soldOutListings.map((listing) => listing.id),
+        topListing: soldOutListings.sort(
+          (left, right) =>
+            (right.recent_transaction_count ?? 0) - (left.recent_transaction_count ?? 0),
+        )[0],
+        target: "pricing",
+        actionLabel: "Review stock",
+        toneClass: "border-rose-200 bg-rose-50 text-rose-700",
+      });
+    }
+
+    if (lowStockListings.length > 0) {
+      watchItems.push({
+        id: "low-stock",
+        title: "Low stock under demand",
+        description: `${lowStockListings.length} listing${
+          lowStockListings.length === 1 ? "" : "s"
+        } have 3 or fewer units left while traffic is active.`,
+        count: lowStockListings.length,
+        listingIds: lowStockListings.map((listing) => listing.id),
+        topListing: lowStockListings.sort(
+          (left, right) =>
+            (right.recent_transaction_count ?? 0) - (left.recent_transaction_count ?? 0),
+        )[0],
+        target: "pricing",
+        actionLabel: "Top up stock",
+        toneClass: "border-amber-200 bg-amber-50 text-amber-700",
+      });
+    }
+
+    if (untrackedInventoryListings.length > 0) {
+      watchItems.push({
+        id: "inventory-untracked",
+        title: "Inventory not tracked",
+        description: `${untrackedInventoryListings.length} active listing${
+          untrackedInventoryListings.length === 1 ? "" : "s"
+        } are selling without a tracked inventory count.`,
+        count: untrackedInventoryListings.length,
+        listingIds: untrackedInventoryListings.map((listing) => listing.id),
+        topListing: untrackedInventoryListings.sort(
+          (left, right) =>
+            (right.recent_transaction_count ?? 0) - (left.recent_transaction_count ?? 0),
+        )[0],
+        target: "pricing",
+        actionLabel: "Track inventory",
+        toneClass: "border-sky-200 bg-sky-50 text-sky-700",
+      });
+    }
+
+    if (availabilityGapListings.length > 0) {
+      watchItems.push({
+        id: "availability-gap",
+        title: "Booking availability gap",
+        description: `${availabilityGapListings.length} booking-led listing${
+          availabilityGapListings.length === 1 ? "" : "s"
+        } have recent demand but are not marked available today.`,
+        count: availabilityGapListings.length,
+        listingIds: availabilityGapListings.map((listing) => listing.id),
+        topListing: availabilityGapListings.sort(
+          (left, right) =>
+            (right.recent_transaction_count ?? 0) - (left.recent_transaction_count ?? 0),
+        )[0],
+        target: "booking",
+        actionLabel: "Review availability",
+        toneClass: "border-[#0f5f62]/20 bg-[#e4f1ed] text-[#0f5f62]",
+      });
+    }
+
+    return watchItems.sort((left, right) => right.count - left.count);
+  }, [workspace]);
+  const listingWatchlistCounts = useMemo(
+    () => ({
+      all: listingInventoryAvailabilityWatchItems.length,
+      inventory: listingInventoryAvailabilityWatchItems.filter((item) => item.target === "pricing").length,
+      availability: listingInventoryAvailabilityWatchItems.filter((item) => item.target === "booking").length,
+    }),
+    [listingInventoryAvailabilityWatchItems],
+  );
+  const filteredListingInventoryAvailabilityWatchItems = useMemo(() => {
+    if (listingWatchlistFilter === "all") {
+      return listingInventoryAvailabilityWatchItems;
+    }
+
+    return listingInventoryAvailabilityWatchItems.filter((item) =>
+      listingWatchlistFilter === "inventory" ? item.target === "pricing" : item.target === "booking",
+    );
+  }, [listingInventoryAvailabilityWatchItems, listingWatchlistFilter]);
+  const watchlistActivityCounts = useMemo(
+    () => ({
+      all: watchlistActivity.length,
+      inventory: watchlistActivity.filter((entry) => entry.target === "pricing").length,
+      availability: watchlistActivity.filter((entry) => entry.target === "booking").length,
+    }),
+    [watchlistActivity],
+  );
+  const filteredWatchlistActivity = useMemo(() => {
+    if (watchlistActivityFilter === "all") {
+      return watchlistActivity;
+    }
+
+    return watchlistActivity.filter((entry) =>
+      watchlistActivityFilter === "inventory"
+        ? entry.target === "pricing"
+        : entry.target === "booking",
+    );
+  }, [watchlistActivity, watchlistActivityFilter]);
+  const groupedWatchlistActivity = useMemo(
+    () =>
+      filteredWatchlistActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as SellerWatchlistActivityEntry[],
+          Earlier: [] as SellerWatchlistActivityEntry[],
+        },
+      ),
+    [filteredWatchlistActivity],
+  );
+  const hasEarlierWatchlistActivity = groupedWatchlistActivity.Earlier.length > 0;
+  const canCollapseEarlierWatchlistActivity =
+    hasEarlierWatchlistActivity && !collapsedWatchlistActivityGroups.Earlier;
+  const canExpandAllWatchlistActivity =
+    (groupedWatchlistActivity.Today.length > 0 && collapsedWatchlistActivityGroups.Today) ||
+    (groupedWatchlistActivity.Earlier.length > 0 && collapsedWatchlistActivityGroups.Earlier);
+
+  useEffect(() => {
+    if (!pendingListingControlFocus || !workspace) {
+      return;
+    }
+
+    const listing = workspace.listings.find((item) => item.id === pendingListingControlFocus.listingId);
+    if (!listing) {
+      setPendingListingControlFocus(null);
+      return;
+    }
+
+    const targetKey = `${listing.id}:${pendingListingControlFocus.target}`;
+    if (!listingControlRefs.current[targetKey]) {
+      return;
+    }
+
+    focusListingControlTarget(listing, pendingListingControlFocus.target);
+    setPendingListingControlFocus(null);
+  }, [filteredWorkspaceListings, pendingListingControlFocus, workspace]);
   const listingAdjustmentCounts = useMemo(() => {
     const counts = {
       all: (workspace?.listings ?? []).length,
@@ -3794,11 +4913,29 @@ export function SellerWorkspace() {
     if (listingTrendFilter !== "all") {
       parts.push(`Trend: ${titleCaseWorkspaceLabel(listingTrendFilter)}`);
     }
+    if (listingWatchlistFilter !== "all") {
+      parts.push(`Watchlist: ${titleCaseWorkspaceLabel(listingWatchlistFilter)}`);
+    }
     if (deliveryStatusFilter !== "all") {
       parts.push(`Deliveries: ${titleCaseWorkspaceLabel(deliveryStatusFilter)}`);
     }
+    if (deliveryAlertFilter !== "all") {
+      parts.push(`Alerts: ${titleCaseWorkspaceLabel(deliveryAlertFilter)}`);
+    }
     if (deliveryRecencyFilter !== "7d") {
       parts.push(`Window: ${titleCaseWorkspaceLabel(deliveryRecencyFilter)}`);
+    }
+    if (inventoryAlertBucketFilter !== "all") {
+      parts.push(`Inventory: ${titleCaseWorkspaceLabel(inventoryAlertBucketFilter)}`);
+    }
+    if (inventoryAlertStatusFilter !== "all") {
+      parts.push(`Inventory Status: ${titleCaseWorkspaceLabel(inventoryAlertStatusFilter)}`);
+    }
+    if (inventoryAlertRecencyFilter !== "all") {
+      parts.push(`Inventory Window: ${titleCaseWorkspaceLabel(inventoryAlertRecencyFilter)}`);
+    }
+    if (inventoryAlertActivityFilter !== "all") {
+      parts.push(`Inventory History: ${titleCaseWorkspaceLabel(inventoryAlertActivityFilter)}`);
     }
     if (bulkExecutionMode !== "best_effort") {
       parts.push("Batch Mode: Validate First");
@@ -3821,9 +4958,15 @@ export function SellerWorkspace() {
     activityTypeFilter,
     bulkExecutionMode,
     deliveryRecencyFilter,
+    deliveryAlertFilter,
     deliveryStatusFilter,
     focusedActivityKey,
+    inventoryAlertActivityFilter,
+    inventoryAlertBucketFilter,
+    inventoryAlertRecencyFilter,
+    inventoryAlertStatusFilter,
     listingAdjustmentFilter,
+    listingWatchlistFilter,
     listingTrendFilter,
     workspace?.listings,
     workspacePreset,
@@ -3840,9 +4983,15 @@ export function SellerWorkspace() {
     activityRecoveryFilter === "all" &&
     activitySortMode === "default" &&
     listingAdjustmentFilter === "all" &&
+    listingWatchlistFilter === "all" &&
     listingTrendFilter === "all" &&
     deliveryStatusFilter === "all" &&
+    deliveryAlertFilter === "all" &&
     deliveryRecencyFilter === "7d" &&
+    inventoryAlertBucketFilter === "all" &&
+    inventoryAlertStatusFilter === "all" &&
+    inventoryAlertRecencyFilter === "all" &&
+    inventoryAlertActivityFilter === "all" &&
     bulkExecutionMode === "best_effort" &&
     !focusedActivityKey;
 
@@ -3877,8 +5026,72 @@ export function SellerWorkspace() {
     return `booking · ${booking.listing_title ?? booking.listing_id}`;
   }
 
+  function getDeliveryAlertTypeLabel(delivery: NotificationDelivery) {
+    const alertType = delivery.payload?.alert_type;
+    if (alertType === "inventory_alert") {
+      return "Inventory alert";
+    }
+    if (alertType === "seller_trust_intervention") {
+      return "Trust alert";
+    }
+    if (alertType === "booking_conflict") {
+      return "Booking conflict";
+    }
+    if (typeof alertType === "string" && alertType.trim()) {
+      return `${titleCaseWorkspaceLabel(alertType.replaceAll("_", " "))} alert`;
+    }
+
+    return null;
+  }
+
   function focusDeliveryTransaction(delivery: NotificationDelivery) {
     setActivityFocus(`${delivery.transaction_kind}:${delivery.transaction_id}`);
+  }
+
+  function openInventoryAlertListing(listingId: string, group?: InventoryAlertGroup) {
+    const listing = workspace?.listings.find((item) => item.id === listingId);
+    if (!listing) {
+      return;
+    }
+
+    if (group) {
+      recordInventoryAlertActivity(group);
+    }
+    revealListingControlTarget(listing, "inventory");
+  }
+
+  function recordInventoryAlertActivity(group: InventoryAlertGroup) {
+    setInventoryAlertActivity((current) => {
+      const nextEntry: SellerInventoryAlertActivityEntry = {
+        id: `${group.signature}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        listingId: group.listingId,
+        listingTitle: group.listingTitle,
+        inventoryBucket: group.inventoryBucket,
+        inventoryCount: group.inventoryCount,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter((entry) => entry.listingId !== group.listingId || entry.createdAt !== group.latestCreatedAt),
+      ].slice(0, 6);
+    });
+  }
+
+  function replayInventoryAlertActivity(entry: SellerInventoryAlertActivityEntry) {
+    const listing = workspace?.listings.find((item) => item.id === entry.listingId) ?? null;
+    if (!listing) {
+      return;
+    }
+
+    revealListingControlTarget(listing, "inventory");
+  }
+
+  function toggleInventoryAlertActivityGroup(group: InventoryAlertActivityGroup) {
+    setCollapsedInventoryAlertActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
   }
 
   function getListingTuneRoleTarget(listing: Listing) {
@@ -3888,7 +5101,7 @@ export function SellerWorkspace() {
 
   function focusListingControlTarget(
     listing: Listing,
-    target: "pricing" | "booking" | "fulfillment",
+    target: ListingControlTarget,
   ) {
     const targetKey = `${listing.id}:${target}`;
     setHighlightedListingControlKey(targetKey);
@@ -3907,6 +5120,86 @@ export function SellerWorkspace() {
 
   function focusListingRoleControls(listing: Listing) {
     focusListingControlTarget(listing, getListingTuneRoleTarget(listing));
+  }
+
+  function recordWatchlistActivity(
+    item: ListingWorkspaceWatchItem,
+    listing: Listing,
+    filter: ListingWatchlistFilter,
+  ) {
+    setWatchlistActivity((current) => {
+      const nextEntry: SellerWatchlistActivityEntry = {
+        id: `${item.id}:${listing.id}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        watchItemId: item.id,
+        watchlistFilter: filter,
+        listingId: listing.id,
+        listingTitle: listing.title,
+        actionLabel: item.actionLabel,
+        target: item.target,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter(
+          (entry) =>
+            !(
+              entry.watchItemId === item.id &&
+              entry.listingId === listing.id &&
+              entry.target === item.target
+            ),
+        ),
+      ].slice(0, 6);
+    });
+  }
+
+  function revealListingControlTarget(listing: Listing, target: ListingControlTarget) {
+    setListingAdjustmentFilter("all");
+    setListingTrendFilter("all");
+    setPendingListingControlFocus({
+      listingId: listing.id,
+      target,
+    });
+  }
+
+  function openListingWatchlistItem(item: ListingWorkspaceWatchItem) {
+    recordWatchlistActivity(item, item.topListing, listingWatchlistFilter);
+    revealListingControlTarget(item.topListing, item.target);
+  }
+
+  function replayWatchlistActivity(entry: SellerWatchlistActivityEntry) {
+    setListingWatchlistFilter(entry.watchlistFilter);
+
+    const listing =
+      workspace?.listings.find((item) => item.id === entry.listingId) ??
+      workspace?.listings.find((item) => item.title === entry.listingTitle) ??
+      null;
+    if (!listing) {
+      return;
+    }
+
+    revealListingControlTarget(listing, entry.target);
+  }
+
+  function toggleWatchlistActivityGroup(group: "Today" | "Earlier") {
+    setCollapsedWatchlistActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
+  }
+
+  function collapseEarlierWatchlistActivity() {
+    setCollapsedWatchlistActivityGroups((current) => ({
+      ...current,
+      Earlier: true,
+    }));
+  }
+
+  function expandAllWatchlistActivity() {
+    setCollapsedWatchlistActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
   }
 
   type ListingTransaction = Order | Booking;
@@ -4153,6 +5446,7 @@ export function SellerWorkspace() {
   function resetWorkspaceView() {
     applySellerPreset("default");
     setBulkExecutionMode("best_effort");
+    setListingWatchlistFilter("all");
     if (focusedActivityKey) {
       const params = new URLSearchParams(searchParams.toString());
       params.delete("focus");
@@ -6463,15 +7757,25 @@ export function SellerWorkspace() {
                         {review.comment ?? "Buyer left a rating without a written comment."}
                       </p>
                       <div className="mt-4 rounded-[1rem] border border-border bg-white/75 px-3 py-3">
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
                           <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/48">
                             Seller Response
                           </p>
-                          {review.seller_responded_at ? (
-                            <span className="text-[10px] uppercase tracking-[0.12em] text-foreground/45">
-                              {new Date(review.seller_responded_at).toLocaleDateString()}
-                            </span>
-                          ) : null}
+                          <div className="flex flex-wrap items-center gap-2">
+                            {review.seller_responded_at ? (
+                              <span className="text-[10px] uppercase tracking-[0.12em] text-foreground/45">
+                                {new Date(review.seller_responded_at).toLocaleDateString()}
+                              </span>
+                            ) : null}
+                            <button
+                              className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-55"
+                              disabled={reviewResponseAiState[review.id]?.loading}
+                              onClick={() => requestReviewResponseAiAssist(review)}
+                              type="button"
+                            >
+                              {reviewResponseAiState[review.id]?.loading ? "Suggesting..." : "Suggest reply"}
+                            </button>
+                          </div>
                         </div>
                         <textarea
                           className="mt-3 min-h-[88px] w-full rounded-[0.9rem] border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-accent"
@@ -6479,6 +7783,36 @@ export function SellerWorkspace() {
                           placeholder="Reply to this buyer review with context or thanks."
                           value={reviewResponseDrafts[review.id] ?? ""}
                         />
+                        {reviewResponseAiState[review.id]?.suggestion ? (
+                          <div className="mt-3 rounded-[0.9rem] border border-dashed border-border bg-background/80 px-3 py-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/48">
+                                Suggested Reply
+                              </p>
+                              <span className="text-[10px] uppercase tracking-[0.12em] text-foreground/45">
+                                {reviewResponseAiState[review.id]?.suggestion?.summary}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-foreground/70">
+                              {reviewResponseAiState[review.id]?.suggestion?.suggested_response}
+                            </p>
+                            <button
+                              className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                              onClick={() =>
+                                updateReviewResponseDraft(
+                                  review.id,
+                                  reviewResponseAiState[review.id]?.suggestion?.suggested_response ?? "",
+                                )
+                              }
+                              type="button"
+                            >
+                              Use suggestion
+                            </button>
+                          </div>
+                        ) : null}
+                        {reviewResponseAiState[review.id]?.error ? (
+                          <p className="mt-3 text-xs text-rose-600">{reviewResponseAiState[review.id]?.error}</p>
+                        ) : null}
                         <div className="mt-3 flex items-center justify-between gap-3">
                           <p className="text-xs text-foreground/52">
                             Public storefronts will show the latest seller response.
@@ -6558,6 +7892,296 @@ export function SellerWorkspace() {
 
             <div
               className={`rounded-3xl border bg-white px-4 py-4 ${
+                filteredInventoryAlertGroups.length > 0 ? "border-amber-200 bg-amber-50/35" : "border-border"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    Inventory Alerts
+                  </p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                    Low-stock and out-of-stock alerts · {filteredInventoryAlertGroups.length} shown
+                  </p>
+                  <p className="mt-1 text-sm text-foreground/66">
+                    Seller notifications now fire when a listing crosses into low-stock or out-of-stock
+                    state. Jump straight into the affected listing controls to update inventory.
+                  </p>
+                  {latestInventoryAlertGroup ? (
+                    <p className="mt-2 text-xs uppercase tracking-[0.14em] text-foreground/54">
+                      Open latest · {latestInventoryAlertGroup.listingTitle} ·{" "}
+                      {latestInventoryAlertGroup.inventoryBucket === "out_of_stock"
+                        ? "out of stock"
+                        : "low stock"}
+                    </p>
+                  ) : null}
+                </div>
+                <span className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                  {inventoryAlertQueuedCount} queued · {inventoryAlertFailedCount} failed
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["all", `All · ${inventoryAlertGroups.length}`],
+                  ["low_stock", `Low stock · ${inventoryAlertLowStockCount}`],
+                  ["out_of_stock", `Out of stock · ${inventoryAlertOutOfStockCount}`],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                      inventoryAlertBucketFilter === value
+                        ? value === "out_of_stock"
+                          ? "border-red-300 bg-red-700 text-white"
+                          : "border-amber-300 bg-amber-700 text-white"
+                        : value === "out_of_stock"
+                          ? "border-red-200 bg-red-50 text-red-700 hover:border-red-300"
+                          : "border-amber-200 bg-amber-50 text-amber-800 hover:border-amber-300"
+                    }`}
+                    onClick={() => setInventoryAlertBucketFilter(value as InventoryAlertBucketFilter)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["all", `All · ${filteredInventoryAlertGroups.length}`],
+                  ["queued", `Queued · ${inventoryAlertQueuedCount}`],
+                  ["sent", `Sent · ${inventoryAlertSentCount}`],
+                  ["failed", `Failed · ${inventoryAlertFailedCount}`],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                      inventoryAlertStatusFilter === value
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-background text-foreground/60 hover:border-foreground/50 hover:text-foreground"
+                    }`}
+                    onClick={() => setInventoryAlertStatusFilter(value as InventoryAlertStatusFilter)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60 transition hover:border-accent hover:text-accent"
+                  onClick={() => {
+                    setInventoryAlertBucketFilter("all");
+                    setInventoryAlertStatusFilter("all");
+                    setInventoryAlertRecencyFilter("all");
+                  }}
+                  type="button"
+                >
+                  Clear filters
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["today", "Today"],
+                  ["7d", "7 Days"],
+                  ["all", "All Time"],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                      inventoryAlertRecencyFilter === value
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-background text-foreground/60 hover:border-foreground/50 hover:text-foreground"
+                    }`}
+                    onClick={() => setInventoryAlertRecencyFilter(value as InventoryAlertRecencyFilter)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {latestInventoryAlertGroup ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                    onClick={() =>
+                      openInventoryAlertListing(
+                        latestInventoryAlertGroup.listingId,
+                        latestInventoryAlertGroup,
+                      )
+                    }
+                    type="button"
+                  >
+                    Open latest inventory alert
+                  </button>
+                </div>
+              ) : null}
+              {inventoryAlertActivity.length > 0 ? (
+                <div className="mt-4 rounded-[1.3rem] border border-border bg-background/35 px-4 py-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                            Recent inventory alert activity
+                          </p>
+                      <p className="mt-1 text-sm text-foreground/64">
+                        Re-open the last inventory issues you reviewed in this session.
+                      </p>
+                      {collapsedInventoryAlertActivityGroups.Recent ? (
+                        <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                          Recent collapsed · {inventoryAlertActivity.length} hidden action
+                          {inventoryAlertActivity.length === 1 ? "" : "s"}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                      {filteredInventoryAlertActivity.length} recent action
+                      {filteredInventoryAlertActivity.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {[
+                      ["all", `All · ${inventoryAlertActivityCounts.all}`],
+                      ["low_stock", `Low stock · ${inventoryAlertActivityCounts.low_stock}`],
+                      ["out_of_stock", `Out of stock · ${inventoryAlertActivityCounts.out_of_stock}`],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] transition ${
+                          inventoryAlertActivityFilter === value
+                            ? "border-foreground bg-foreground text-background"
+                            : "border-border bg-background text-foreground/60 hover:border-foreground/50 hover:text-foreground"
+                        }`}
+                        onClick={() =>
+                          setInventoryAlertActivityFilter(value as InventoryAlertActivityFilter)
+                        }
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    {inventoryAlertActivityFilter !== "all" ? (
+                      <button
+                        className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60 transition hover:border-accent hover:text-accent"
+                        onClick={() => setInventoryAlertActivityFilter("all")}
+                        type="button"
+                      >
+                        Clear filters
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() => toggleInventoryAlertActivityGroup("Recent")}
+                      type="button"
+                    >
+                      {collapsedInventoryAlertActivityGroups.Recent ? "Expand" : "Collapse"}
+                    </button>
+                  </div>
+                  {collapsedInventoryAlertActivityGroups.Recent ? null : (
+                    <div className="mt-4 space-y-3">
+                      {filteredInventoryAlertActivity.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="rounded-[1.1rem] border border-border bg-white px-4 py-3"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-foreground">
+                                {entry.listingTitle}
+                              </p>
+                              <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                {entry.inventoryBucket === "out_of_stock" ? "Out of stock" : "Low stock"} ·{" "}
+                                {entry.inventoryCount ?? "unknown"} remaining ·{" "}
+                                {new Date(entry.createdAt).toLocaleString()}
+                              </p>
+                            </div>
+                            <button
+                              className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                              onClick={() => replayInventoryAlertActivity(entry)}
+                              type="button"
+                            >
+                              Re-open
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+              <div className="mt-4 space-y-3">
+                {filteredInventoryAlertGroups.length > 0 ? (
+                  filteredInventoryAlertGroups.slice(0, 6).map((group) => {
+                    const listing = workspace?.listings.find((item) => item.id === group.listingId) ?? null;
+                    const inventoryBadge = listing ? getListingInventoryBadge(listing) : null;
+                    const latestDelivery = group.deliveries[0];
+
+                    return (
+                      <div
+                        key={group.signature}
+                        className={`rounded-[1.1rem] border px-4 py-3 ${
+                          group.inventoryBucket === "out_of_stock"
+                            ? "border-red-300 bg-red-50/70"
+                            : "border-amber-300 bg-amber-50/70"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">
+                              {group.listingTitle}
+                            </p>
+                            <p className="mt-1 text-xs uppercase tracking-[0.16em] text-foreground/52">
+                              {group.listingSlug || group.listingId}
+                            </p>
+                            <p className="mt-1 text-sm text-foreground/70">
+                              {group.inventoryBucket === "out_of_stock"
+                                ? "Inventory is out of stock."
+                                : `Inventory is low at ${group.inventoryCount ?? "unknown"} remaining.`}
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {group.deliveries.map((delivery) => (
+                                <span
+                                  key={delivery.id}
+                                  className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                    delivery.delivery_status === "sent"
+                                      ? "border-olive/20 bg-olive/10 text-olive"
+                                      : delivery.delivery_status === "failed"
+                                        ? "border-red-200 bg-red-50 text-red-700"
+                                        : "border-amber-200 bg-amber-50 text-amber-800"
+                                  }`}
+                                >
+                                  {delivery.channel} · {delivery.delivery_status}
+                                </span>
+                              ))}
+                            </div>
+                            {inventoryBadge ? (
+                              <p className="mt-2 text-xs uppercase tracking-[0.14em] text-foreground/52">
+                                Current stock · {inventoryBadge.label}
+                              </p>
+                            ) : null}
+                            <p className="mt-1 text-xs text-foreground/52">
+                              Latest alert · {new Date(latestDelivery.created_at).toLocaleString()}
+                            </p>
+                          </div>
+                          <button
+                            className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                            onClick={() => openInventoryAlertListing(group.listingId, group)}
+                            type="button"
+                          >
+                            Review inventory
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-foreground/66">
+                    No backend inventory alerts match the current filters. Listing writes will surface
+                    low-stock and out-of-stock notifications here.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div
+              className={`rounded-3xl border bg-white px-4 py-4 ${
                 queuedDeliveryCount > 0 || failedDeliveryCount > 0
                   ? "border-amber-200 bg-amber-50/30"
                   : "border-border"
@@ -6570,6 +8194,10 @@ export function SellerWorkspace() {
                   </p>
                   <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
                     Resend and push outbox status · {queuedDeliveryCount} queued
+                  </p>
+                  <p className="mt-1 text-sm text-foreground/64">
+                    Alerts · {inventoryAlertDeliveryCount} inventory · {trustAlertDeliveryCount} trust ·{" "}
+                    {otherAlertDeliveryCount} other
                   </p>
                 </div>
                 <span className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-foreground/60">
@@ -6627,6 +8255,28 @@ export function SellerWorkspace() {
                   All Time
                 </SelectChip>
               </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["all", `All Alerts · ${filteredNotificationDeliveries.length}`],
+                  ["inventory", `Inventory · ${inventoryAlertDeliveryCount}`],
+                  ["trust", `Trust · ${trustAlertDeliveryCount}`],
+                  ["booking", `Booking · ${bookingConflictAlertDeliveryCount}`],
+                  ["other", `Other Alerts · ${otherAlertDeliveryCount}`],
+                ].map(([value, label]) => (
+                  <SelectChip
+                    key={value}
+                    active={deliveryAlertFilter === value}
+                    onClick={() => setDeliveryAlertFilter(value as DeliveryAlertFilter)}
+                  >
+                    {label}
+                  </SelectChip>
+                ))}
+                {deliveryAlertFilter !== "all" ? (
+                  <SelectChip active={false} onClick={() => setDeliveryAlertFilter("all")}>
+                    Clear alert filter
+                  </SelectChip>
+                ) : null}
+              </div>
 
               <div className="mt-4 space-y-3">
                 {filteredNotificationDeliveries.length > 0 ? (
@@ -6649,6 +8299,19 @@ export function SellerWorkspace() {
                           <p className="mt-1 text-xs uppercase tracking-[0.16em] text-foreground/52">
                             {getDeliveryTransactionLabel(delivery)}
                           </p>
+                          {getDeliveryAlertTypeLabel(delivery) ? (
+                            <span
+                              className={`mt-2 inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                delivery.payload?.alert_type === "inventory_alert"
+                                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                                  : delivery.payload?.alert_type === "seller_trust_intervention"
+                                    ? "border-rose-200 bg-rose-50 text-rose-700"
+                                    : "border-border bg-background text-foreground/68"
+                              }`}
+                            >
+                              {getDeliveryAlertTypeLabel(delivery)}
+                            </span>
+                          ) : null}
                           <p className="mt-1 text-sm text-foreground/70">
                             {String(delivery.payload.subject ?? delivery.payload.status ?? "No payload summary")}
                           </p>
@@ -6738,7 +8401,13 @@ export function SellerWorkspace() {
                     <select
                       className="w-full rounded-2xl border border-border bg-white px-4 py-3 outline-none transition focus:border-accent"
                       value={listingType}
-                      onChange={(event) => setListingType(event.target.value as ListingType)}
+                      onChange={(event) => {
+                        const nextType = event.target.value as ListingType;
+                        setListingType(nextType);
+                        if (nextType === "product") {
+                          setCreateAutoAcceptBookings(false);
+                        }
+                      }}
                     >
                       <option value="product">Product</option>
                       <option value="service">Service</option>
@@ -6763,6 +8432,25 @@ export function SellerWorkspace() {
                     </select>
                   </label>
                 </div>
+                {listingType !== "product" ? (
+                  <label className="flex items-start gap-3 rounded-2xl border border-border bg-white px-4 py-3 text-sm text-foreground/72">
+                    <input
+                      checked={createAutoAcceptBookings}
+                      onChange={(event) => setCreateAutoAcceptBookings(event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>
+                      <span className="block font-semibold text-foreground">Auto-accept booking requests</span>
+                      <span className="mt-1 block text-xs text-foreground/56">
+                        New booking requests will confirm immediately instead of sitting in the requested queue.
+                      </span>
+                    </span>
+                  </label>
+                ) : (
+                  <p className="rounded-2xl border border-dashed border-border px-4 py-3 text-xs text-foreground/52">
+                    Booking controls appear here once this listing is not product-only.
+                  </p>
+                )}
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="block">
                     <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
@@ -6870,6 +8558,206 @@ export function SellerWorkspace() {
                     </span>
                   </div>
 
+                  <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                          Inventory and availability watchlist
+                        </p>
+                        <p className="mt-1 text-sm text-foreground/64">
+                          Prioritize stock and same-day availability before buyers hit avoidable dead
+                          ends.
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                        {listingInventoryAvailabilityWatchItems.length} active signal
+                        {listingInventoryAvailabilityWatchItems.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {[
+                        ["all", "All alerts"],
+                        ["inventory", "Inventory"],
+                        ["availability", "Availability"],
+                      ].map(([value, label]) => (
+                        <SelectChip
+                          key={value}
+                          active={listingWatchlistFilter === value}
+                          onClick={() => setListingWatchlistFilter(value as ListingWatchlistFilter)}
+                        >
+                          {label} · {listingWatchlistCounts[value as keyof typeof listingWatchlistCounts]}
+                        </SelectChip>
+                      ))}
+                      {listingWatchlistFilter !== "all" ? (
+                        <SelectChip active={false} onClick={() => setListingWatchlistFilter("all")}>
+                          Clear filters
+                        </SelectChip>
+                      ) : null}
+                    </div>
+                    {filteredListingInventoryAvailabilityWatchItems.length > 0 ? (
+                      <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                        {filteredListingInventoryAvailabilityWatchItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className={`rounded-[1.15rem] border px-4 py-4 ${item.toneClass}`}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="font-mono text-[11px] uppercase tracking-[0.18em] opacity-70">
+                                  {item.title}
+                                </p>
+                                <p className="mt-2 text-lg font-semibold tracking-[-0.03em]">
+                                  {item.count} listing{item.count === 1 ? "" : "s"}
+                                </p>
+                              </div>
+                              <span className="rounded-full border border-current/15 bg-white/55 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]">
+                                {item.actionLabel}
+                              </span>
+                            </div>
+                            <p className="mt-3 text-sm leading-6 opacity-85">{item.description}</p>
+                            <p className="mt-2 text-xs uppercase tracking-[0.14em] opacity-70">
+                              Top listing · {item.topListing.title}
+                            </p>
+                            <button
+                              className="mt-4 rounded-full border border-current/20 bg-white/70 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition hover:bg-white"
+                              onClick={() => openListingWatchlistItem(item)}
+                              type="button"
+                            >
+                              {item.actionLabel}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-4 text-sm leading-6 text-foreground/66">
+                        {listingWatchlistFilter === "all"
+                          ? "No inventory or availability gaps need urgent attention right now. Keep stock counts fresh as listings pick up demand."
+                          : `No ${listingWatchlistFilter} watchlist alerts match the current seller workspace state.`}
+                      </p>
+                    )}
+                  </div>
+
+                  {watchlistActivity.length > 0 ? (
+                    <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                            Recent watchlist activity
+                          </p>
+                          <p className="mt-1 text-sm text-foreground/64">
+                            Resume recent stock and availability reviews from this session.
+                          </p>
+                          {collapsedWatchlistActivityGroups.Earlier &&
+                          groupedWatchlistActivity.Earlier.length > 0 ? (
+                            <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                              Earlier collapsed · {groupedWatchlistActivity.Earlier.length} hidden action
+                              {groupedWatchlistActivity.Earlier.length === 1 ? "" : "s"}
+                            </p>
+                          ) : null}
+                        </div>
+                        <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                          {watchlistActivity.length} recent action{watchlistActivity.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {[
+                          ["all", "All"],
+                          ["inventory", "Inventory"],
+                          ["availability", "Availability"],
+                        ].map(([value, label]) => (
+                          <SelectChip
+                            key={value}
+                            active={watchlistActivityFilter === value}
+                            onClick={() =>
+                              setWatchlistActivityFilter(value as SellerWatchlistActivityFilter)
+                            }
+                          >
+                            {label} ·{" "}
+                            {watchlistActivityCounts[value as keyof typeof watchlistActivityCounts]}
+                          </SelectChip>
+                        ))}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                          disabled={!canCollapseEarlierWatchlistActivity}
+                          onClick={collapseEarlierWatchlistActivity}
+                          type="button"
+                        >
+                          {hasEarlierWatchlistActivity
+                            ? `Collapse earlier · ${groupedWatchlistActivity.Earlier.length}`
+                            : "Collapse earlier"}
+                        </button>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                          disabled={!canExpandAllWatchlistActivity}
+                          onClick={expandAllWatchlistActivity}
+                          type="button"
+                        >
+                          Expand all
+                        </button>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        {filteredWatchlistActivity.length > 0 ? (
+                          (["Today", "Earlier"] as const).map((groupLabel) =>
+                            groupedWatchlistActivity[groupLabel].length > 0 ? (
+                              <div key={groupLabel} className="space-y-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                                    {groupLabel}
+                                  </p>
+                                  <button
+                                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                    onClick={() => toggleWatchlistActivityGroup(groupLabel)}
+                                    type="button"
+                                  >
+                                    {collapsedWatchlistActivityGroups[groupLabel] ? "Expand" : "Collapse"}
+                                  </button>
+                                </div>
+                                {collapsedWatchlistActivityGroups[groupLabel] ? (
+                                  <p className="rounded-[1rem] border border-border bg-background/35 px-4 py-3 text-sm text-foreground/62">
+                                    {groupedWatchlistActivity[groupLabel].length} hidden action
+                                    {groupedWatchlistActivity[groupLabel].length === 1 ? "" : "s"}
+                                  </p>
+                                ) : (
+                                  groupedWatchlistActivity[groupLabel].map((entry) => (
+                                    <div
+                                      key={entry.id}
+                                      className="rounded-[1.1rem] border border-border bg-background/35 px-4 py-3"
+                                    >
+                                      <div className="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                          <p className="text-sm font-semibold text-foreground">
+                                            {entry.actionLabel} · {entry.listingTitle}
+                                          </p>
+                                          <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                            {titleCaseWorkspaceLabel(entry.watchlistFilter)} watchlist ·{" "}
+                                            {new Date(entry.createdAt).toLocaleString()}
+                                          </p>
+                                        </div>
+                                        <button
+                                          className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                          onClick={() => replayWatchlistActivity(entry)}
+                                          type="button"
+                                        >
+                                          Re-open
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            ) : null,
+                          )
+                        ) : (
+                          <p className="text-sm text-foreground/66">
+                            No {watchlistActivityFilter} watchlist actions in this session yet.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
                   {filteredWorkspaceListings.length === 0 ? (
                     <div className="rounded-[1.3rem] border border-border bg-white px-4 py-4 text-sm text-foreground/68">
                       No listings match the current adjustment filter.
@@ -6909,6 +8797,8 @@ export function SellerWorkspace() {
                     const aiState = listingAiState[listing.id];
                     const priceInsightState = listingPriceInsights[listing.id];
                     const draftPriceCents = Number(listingDrafts[listing.id].price_cents);
+                    const inventoryBadge = getListingInventoryBadge(listing);
+                    const inventoryAlertSummary = inventoryAlertSummaryByListingId[listing.id] ?? null;
                     const pricePositionBadge = priceInsightState?.insight
                       ? getPricePositionBadge({
                           currentPriceCents:
@@ -6989,6 +8879,26 @@ export function SellerWorkspace() {
                                 {tractionPill.label}
                               </span>
                             ) : null}
+                            {inventoryBadge ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${inventoryBadge.className}`}
+                              >
+                                {inventoryBadge.label}
+                              </span>
+                            ) : null}
+                            {inventoryAlertSummary ? (
+                              <button
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                                  inventoryAlertSummary.latestBucket === "out_of_stock"
+                                    ? "border-red-200 bg-red-50 text-red-700"
+                                    : "border-amber-200 bg-amber-50 text-amber-800"
+                                }`}
+                                onClick={() => openInventoryAlertListing(listing.id)}
+                                type="button"
+                              >
+                                Inventory alert · {inventoryAlertSummary.count}
+                              </button>
+                            ) : null}
                             {supportPressure ? (
                               <span
                                 className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${supportPressure.toneClass}`}
@@ -7043,28 +8953,31 @@ export function SellerWorkspace() {
                             {getListingOperatingGuidance(listing)}
                           </p>
                           <TuneRoleActionButton onClick={() => focusListingRoleControls(listing)} />
-                            <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-foreground/58">
-                              {listing.category ? <span>Category: {listing.category}</span> : null}
-                              {listing.last_pricing_comparison_scope ? (
-                                <span
-                                  className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-                                    getPriceComparisonScopeBadge(
-                                      listing.last_pricing_comparison_scope,
-                                    ).className
-                                  }`}
-                                >
-                                  {
-                                    getPriceComparisonScopeBadge(
-                                      listing.last_pricing_comparison_scope,
-                                    ).label
-                                  }
-                                </span>
-                              ) : null}
+                          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-foreground/58">
+                            {listing.category ? <span>Category: {listing.category}</span> : null}
+                            {listing.last_pricing_comparison_scope ? (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                                  getPriceComparisonScopeBadge(
+                                    listing.last_pricing_comparison_scope,
+                                  ).className
+                                }`}
+                              >
+                                {
+                                  getPriceComparisonScopeBadge(
+                                    listing.last_pricing_comparison_scope,
+                                  ).label
+                                }
+                              </span>
+                            ) : null}
                             <span>{formatCurrency(listing.price_cents, listing.currency)}</span>
+                            {listing.type !== "service" ? (
+                              <span>
+                                Inventory: {listing.inventory_count == null ? "untracked" : listing.inventory_count}
+                              </span>
+                            ) : null}
                             <span>Slug: {listing.slug}</span>
-                            <span>
-                              Images: {listing.images?.length ?? 0}
-                            </span>
+                            <span>Images: {listing.images?.length ?? 0}</span>
                             <span>
                               Fulfillment:
                               {" "}
@@ -7106,12 +9019,12 @@ export function SellerWorkspace() {
                         </label>
                         <div
                           className={`rounded-2xl border px-4 py-3 transition ${
-                            highlightedListingControlKey === `${listing.id}:pricing`
+                            highlightedListingControlKey === `${listing.id}:inventory`
                               ? "border-accent bg-accent/8 ring-2 ring-accent/30"
                               : "border-border bg-background/40"
                           }`}
                           ref={(node) => {
-                            listingControlRefs.current[`${listing.id}:pricing`] = node;
+                            listingControlRefs.current[`${listing.id}:inventory`] = node;
                           }}
                         >
                           <label className="block">
@@ -7129,6 +9042,23 @@ export function SellerWorkspace() {
                               }
                             />
                           </label>
+                          {listing.type !== "service" ? (
+                            <label className="mt-3 block">
+                              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
+                                Inventory Count
+                              </span>
+                              <input
+                                className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm outline-none transition focus:border-accent"
+                                value={listingDrafts[listing.id].inventory_count}
+                                onChange={(event) =>
+                                  updateListingDraft(listing.id, (current) => ({
+                                    ...current,
+                                    inventory_count: event.target.value,
+                                  }))
+                                }
+                              />
+                            </label>
+                          ) : null}
                         </div>
                         <label className="block">
                           <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
@@ -7199,6 +9129,22 @@ export function SellerWorkspace() {
                             />
                             Local only
                           </label>
+                          <label className="mt-2 flex items-center gap-2 text-sm text-foreground/76">
+                            <input
+                              checked={listingDrafts[listing.id].auto_accept_bookings}
+                              onChange={(event) =>
+                                updateListingDraft(listing.id, (current) => ({
+                                  ...current,
+                                  auto_accept_bookings: event.target.checked,
+                                }))
+                              }
+                              type="checkbox"
+                            />
+                            Auto-accept booking requests
+                          </label>
+                          <p className="mt-1 text-[11px] text-foreground/50">
+                            When enabled, new booking requests confirm immediately instead of waiting for manual review.
+                          </p>
                           <label className="mt-2 block text-sm text-foreground/76">
                             <span className="mb-1 block font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/48">
                               Promoted listing
@@ -8131,6 +10077,9 @@ export function SellerWorkspace() {
                         onNoteChange={(value) => updateResponseNote(order.id, value)}
                         notePlaceholder="Add a seller note for this order update"
                         loading={queueLoading === order.id}
+                        aiState={transactionResponseAiState[order.id]}
+                        onAiAssist={() => requestOrderResponseAiAssist(order)}
+                        suggestLabel="Suggest order note"
                         actions={getOrderQueueActions(order.id)}
                       />
                     </div>
@@ -8200,6 +10149,9 @@ export function SellerWorkspace() {
                         onNoteChange={(value) => updateResponseNote(booking.id, value)}
                         notePlaceholder="Add a seller note for this booking update"
                         loading={queueLoading === booking.id}
+                        aiState={transactionResponseAiState[booking.id]}
+                        onAiAssist={() => requestBookingResponseAiAssist(booking)}
+                        suggestLabel="Suggest booking note"
                         actions={getBookingQueueActions(booking.id)}
                       />
                     </div>
@@ -8780,15 +10732,61 @@ function QueueTransactionControls({
   notePlaceholder,
   loading,
   actions,
+  aiState,
+  onAiAssist,
+  suggestLabel,
 }: {
   note: string;
   onNoteChange: (value: string) => void;
   notePlaceholder: string;
   loading: boolean;
   actions: Array<{ key: string; label: string; onClick: () => void }>;
+  aiState?: {
+    loading: boolean;
+    error: string | null;
+    suggestion: { suggested_note: string; summary: string } | null;
+  };
+  onAiAssist?: () => void;
+  suggestLabel: string;
 }) {
   return (
     <>
+      {onAiAssist ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[1rem] border border-dashed border-border bg-background/50 px-3 py-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/48">
+              AI reply suggestion
+            </p>
+            <p className="mt-1 text-xs text-foreground/56">
+              {aiState?.suggestion?.summary ?? "Generate a quick response draft based on the current transaction."}
+            </p>
+          </div>
+          <button
+            className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-55"
+            disabled={aiState?.loading}
+            onClick={onAiAssist}
+            type="button"
+          >
+            {aiState?.loading ? "Suggesting..." : suggestLabel}
+          </button>
+        </div>
+      ) : null}
+      {aiState?.suggestion ? (
+        <div className="mt-3 rounded-[1rem] border border-border bg-background/70 px-3 py-3">
+          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/48">
+            Suggested Note
+          </p>
+          <p className="mt-2 text-sm leading-6 text-foreground/72">{aiState.suggestion.suggested_note}</p>
+          <button
+            className="mt-3 rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+            onClick={() => onNoteChange(aiState.suggestion?.suggested_note ?? "")}
+            type="button"
+          >
+            Use suggestion
+          </button>
+        </div>
+      ) : null}
+      {aiState?.error ? <p className="mt-3 text-xs text-rose-600">{aiState.error}</p> : null}
       <SellerResponseNoteEditor
         note={note}
         onChange={onNoteChange}

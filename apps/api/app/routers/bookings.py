@@ -8,12 +8,14 @@ from app.schemas.bookings import (
     BookingBulkStatusUpdateRequest,
     BookingBulkStatusUpdateResult,
     BookingCreate,
+    BookingResponseAiAssistResponse,
     BookingRead,
     BookingStatusUpdate,
 )
 from app.services.bookings import (
     bulk_update_booking_statuses,
     create_booking,
+    generate_booking_response_ai_assist,
     get_admin_bookings,
     get_booking_by_id_for_user,
     get_my_bookings,
@@ -68,6 +70,14 @@ def patch_booking_status(
     current_user=Depends(get_current_user),
 ) -> BookingRead:
     return update_booking_status(current_user, booking_id, payload)
+
+
+@router.post("/{booking_id}/response-ai-assist", response_model=BookingResponseAiAssistResponse)
+def request_booking_response_ai_assist(
+    booking_id: str,
+    current_user=Depends(get_current_user),
+) -> BookingResponseAiAssistResponse:
+    return generate_booking_response_ai_assist(current_user, booking_id)
 
 
 @router.post("/bulk-status", response_model=BookingBulkStatusUpdateResult)

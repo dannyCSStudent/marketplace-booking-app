@@ -8,15 +8,16 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   ApiError,
   createApiClient,
-  type Listing,
   type ListingPromotionDetail,
   type ListingPromotionEvent,
   type ListingPromotionSummary,
 } from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 import type { PromotionListingTypeFilter } from "@/app/admin/monetization/promotion-listing-focus";
 import { normalizePromotionListingType } from "@/app/admin/monetization/promotion-formatting";
@@ -50,6 +51,7 @@ type PromotionAnalyticsContextValue = {
 const PromotionAnalyticsContext = createContext<PromotionAnalyticsContextValue | null>(null);
 
 export function PromotionAnalyticsProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const [events, setEvents] = useState<ListingPromotionEvent[]>([]);
   const [summary, setSummary] = useState<
     Array<{ label: string; count: number; type: PromotionListingTypeFilter }>
@@ -74,17 +76,16 @@ export function PromotionAnalyticsProvider({ children }: { children: ReactNode }
         return;
       }
 
-      const [summaryRows, eventRows, listingRows, promotedRows] = await Promise.all([
+      const [summaryRows, eventRows, promotedRows] = await Promise.all([
         api.listPromotionSummary({ accessToken: session.access_token }),
         api.listPromotionEvents({ accessToken: session.access_token }),
-        api.get<{ items: Listing[]; total: number }>("/listings", { accessToken: session.access_token }),
         api.listPromotedListings({ accessToken: session.access_token }),
       ]);
 
       const typeById = Object.fromEntries(
-        listingRows.items.map((listing) => [
-          listing.id,
-          ((listing.type as PromotionListingTypeFilter | undefined) ?? "unknown"),
+        promotedRows.map((entry: ListingPromotionDetail) => [
+          entry.id,
+          ((entry.type as PromotionListingTypeFilter | undefined) ?? "unknown"),
         ]),
       );
 
@@ -137,6 +138,8 @@ export function PromotionAnalyticsProvider({ children }: { children: ReactNode }
 
       await api.promoteListing(listingId, { is_promoted: false }, { accessToken: session.access_token });
       await fetchAll();
+      await invalidateMarketplaceCaches();
+      router.refresh();
       setRemovingId(null);
     } catch (caught) {
       setStatus("error");

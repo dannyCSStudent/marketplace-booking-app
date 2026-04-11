@@ -8,12 +8,18 @@ from app.schemas.notifications import (
     NotificationDeliveryRead,
     NotificationDeliverySummaryRead,
     NotificationWorkerHealthRead,
+    TrustAlertEventRead,
+    TrustAlertSellerSummaryRead,
 )
 from app.services.notification_deliveries import (
+    acknowledge_admin_trust_alert,
+    clear_admin_trust_alert_acknowledgement,
     get_admin_notification_deliveries,
     get_admin_notification_delivery_summary,
     get_admin_notification_worker_health,
     get_my_notification_deliveries,
+    list_admin_trust_alert_events,
+    list_admin_trust_alert_seller_summaries,
     retry_admin_notification_deliveries,
     retry_admin_notification_delivery,
     retry_my_notification_deliveries,
@@ -65,6 +71,39 @@ def retry_admin_delivery(
     current_user=Depends(require_admin_user),
 ) -> NotificationDeliveryRead:
     return retry_admin_notification_delivery(delivery_id)
+
+
+@router.post("/admin/trust-alerts/{seller_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def acknowledge_trust_alert(
+    seller_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return acknowledge_admin_trust_alert(seller_id, actor_user_id=current_user.id)
+
+
+@router.delete("/admin/trust-alerts/{seller_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def clear_trust_alert_acknowledgement(
+    seller_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return clear_admin_trust_alert_acknowledgement(seller_id, actor_user_id=current_user.id)
+
+
+@router.get("/admin/trust-alerts/events", response_model=list[TrustAlertEventRead])
+def read_admin_trust_alert_events(
+    limit: int = 20,
+    current_user=Depends(require_admin_user),
+) -> list[TrustAlertEventRead]:
+    return list_admin_trust_alert_events(limit=limit)
+
+
+@router.get("/admin/trust-alerts/sellers", response_model=list[TrustAlertSellerSummaryRead])
+def read_admin_trust_alert_sellers(
+    limit: int = 8,
+    action: str | None = None,
+    current_user=Depends(require_admin_user),
+) -> list[TrustAlertSellerSummaryRead]:
+    return list_admin_trust_alert_seller_summaries(limit=limit, action=action)
 
 
 @router.post("/{delivery_id}/retry", response_model=NotificationDeliveryRead)

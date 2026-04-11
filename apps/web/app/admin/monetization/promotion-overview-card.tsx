@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   PROMOTION_LISTING_FOCUS_EVENT,
@@ -14,11 +14,83 @@ import { useMonetizationPreferences } from "@/app/admin/monetization/monetizatio
 import { usePromotionAnalytics } from "@/app/admin/monetization/promotion-analytics-context";
 import { formatPromotionListingTypeLabel } from "@/app/admin/monetization/promotion-formatting";
 const WINDOW_OPTIONS = [7, 14, 30] as const;
+const PROMOTION_OVERVIEW_ACTIVITY_KEY = "admin.promotion-overview.recent-activity";
+const PROMOTION_OVERVIEW_ACTIVITY_FILTER_KEY = "admin.promotion-overview.recent-activity-filter";
+const MAX_RECENT_ACTIVITY_ENTRIES = 4;
+
+type RecentActivityFilter = "all" | "focus" | "window";
+
+type PromotionOverviewRecentActivityEntry =
+  | {
+      id: string;
+      kind: "focus";
+      label: string;
+      detail: string;
+      createdAt: string;
+      type: PromotionListingTypeFilter;
+    }
+  | {
+      id: string;
+      kind: "window";
+      label: string;
+      detail: string;
+      createdAt: string;
+      windowDays: number;
+    };
 
 export default function PromotionOverviewCard() {
   const { preferences, setPromotionDashboard } = useMonetizationPreferences();
   const { summary, events, listingTypeById, status, error, lastUpdated } = usePromotionAnalytics();
   const { windowDays } = preferences.promotionDashboard;
+  const [recentActivity, setRecentActivity] = useState<PromotionOverviewRecentActivityEntry[]>([]);
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(PROMOTION_OVERVIEW_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as PromotionOverviewRecentActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setRecentActivity(parsed);
+      }
+    } catch {
+      window.sessionStorage.removeItem(PROMOTION_OVERVIEW_ACTIVITY_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const stored = window.sessionStorage.getItem(PROMOTION_OVERVIEW_ACTIVITY_FILTER_KEY);
+    if (stored === "all" || stored === "focus" || stored === "window") {
+      setRecentActivityFilter(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(PROMOTION_OVERVIEW_ACTIVITY_KEY, JSON.stringify(recentActivity));
+  }, [recentActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(PROMOTION_OVERVIEW_ACTIVITY_FILTER_KEY, recentActivityFilter);
+  }, [recentActivityFilter]);
 
   useEffect(() => {
     const handleFilterEvent = (event: Event) => {
@@ -85,7 +157,36 @@ export default function PromotionOverviewCard() {
     };
   }, [events, listingTypeById, summary, windowDays]);
 
+  const recordRecentActivity = (entry: Omit<PromotionOverviewRecentActivityEntry, "id" | "createdAt">) => {
+    setRecentActivity((current) =>
+      [
+        {
+          ...entry,
+          id: `${entry.kind}:${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        },
+        ...current,
+      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+    );
+  };
+
+  const setWindowDaysWithActivity = (nextWindowDays: number) => {
+    recordRecentActivity({
+      kind: "window",
+      label: `${nextWindowDays}d overview`,
+      detail: `${metrics.totalPromoted} promoted listings`,
+      windowDays: nextWindowDays,
+    });
+    setPromotionDashboard((current) => ({ ...current, windowDays: nextWindowDays as 7 | 14 | 30 }));
+  };
+
   const focusPromotedListings = (type: PromotionListingTypeFilter) => {
+    recordRecentActivity({
+      kind: "focus",
+      label: `Focused ${formatPromotionListingTypeLabel(type)}`,
+      detail: `${formatPromotionListingTypeLabel(type)} pressure`,
+      type,
+    });
     window.dispatchEvent(
       new CustomEvent(PROMOTION_LISTING_FOCUS_EVENT, {
         detail: { type },
@@ -107,23 +208,112 @@ export default function PromotionOverviewCard() {
         </div>
         <div className="rounded-full border border-border bg-background p-1">
           {WINDOW_OPTIONS.map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] transition ${
-                windowDays === option ? "bg-foreground text-background" : "text-foreground/66 hover:text-foreground"
-              }`}
-              onClick={() =>
-                setPromotionDashboard((current) => ({ ...current, windowDays: option }))
-              }
-            >
-              {option}d
-            </button>
-          ))}
-        </div>
+              <button
+                key={option}
+                type="button"
+                className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] transition ${
+                  windowDays === option ? "bg-foreground text-background" : "text-foreground/66 hover:text-foreground"
+                }`}
+                onClick={() => setWindowDaysWithActivity(option)}
+              >
+                {option}d
+              </button>
+            ))}
+          </div>
       </div>
 
       {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
+
+      {recentActivity.length > 0 ? (
+        <div className="mt-5 rounded-[1.8rem] border border-border/60 bg-background p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                Recent Activity
+              </p>
+              <p className="mt-2 text-sm text-foreground/72">
+                Re-open the last pressure focus or note the latest overview window you inspected.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
+              onClick={() => {
+                setRecentActivity([]);
+                window.sessionStorage.removeItem(PROMOTION_OVERVIEW_ACTIVITY_KEY);
+              }}
+            >
+              Clear history
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {([
+              ["all", "All"],
+              ["focus", "Focus"],
+              ["window", "Window"],
+            ] as const).map(([value, label]) => {
+              const filteredCount = recentActivity.filter(
+                (entry) => value === "all" || entry.kind === value,
+              ).length;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition ${
+                    recentActivityFilter === value
+                      ? "border-accent bg-accent text-white"
+                      : "border-border text-foreground hover:border-accent hover:text-accent"
+                  }`}
+                  onClick={() => setRecentActivityFilter(value)}
+                >
+                  {label} ({filteredCount})
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-4 space-y-2">
+            {recentActivity
+              .filter((entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter)
+              .map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-[1.1rem] border border-border bg-white px-4 py-3"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-foreground/58">
+                      {entry.kind === "focus" ? "Listing focus" : "Window"} · {entry.detail}
+                    </p>
+                  </div>
+                  {entry.kind === "focus" ? (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() => focusPromotedListings(entry.type)}
+                      type="button"
+                    >
+                      Re-open focus
+                    </button>
+                  ) : (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() => setWindowDaysWithActivity(entry.windowDays)}
+                      type="button"
+                    >
+                      Re-open window
+                    </button>
+                  )}
+                </div>
+              ))}
+          </div>
+          {recentActivity.filter((entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter).length === 0 ? (
+            <div className="mt-4 rounded-[1.1rem] border border-dashed border-border bg-white/55 px-4 py-4 text-sm leading-6 text-foreground/66">
+              {recentActivityFilter === "all"
+                ? "No recent promotion overview activity yet."
+                : `No ${recentActivityFilter} activity has been recorded in this session yet.`}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <OverviewStat label="Currently promoted" value={String(metrics.totalPromoted)} />

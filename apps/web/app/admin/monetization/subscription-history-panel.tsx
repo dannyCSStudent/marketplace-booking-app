@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   formatCurrency,
@@ -34,8 +34,12 @@ import {
 type ChangeDirection = SellerSubscriptionEventRead["action"];
 type DirectionFilter = SubscriptionHistoryDirection;
 type ReasonFilter = SubscriptionHistoryReason;
+type RecentActivityFilter = "all" | "assignment" | "export";
 
 const WINDOW_OPTIONS: SubscriptionHistoryWindowDays[] = [7, 14, 30];
+const SUBSCRIPTION_HISTORY_ACTIVITY_KEY = "admin.subscription-history.recent-activity";
+const SUBSCRIPTION_HISTORY_ACTIVITY_FILTER_KEY = "admin.subscription-history.recent-activity-filter";
+const MAX_RECENT_ACTIVITY_ENTRIES = 4;
 
 const DIRECTION_OPTIONS: Array<{ value: DirectionFilter; label: string }> = [
   { value: "all", label: "All changes" },
@@ -63,6 +67,31 @@ function getDirectionBadgeClass(direction: ChangeDirection) {
   return "border border-border bg-white text-foreground/62";
 }
 
+type SubscriptionHistoryRecentActivityEntry =
+  | {
+      id: string;
+      kind: "assignment";
+      label: string;
+      detail: string;
+      createdAt: string;
+      sellerSlug?: string;
+      tierId?: string;
+      tierName?: string;
+      reasonCode?: string;
+    }
+  | {
+      id: string;
+      kind: "export";
+      label: string;
+      detail: string;
+      createdAt: string;
+      windowDays: SubscriptionHistoryWindowDays;
+      direction: DirectionFilter;
+      reason: ReasonFilter;
+      destructiveOnly: boolean;
+      destructiveType: "all" | "value_drop" | "perk_removal";
+    };
+
 export default function SubscriptionHistoryPanel() {
   const { preferences, setSubscriptionHistory } = useMonetizationPreferences();
   const { subscriptions, events, tiers, status, error, lastUpdated, refresh } =
@@ -74,19 +103,138 @@ export default function SubscriptionHistoryPanel() {
     destructiveType,
     windowDays,
   } = preferences.subscriptionHistory;
+  const [recentActivity, setRecentActivity] = useState<SubscriptionHistoryRecentActivityEntry[]>([]);
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(SUBSCRIPTION_HISTORY_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as SubscriptionHistoryRecentActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setRecentActivity(parsed);
+      }
+    } catch {
+      window.sessionStorage.removeItem(SUBSCRIPTION_HISTORY_ACTIVITY_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const stored = window.sessionStorage.getItem(SUBSCRIPTION_HISTORY_ACTIVITY_FILTER_KEY);
+    if (stored === "all" || stored === "assignment" || stored === "export") {
+      setRecentActivityFilter(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SUBSCRIPTION_HISTORY_ACTIVITY_KEY,
+      JSON.stringify(recentActivity),
+    );
+  }, [recentActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      SUBSCRIPTION_HISTORY_ACTIVITY_FILTER_KEY,
+      recentActivityFilter,
+    );
+  }, [recentActivityFilter]);
+
+  const recentActivityCounts = useMemo(
+    () => ({
+      all: recentActivity.length,
+      assignment: recentActivity.filter((entry) => entry.kind === "assignment").length,
+      export: recentActivity.filter((entry) => entry.kind === "export").length,
+    }),
+    [recentActivity],
+  );
+  const filteredRecentActivity = useMemo(
+    () =>
+      recentActivity.filter(
+        (entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter,
+      ),
+    [recentActivity, recentActivityFilter],
+  );
+  const latestActivity = recentActivity[0] ?? null;
+
+  const recordRecentActivity = (
+    entry: Omit<SubscriptionHistoryRecentActivityEntry, "id" | "createdAt">,
+  ) => {
+    setRecentActivity((current) =>
+      [
+        {
+          ...entry,
+          id: `${entry.kind}:${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        },
+        ...current,
+      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+    );
+  };
 
   const openAssignmentView = (event: SellerSubscriptionEventRead) => {
+    const detail = {
+      sellerSlug: event.seller_slug || undefined,
+      tierId: event.to_tier_id || undefined,
+      tierName: event.to_tier_name || event.to_tier_code || undefined,
+      reasonCode: event.reason_code ?? undefined,
+    };
+
+    recordRecentActivity({
+      kind: "assignment",
+      label: event.seller_display_name || event.seller_slug || event.seller_id,
+      detail: `${event.action} · ${formatSubscriptionReasonLabel(event.reason_code)}`,
+      sellerSlug: detail.sellerSlug,
+      tierId: detail.tierId,
+      tierName: detail.tierName,
+      reasonCode: detail.reasonCode,
+    });
+
+    highlightMonetizationSection("subscription-assignment-panel");
+    window.dispatchEvent(
+      new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, {
+        detail,
+      }),
+    );
+  };
+
+  const openRecentAssignmentView = (entry: SubscriptionHistoryRecentActivityEntry) => {
+    if (entry.kind !== "assignment") {
+      return;
+    }
+
+    highlightMonetizationSection("subscription-assignment-panel");
     window.dispatchEvent(
       new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, {
         detail: {
-          sellerSlug: event.seller_slug || undefined,
-          tierId: event.to_tier_id || undefined,
-          tierName: event.to_tier_name || event.to_tier_code || undefined,
-          reasonCode: event.reason_code ?? undefined,
+          sellerSlug: entry.sellerSlug,
+          tierId: entry.tierId,
+          tierName: entry.tierName,
+          reasonCode: entry.reasonCode,
         },
       }),
     );
   };
+
   const exportFilteredChanges = () => {
     const rows = summary.filteredChanges.map((event) => {
       const eventId = event.id ?? `${event.seller_id}-${event.to_tier_id}-${event.created_at ?? "row"}`;
@@ -134,6 +282,20 @@ export default function SubscriptionHistoryPanel() {
     link.download = "subscription-history.csv";
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const runExport = () => {
+    recordRecentActivity({
+      kind: "export",
+      label: `Exported ${summary.filteredChanges.length} changes`,
+      detail: `${windowDays}d · ${formatSubscriptionDirectionLabel(directionFilter)} · ${formatSubscriptionReasonLabel(reasonFilter)}`,
+      windowDays,
+      direction: directionFilter,
+      reason: reasonFilter,
+      destructiveOnly,
+      destructiveType,
+    });
+    exportFilteredChanges();
   };
 
   useEffect(() => {
@@ -243,14 +405,14 @@ export default function SubscriptionHistoryPanel() {
         return;
       }
       highlightMonetizationSection("subscription-history-panel");
-      exportFilteredChanges();
+      runExport();
     };
 
     window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [summary]);
+  }, [destructiveOnly, destructiveType, directionFilter, reasonFilter, runExport, summary, windowDays]);
 
   return (
     <section
@@ -292,7 +454,7 @@ export default function SubscriptionHistoryPanel() {
             type="button"
             disabled={summary.filteredChanges.length === 0}
             className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90 disabled:border-border/30 disabled:text-foreground/40"
-            onClick={exportFilteredChanges}
+            onClick={runExport}
           >
             Export CSV
           </button>
@@ -312,6 +474,93 @@ export default function SubscriptionHistoryPanel() {
       </div>
 
       {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
+
+      {recentActivity.length > 0 ? (
+        <div className="mt-5 rounded-[1.4rem] border border-border/60 bg-background px-4 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                Recent Activity
+              </p>
+              <p className="mt-2 text-sm text-foreground/72">
+                Re-open the last assignment target or rerun the latest exported filter slice.
+              </p>
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground/52">
+                {latestActivity.label} · {latestActivity.detail}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
+              onClick={() => {
+                setRecentActivity([]);
+                window.sessionStorage.removeItem(SUBSCRIPTION_HISTORY_ACTIVITY_KEY);
+              }}
+            >
+              Clear history
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {([
+              ["all", "All"],
+              ["assignment", "Assignment"],
+              ["export", "Export"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition ${
+                  recentActivityFilter === value
+                    ? "border-accent bg-accent text-white"
+                    : "border-border text-foreground hover:border-accent hover:text-accent"
+                }`}
+                onClick={() => setRecentActivityFilter(value)}
+              >
+                {label} ({recentActivityCounts[value]})
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 space-y-2">
+            {filteredRecentActivity.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-[1.1rem] border border-border bg-white px-4 py-3"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                  <p className="mt-1 text-xs uppercase tracking-[0.14em] text-foreground/58">
+                    {entry.kind === "assignment" ? "Assignment" : "Export"} · {entry.detail}
+                  </p>
+                </div>
+                {entry.kind === "assignment" ? (
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={() => openRecentAssignmentView(entry)}
+                    type="button"
+                  >
+                    Re-open assignment
+                  </button>
+                ) : (
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={runExport}
+                    type="button"
+                  >
+                    Re-export slice
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          {filteredRecentActivity.length === 0 ? (
+            <div className="mt-4 rounded-[1.1rem] border border-dashed border-border bg-white/55 px-4 py-4 text-sm leading-6 text-foreground/66">
+              {recentActivityFilter === "all"
+                ? "No recent subscription actions yet."
+                : `No ${recentActivityFilter} activity has been recorded in this session yet.`}
+            </div>
+          ) : null}
+          </div>
+      ) : null}
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <HistoryStat label="Started in last 7d" value={String(summary.startedThisWeek)} />

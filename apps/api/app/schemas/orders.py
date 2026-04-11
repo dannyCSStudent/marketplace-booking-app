@@ -15,6 +15,8 @@ class OrderItemRead(BaseModel):
     unit_price_cents: int
     total_price_cents: int
     listing_title: str | None = None
+    listing_type: str | None = None
+    is_local_only: bool | None = None
 
 class OrderCreate(BaseModel):
     seller_id: str
@@ -26,6 +28,17 @@ class OrderCreate(BaseModel):
 class OrderStatusUpdate(BaseModel):
     status: str
     seller_response_note: str | None = None
+
+
+class OrderResponseAiAssistSuggestion(BaseModel):
+    suggested_note: str
+    summary: str
+
+
+class OrderResponseAiAssistResponse(BaseModel):
+    transaction_kind: str
+    transaction_id: str
+    suggestion: OrderResponseAiAssistSuggestion
 
 
 class OrderBulkStatusUpdateItem(BaseModel):

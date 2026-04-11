@@ -2,7 +2,13 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { getBuyerDeliveryRetryMode, setBuyerDeliveryRetryMode } from '@/lib/session-storage';
+import {
+  clearBuyerRecentNotificationDeliveries,
+  getBuyerDeliveryRetryMode,
+  getBuyerRecentNotificationDeliveries,
+  setBuyerDeliveryRetryMode,
+  setBuyerRecentNotificationDeliveries,
+} from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
 function formatRetryMode(mode: 'best_effort' | 'atomic') {
@@ -23,7 +29,35 @@ export default function NotificationDeliveryDetailScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionDetails, setActionDetails] = useState<string[]>([]);
   const [deliveryRetryMode, setDeliveryRetryModeState] = useState<'best_effort' | 'atomic'>('best_effort');
+  const [recentNotificationDeliveryIds, setRecentNotificationDeliveryIds] = useState<string[]>([]);
   const delivery = notificationDeliveries.find((item) => item.id === id);
+  const latestRecentNotificationDeliveryId = recentNotificationDeliveryIds.find(
+    (item) => item !== id,
+  ) ?? null;
+  const hasRecentNotificationHistory = recentNotificationDeliveryIds.some((item) => item !== id);
+  const latestRecentNotificationDelivery = latestRecentNotificationDeliveryId
+    ? notificationDeliveries.find((item) => item.id === latestRecentNotificationDeliveryId) ?? null
+    : null;
+
+  useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerRecentNotificationDeliveries();
+      if (!storedValue) {
+        return;
+      }
+
+      try {
+        const storedRecentDeliveries = JSON.parse(storedValue) as string[];
+        if (Array.isArray(storedRecentDeliveries)) {
+          setRecentNotificationDeliveryIds(
+            storedRecentDeliveries.filter((item) => typeof item === 'string'),
+          );
+        }
+      } catch {
+        // Ignore corrupted recent-delivery state.
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -32,9 +66,36 @@ export default function NotificationDeliveryDetailScreen() {
     })();
   }, []);
 
+  useEffect(() => {
+    if (!delivery) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const nextIds = [delivery.id, ...recentNotificationDeliveryIds.filter((item) => item !== delivery.id)].slice(0, 4);
+        setRecentNotificationDeliveryIds(nextIds);
+        await setBuyerRecentNotificationDeliveries(JSON.stringify(nextIds));
+      } catch {
+        // Ignore unavailable recent-delivery state.
+      }
+    })();
+  }, [delivery, recentNotificationDeliveryIds]);
+
   function setDeliveryRetryMode(mode: 'best_effort' | 'atomic') {
     setDeliveryRetryModeState(mode);
     void setBuyerDeliveryRetryMode(mode);
+  }
+
+  function openLatestSavedDelivery() {
+    if (!latestRecentNotificationDeliveryId) {
+      return;
+    }
+
+    router.push({
+      pathname: '/notifications/[id]',
+      params: { id: latestRecentNotificationDeliveryId },
+    });
   }
 
   if (!delivery) {
@@ -138,6 +199,24 @@ export default function NotificationDeliveryDetailScreen() {
           {new Date(delivery.created_at).toLocaleString()} • {delivery.delivery_status} • attempts{' '}
           {delivery.attempts}
         </Text>
+        {hasRecentNotificationHistory ? (
+          <View style={styles.heroResume}>
+            <Text style={styles.heroCue}>Saved delivery history available</Text>
+            <Text style={styles.heroResumeText}>
+              {latestRecentNotificationDelivery
+                ? `${latestRecentNotificationDelivery.channel} · ${latestRecentNotificationDelivery.delivery_status}`
+                : 'A prior delivery is cached in this session.'}
+            </Text>
+            {latestRecentNotificationDelivery ? (
+              <Pressable style={styles.heroResumeAction} onPress={openLatestSavedDelivery}>
+                <Text style={styles.heroResumeActionText}>
+                  Open latest delivery · {latestRecentNotificationDelivery.channel} ·{' '}
+                  {latestRecentNotificationDelivery.delivery_status}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
       {actionError ? <Text style={styles.feedbackError}>{actionError}</Text> : null}
@@ -176,6 +255,63 @@ export default function NotificationDeliveryDetailScreen() {
                 Validate First
               </Text>
             </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {recentNotificationDeliveryIds.length > 0 ? (
+        <View style={styles.panel}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Recently Opened Deliveries</Text>
+            <Pressable
+              style={styles.inlineAction}
+              onPress={async () => {
+                setRecentNotificationDeliveryIds([]);
+                await clearBuyerRecentNotificationDeliveries();
+              }}>
+              <Text style={styles.inlineActionText}>Clear saved delivery history</Text>
+            </Pressable>
+          </View>
+          {latestRecentNotificationDeliveryId ? (
+            <Pressable
+              style={styles.inlineAction}
+              onPress={() =>
+                router.push({
+                  pathname: '/notifications/[id]',
+                  params: { id: latestRecentNotificationDeliveryId },
+                })
+              }>
+              <Text style={styles.inlineActionText}>
+                Open latest delivery
+                {latestRecentNotificationDelivery
+                  ? ` · ${latestRecentNotificationDelivery.channel} · ${latestRecentNotificationDelivery.delivery_status}`
+                  : ''}
+              </Text>
+            </Pressable>
+          ) : null}
+          <View style={styles.recentList}>
+            {recentNotificationDeliveryIds
+              .map((itemId) => notificationDeliveries.find((item) => item.id === itemId))
+              .filter((item): item is (typeof notificationDeliveries)[number] => Boolean(item))
+              .map((recentDelivery) => (
+                <Pressable
+                  key={recentDelivery.id}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/notifications/[id]',
+                      params: { id: recentDelivery.id },
+                    })
+                  }
+                  style={styles.recentCard}>
+                  <Text style={styles.linkTitle}>
+                    {recentDelivery.channel} · {recentDelivery.delivery_status}
+                  </Text>
+                  <Text style={styles.linkMeta}>
+                    {new Date(recentDelivery.created_at).toLocaleString()} · attempts {recentDelivery.attempts}
+                  </Text>
+                  <Text style={styles.copy}>{getRecipientTarget(recentDelivery.payload)}</Text>
+                </Pressable>
+              ))}
           </View>
         </View>
       ) : null}
@@ -346,6 +482,40 @@ const styles = StyleSheet.create({
     padding: 22,
     gap: 10,
   },
+  heroCue: {
+    color: '#d7f0d1',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  heroResume: {
+    gap: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#355a35',
+    backgroundColor: '#274227',
+    padding: 14,
+  },
+  heroResumeText: {
+    color: '#d9f0d2',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  heroResumeAction: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: '#f4b24f',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  heroResumeActionText: {
+    color: '#1f2319',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
   eyebrow: {
     color: '#d7f0d1',
     fontSize: 11,
@@ -380,6 +550,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  recentList: {
+    gap: 10,
+  },
+  recentCard: {
+    backgroundColor: '#fbf4e4',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e4d6bf',
+    gap: 6,
+    padding: 14,
   },
   modeBadge: {
     alignSelf: 'flex-start',

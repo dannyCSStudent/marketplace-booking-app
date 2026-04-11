@@ -9,6 +9,8 @@ from fastapi import HTTPException, status
 from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
+from app.services.notification_delivery_worker import process_notification_delivery_rows
+from app.services.sellers import get_seller_by_id, get_seller_by_slug
 from app.schemas.listings import (
     ListingAiAssistRequest,
     ListingAiAssistResponse,
@@ -21,7 +23,9 @@ from app.schemas.listings import (
     ListingPriceInsight,
     ListingQueryParams,
     ListingRead,
+    ListingBookingSuggestionRead,
     ListingUpdate,
+    SellerListingSummaryRead,
 )
 from app.services.platform_fees import get_active_platform_fee_rate_value
 
@@ -29,7 +33,7 @@ LISTING_IMAGE_SELECT = "id,listing_id,image_url,alt_text,sort_order,created_at"
 LISTING_SELECT = (
     "id,seller_id,category_id,title,slug,description,type,status,price_cents,currency,"
     "inventory_count,requires_booking,duration_minutes,is_local_only,city,state,country,"
-    "pickup_enabled,meetup_enabled,delivery_enabled,shipping_enabled,is_promoted,lead_time_hours,"
+    "pickup_enabled,meetup_enabled,delivery_enabled,shipping_enabled,is_promoted,auto_accept_bookings,lead_time_hours,"
     "created_at,updated_at,last_operating_adjustment_at,last_operating_adjustment_summary,"
     "last_pricing_comparison_scope,"
     "category:categories(name),"
@@ -105,6 +109,133 @@ def _build_operating_adjustment_summary(
         return None
 
     return "Updated " + ", ".join(changed_labels[:3])
+
+
+def _inventory_alert_bucket(inventory_count: int | None) -> str | None:
+    if inventory_count is None:
+        return None
+    if inventory_count <= 0:
+        return "out_of_stock"
+    if inventory_count <= 5:
+        return "low_stock"
+    return None
+
+
+def _inventory_alert_subject(listing: ListingRead, inventory_bucket: str) -> str:
+    if inventory_bucket == "out_of_stock":
+        return f"Out of stock: {listing.title}"
+    return f"Low inventory: {listing.title}"
+
+
+def _inventory_alert_body(listing: ListingRead, inventory_count: int) -> str:
+    if inventory_count <= 0:
+        return f"{listing.title} is out of stock."
+    return f"{listing.title} has {inventory_count} item{'' if inventory_count == 1 else 's'} left in stock."
+
+
+def _inventory_alert_signature(listing_id: str, inventory_bucket: str) -> str:
+    return f"listing-inventory-alert:{listing_id}:{inventory_bucket}"
+
+
+def _queue_inventory_alert_notification(
+    *,
+    listing: ListingRead,
+    previous_inventory_count: int | None,
+    supabase,
+) -> None:
+    current_bucket = _inventory_alert_bucket(listing.inventory_count)
+    previous_bucket = _inventory_alert_bucket(previous_inventory_count)
+    if current_bucket is None or current_bucket == previous_bucket:
+        return
+
+    try:
+        seller = get_seller_by_id(listing.seller_id)
+    except HTTPException:
+        return
+
+    alert_signature = _inventory_alert_signature(listing.id, current_bucket)
+    try:
+        existing = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "id",
+                "event_id": f"eq.{alert_signature}",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        existing = []
+
+    if existing:
+        return
+
+    subject = _inventory_alert_subject(listing, current_bucket)
+    body = _inventory_alert_body(listing, listing.inventory_count or 0)
+    html = (
+        f"<p>Inventory alert for <strong>{listing.title}</strong>.</p>"
+        f"<p><strong>Status:</strong> {current_bucket.replace('_', ' ')}</p>"
+        f"<p><strong>Remaining:</strong> {listing.inventory_count if listing.inventory_count is not None else 'untracked'}</p>"
+    )
+
+    deliveries = [
+        {
+            "recipient_user_id": seller.user_id,
+            "transaction_kind": "listing",
+            "transaction_id": listing.id,
+            "event_id": alert_signature,
+            "channel": "email",
+            "delivery_status": "queued",
+            "payload": {
+                "alert_type": "inventory_alert",
+                "seller_id": seller.id,
+                "seller_slug": seller.slug,
+                "seller_display_name": seller.display_name,
+                "listing_id": listing.id,
+                "listing_slug": listing.slug,
+                "listing_title": listing.title,
+                "inventory_count": listing.inventory_count,
+                "inventory_bucket": current_bucket,
+                "alert_signature": alert_signature,
+                "subject": subject,
+                "body": body,
+                "html": html,
+            },
+        },
+        {
+            "recipient_user_id": seller.user_id,
+            "transaction_kind": "listing",
+            "transaction_id": listing.id,
+            "event_id": alert_signature,
+            "channel": "push",
+            "delivery_status": "queued",
+            "payload": {
+                "alert_type": "inventory_alert",
+                "seller_id": seller.id,
+                "seller_slug": seller.slug,
+                "seller_display_name": seller.display_name,
+                "listing_id": listing.id,
+                "listing_slug": listing.slug,
+                "listing_title": listing.title,
+                "inventory_count": listing.inventory_count,
+                "inventory_bucket": current_bucket,
+                "alert_signature": alert_signature,
+                "subject": subject,
+                "body": body,
+                "html": html,
+            },
+        },
+    ]
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if inserted_rows:
+        try:
+            process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
 
 
 def _fetch_seller_profile_row(current_user: CurrentUser, supabase) -> dict[str, object] | None:
@@ -599,12 +730,114 @@ def _attach_recent_transaction_counts(rows: list[dict[str, object]], supabase) -
 
 
 def list_public_listings(params: ListingQueryParams) -> ListingListResponse:
+    return _list_public_listings(params)
+
+
+def list_public_listings_by_seller_slug(slug: str, params: ListingQueryParams | None = None) -> ListingListResponse:
+    seller = get_seller_by_slug(slug)
+    return _list_public_listings(params or ListingQueryParams(), seller_id=seller.id)
+
+
+def get_seller_listing_summary_by_slug(slug: str) -> SellerListingSummaryRead:
+    supabase = get_supabase_client()
+    seller = get_seller_by_slug(slug)
+
+    try:
+        rows = supabase.select(
+            "listings",
+            query={
+                "select": "id,type,status,price_cents,requires_booking,is_local_only,lead_time_hours,is_promoted",
+                "seller_id": f"eq.{seller.id}",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    listing_ids = [row["id"] for row in rows if row.get("id")]
+    available_today_ids = _fetch_today_availability(listing_ids, supabase)
+
+    product_count = 0
+    service_count = 0
+    hybrid_count = 0
+    active_count = 0
+    draft_count = 0
+    promoted_count = 0
+    available_today_count = 0
+    quick_booking_count = 0
+    local_only_count = 0
+    price_surface_cents = 0
+
+    for row in rows:
+        listing_type = str(row.get("type") or "")
+        status = str(row.get("status") or "")
+        price_cents = row.get("price_cents")
+        requires_booking = bool(row.get("requires_booking"))
+        lead_time_hours = row.get("lead_time_hours")
+        is_local_only = bool(row.get("is_local_only", True))
+        is_promoted = bool(row.get("is_promoted"))
+        is_available_today = row.get("id") in available_today_ids
+
+        if listing_type == "product":
+            product_count += 1
+        elif listing_type == "service":
+            service_count += 1
+        elif listing_type == "hybrid":
+            hybrid_count += 1
+
+        if status == "active":
+            active_count += 1
+        elif status == "draft":
+            draft_count += 1
+
+        if is_promoted:
+            promoted_count += 1
+
+        if is_available_today:
+            available_today_count += 1
+
+        supports_booking = bool(requires_booking or listing_type != "product")
+        if supports_booking and (
+            is_available_today
+            or lead_time_hours == 0
+            or (isinstance(lead_time_hours, int) and lead_time_hours <= 4)
+        ):
+            quick_booking_count += 1
+
+        if is_local_only:
+            local_only_count += 1
+
+        if isinstance(price_cents, int):
+            price_surface_cents += price_cents
+    return SellerListingSummaryRead(
+        seller_id=seller.id,
+        total=len(rows),
+        product_count=product_count,
+        service_count=service_count,
+        hybrid_count=hybrid_count,
+        active_count=active_count,
+        draft_count=draft_count,
+        promoted_count=promoted_count,
+        available_today_count=available_today_count,
+        quick_booking_count=quick_booking_count,
+        local_only_count=local_only_count,
+        price_surface_cents=price_surface_cents,
+    )
+
+
+def _list_public_listings(
+    params: ListingQueryParams,
+    *,
+    seller_id: str | None = None,
+) -> ListingListResponse:
     supabase = get_supabase_client()
     query = {
         "select": LISTING_SELECT,
         "status": "eq.active",
         "order": "created_at.desc",
     }
+    if seller_id:
+        query["seller_id"] = f"eq.{seller_id}"
     if params.type:
         query["type"] = f"eq.{params.type}"
     if params.category:
@@ -620,8 +853,20 @@ def list_public_listings(params: ListingQueryParams) -> ListingListResponse:
             f"slug.ilike.*{escaped_query}*"
         )
 
+    count_query = {
+        key: value
+        for key, value in query.items()
+        if key != "select" and key not in {"limit", "offset"}
+    }
+    count_query["select"] = "id"
+    if params.limit is not None:
+        query["limit"] = str(params.limit)
+    if params.offset is not None:
+        query["offset"] = str(params.offset)
+
     try:
         rows = supabase.select("listings", query=query, use_service_role=True)
+        count_rows = supabase.select("listings", query=count_query, use_service_role=True)
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
@@ -632,7 +877,12 @@ def list_public_listings(params: ListingQueryParams) -> ListingListResponse:
     _attach_priority_visibility(rows, supabase)
     rows.sort(key=_listing_sort_key)
     items = [_to_listing_read(row) for row in rows]
-    return ListingListResponse(items=items, total=len(items))
+    return ListingListResponse(
+        items=items,
+        total=len(count_rows),
+        limit=params.limit,
+        offset=params.offset,
+    )
 
 
 def list_pricing_scope_counts() -> list[dict[str, object]]:
@@ -658,6 +908,38 @@ def list_pricing_scope_counts() -> list[dict[str, object]]:
         {"scope": scope, "count": count}
         for scope, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
     ]
+
+
+def list_pricing_scope_listings(scope: str) -> list[ListingRead]:
+    supabase = get_supabase_client()
+    normalized_scope = scope.strip() or "Uncategorized"
+    query = {
+        "select": LISTING_SELECT,
+        "status": "eq.active",
+        "order": "created_at.desc",
+    }
+
+    if normalized_scope == "Uncategorized":
+        query["last_pricing_comparison_scope"] = "is.null"
+    else:
+        query["last_pricing_comparison_scope"] = f"eq.{normalized_scope}"
+
+    try:
+        rows = supabase.select(
+            "listings",
+            query=query,
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    reference_time = datetime.now(timezone.utc)
+    _attach_available_today(rows, supabase)
+    _attach_recent_transaction_counts(rows, supabase)
+    _attach_new_listing_flag(rows, reference_time)
+    _attach_priority_visibility(rows, supabase)
+    rows.sort(key=_listing_sort_key)
+    return [_to_listing_read(row) for row in rows]
 
 def get_admin_listings() -> list[ListingRead]:
     supabase = get_supabase_client()
@@ -766,6 +1048,33 @@ def generate_listing_ai_assist(
     return ListingAiAssistResponse(listing_id=payload.listing_id, suggestion=suggestion)
 
 
+def build_booking_schedule_suggestion(listing: ListingRead) -> ListingBookingSuggestionRead:
+    lead_time_hours = listing.lead_time_hours if listing.lead_time_hours is not None else 24
+    if listing.available_today and lead_time_hours <= 24:
+        suggested_day_offset = 0
+        suggested_label = "Soonest"
+        rationale = "This listing can likely fit a same-day window while respecting lead time."
+    else:
+        suggested_day_offset = max(1, (lead_time_hours + 23) // 24)
+        suggested_label = "Tomorrow" if suggested_day_offset == 1 else f"In {suggested_day_offset} days"
+        rationale = f"Lead time requires at least {lead_time_hours} hours before the booking starts."
+
+    summary = (
+        f"Suggesting the {suggested_label.lower()} window because "
+        f"{'the listing is available today' if listing.available_today else 'the seller is not available today'}."
+    )
+    if listing.duration_minutes:
+        summary += f" The service runs for {listing.duration_minutes} minutes."
+
+    return ListingBookingSuggestionRead(
+        listing_id=listing.id,
+        suggested_day_offset=suggested_day_offset,
+        suggested_label=suggested_label,
+        summary=summary,
+        rationale=rationale,
+    )
+
+
 def get_listing_price_insight(
     current_user: CurrentUser,
     listing_id: str,
@@ -806,7 +1115,13 @@ def create_listing(current_user: CurrentUser, payload: ListingCreate) -> Listing
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    return _to_listing_read(rows[0])
+    listing = _to_listing_read(rows[0])
+    _queue_inventory_alert_notification(
+        listing=listing,
+        previous_inventory_count=None,
+        supabase=supabase,
+    )
+    return listing
 
 def update_listing(current_user: CurrentUser, listing_id: str, payload: ListingUpdate) -> ListingRead:
     supabase = get_supabase_client()
@@ -858,7 +1173,16 @@ def update_listing(current_user: CurrentUser, listing_id: str, payload: ListingU
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Listing not found")
 
-    return _to_listing_read(rows[0])
+    listing = _to_listing_read(rows[0])
+    previous_inventory_count = current_row.get("inventory_count")
+    if not isinstance(previous_inventory_count, int):
+        previous_inventory_count = None
+    _queue_inventory_alert_notification(
+        listing=listing,
+        previous_inventory_count=previous_inventory_count,
+        supabase=supabase,
+    )
+    return listing
 
 
 def set_listing_promotion(listing_id: str, promoted: bool) -> ListingRead:
@@ -892,7 +1216,7 @@ def list_promoted_listings(limit: int = 5) -> list[dict[str, object]]:
         rows = supabase.select(
             "listings",
             query={
-                "select": "id,title,seller_id",
+                "select": "id,title,seller_id,type",
                 "is_promoted": "eq.true",
                 "order": "updated_at.desc",
                 "limit": str(limit),

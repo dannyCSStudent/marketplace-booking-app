@@ -3,7 +3,16 @@ import { useRouter } from 'expo-router';
 import { Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { formatCurrency, formatLocation } from '@/lib/api';
-import { getBuyerBrowseFilters, setBuyerBrowseFilters } from '@/lib/session-storage';
+import {
+  clearBuyerBrowseResumeFilters,
+  getBuyerBrowseFilters,
+  getBuyerBrowseResumeFilters,
+  getBuyerRecentListings,
+  getBuyerRecentTransactionReceipts,
+  setBuyerBrowseFilters,
+  setBuyerBrowseResumeFilters,
+  setBuyerRecentListings,
+} from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
 const typeColors = {
@@ -223,6 +232,71 @@ function getLocationSummary(
   return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null;
 }
 
+type BuyerBrowseSnapshot = {
+  searchQuery?: string;
+  categoryFilter?: string;
+  typeFilter?: 'all' | 'product' | 'service' | 'hybrid';
+  sortMode?: 'newest' | 'price-low' | 'price-high';
+  localOnly?: boolean;
+  availableToday?: boolean;
+  popularOnly?: boolean;
+};
+
+function applyBuyerBrowseSnapshot(
+  snapshot: BuyerBrowseSnapshot,
+  setters: {
+    setSearchQuery: (value: string) => void;
+    setCategoryFilter: (value: string) => void;
+    setTypeFilter: (value: 'all' | 'product' | 'service' | 'hybrid') => void;
+    setSortMode: (value: 'newest' | 'price-low' | 'price-high') => void;
+    setLocalOnly: (value: boolean) => void;
+    setAvailableToday: (value: boolean) => void;
+    setPopularOnly: (value: boolean) => void;
+  },
+) {
+  setters.setSearchQuery(snapshot.searchQuery ?? '');
+  setters.setCategoryFilter(snapshot.categoryFilter ?? '');
+  setters.setTypeFilter(snapshot.typeFilter ?? 'all');
+  setters.setSortMode(snapshot.sortMode ?? 'newest');
+  setters.setLocalOnly(snapshot.localOnly ?? false);
+  setters.setAvailableToday(snapshot.availableToday ?? false);
+  setters.setPopularOnly(snapshot.popularOnly ?? false);
+}
+
+function getBrowseSliceSummary(snapshot: BuyerBrowseSnapshot | null) {
+  if (!snapshot) {
+    return null;
+  }
+
+  const parts = [
+    formatTypeFilter(snapshot.typeFilter ?? 'all'),
+    snapshot.categoryFilter?.trim() || null,
+    formatSortMode(snapshot.sortMode ?? 'newest'),
+    snapshot.localOnly ? 'Local only' : null,
+    snapshot.availableToday ? 'Available today' : null,
+    snapshot.popularOnly ? 'Popular near you' : null,
+    snapshot.searchQuery?.trim() ? `Search: ${snapshot.searchQuery.trim()}` : null,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function getBrowseSnapshotKey(snapshot: BuyerBrowseSnapshot | null) {
+  if (!snapshot) {
+    return null;
+  }
+
+  return JSON.stringify({
+    searchQuery: snapshot.searchQuery?.trim() || '',
+    categoryFilter: snapshot.categoryFilter?.trim() || '',
+    typeFilter: snapshot.typeFilter ?? 'all',
+    sortMode: snapshot.sortMode ?? 'newest',
+    localOnly: snapshot.localOnly ?? false,
+    availableToday: snapshot.availableToday ?? false,
+    popularOnly: snapshot.popularOnly ?? false,
+  });
+}
+
 function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }) {
   return listing.images?.[0]?.image_url ?? null;
 }
@@ -370,7 +444,17 @@ function getRecommendationScore(
 }
 
 export default function BrowseScreen() {
-  const { listings, orders, bookings, refreshMarketplace, refreshing, error } = useBuyerSession();
+  const {
+    listings,
+    orders,
+    bookings,
+    refreshMarketplace,
+    loadMoreListings,
+    hasMoreListings,
+    loadingMoreListings,
+    refreshing,
+    error,
+  } = useBuyerSession();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -380,6 +464,10 @@ export default function BrowseScreen() {
   const [availableToday, setAvailableToday] = useState(false);
   const [popularOnly, setPopularOnly] = useState(false);
   const [filtersRestored, setFiltersRestored] = useState(false);
+  const [resumeBrowseFilters, setResumeBrowseFiltersState] = useState<BuyerBrowseSnapshot | null>(null);
+  const [resumeFiltersRestored, setResumeFiltersRestored] = useState(false);
+  const [recentListingIds, setRecentListingIds] = useState<string[]>([]);
+  const [recentTransactionReceiptIds, setRecentTransactionReceiptIds] = useState<string[]>([]);
   const hasActiveBrowseFilters =
     searchQuery.trim().length > 0 ||
     categoryFilter.trim().length > 0 ||
@@ -392,6 +480,44 @@ export default function BrowseScreen() {
   useEffect(() => {
     void refreshMarketplace();
   }, [refreshMarketplace]);
+
+  useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerRecentListings();
+      if (!storedValue) {
+        return;
+      }
+
+      try {
+        const storedRecentListings = JSON.parse(storedValue) as string[];
+        if (Array.isArray(storedRecentListings)) {
+          setRecentListingIds(storedRecentListings.filter((item) => typeof item === 'string'));
+        }
+      } catch {
+        // Ignore corrupted recent listing state.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerRecentTransactionReceipts();
+      if (!storedValue) {
+        return;
+      }
+
+      try {
+        const storedRecentReceipts = JSON.parse(storedValue) as string[];
+        if (Array.isArray(storedRecentReceipts)) {
+          setRecentTransactionReceiptIds(
+            storedRecentReceipts.filter((item) => typeof item === 'string'),
+          );
+        }
+      } catch {
+        // Ignore corrupted recent-receipt state.
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -428,21 +554,55 @@ export default function BrowseScreen() {
   }, []);
 
   useEffect(() => {
+    void (async () => {
+      const storedValue = await getBuyerBrowseResumeFilters();
+      if (!storedValue) {
+        setResumeFiltersRestored(true);
+        return;
+      }
+
+      try {
+        const storedFilters = JSON.parse(storedValue) as BuyerBrowseSnapshot;
+        setResumeBrowseFiltersState(storedFilters);
+      } catch {
+        // Ignore corrupted resume state and fall back to no saved slice.
+      } finally {
+        setResumeFiltersRestored(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     if (!filtersRestored) {
       return;
     }
 
-    void setBuyerBrowseFilters(
-      JSON.stringify({
-        searchQuery,
-        categoryFilter,
-        typeFilter,
-        sortMode,
-        localOnly,
-        availableToday,
-        popularOnly,
-      }),
-    );
+    const snapshot: BuyerBrowseSnapshot = {
+      searchQuery,
+      categoryFilter,
+      typeFilter,
+      sortMode,
+      localOnly,
+      availableToday,
+      popularOnly,
+    };
+
+    void setBuyerBrowseFilters(JSON.stringify(snapshot));
+
+    if (
+      searchQuery.trim().length > 0 ||
+      categoryFilter.trim().length > 0 ||
+      typeFilter !== 'all' ||
+      sortMode !== 'newest' ||
+      localOnly ||
+      availableToday ||
+      popularOnly
+    ) {
+      void setBuyerBrowseResumeFilters(JSON.stringify(snapshot));
+      if (resumeBrowseFilters?.searchQuery !== snapshot.searchQuery) {
+        setResumeBrowseFiltersState(snapshot);
+      }
+    }
   }, [
     filtersRestored,
     localOnly,
@@ -452,6 +612,7 @@ export default function BrowseScreen() {
     typeFilter,
     availableToday,
     popularOnly,
+    resumeBrowseFilters,
   ]);
   const recommendedPreset = useMemo(
     () => getRecommendedBrowsePreset({ listings, orders, bookings }),
@@ -555,6 +716,48 @@ export default function BrowseScreen() {
     popularOnly,
     baseLocationLabel,
   ]);
+  const recentlyViewedListings = useMemo(
+    () =>
+      recentListingIds
+        .map((listingId) => listings.find((listing) => listing.id === listingId))
+        .filter((listing): listing is (typeof listings)[number] => Boolean(listing)),
+    [listings, recentListingIds],
+  );
+  const recentTransactionReceipts = useMemo(
+    () =>
+      recentTransactionReceiptIds
+        .map((itemKey) => {
+          const [itemKind, itemId] = itemKey.split(':');
+          const matchingOrder = itemKind === 'order' ? orders.find((item) => item.id === itemId) : null;
+          const matchingBooking =
+            itemKind === 'booking' ? bookings.find((item) => item.id === itemId) : null;
+
+          if (matchingOrder) {
+            return {
+              kind: 'order' as const,
+              id: matchingOrder.id,
+              label: 'Order',
+              meta: matchingOrder.status,
+            };
+          }
+
+          if (matchingBooking) {
+            return {
+              kind: 'booking' as const,
+              id: matchingBooking.id,
+              label: 'Booking',
+              meta: matchingBooking.status,
+            };
+          }
+
+          return null;
+        })
+        .filter(
+          (item): item is { kind: 'order' | 'booking'; id: string; label: string; meta: string } =>
+            Boolean(item),
+        ),
+    [bookings, orders, recentTransactionReceiptIds],
+  );
   const dominantLocation = useMemo(
     () => getLocationSummary(filteredListings),
     [filteredListings],
@@ -578,6 +781,47 @@ export default function BrowseScreen() {
     () => getSuggestedSearches(filteredListings.length > 0 ? filteredListings : listings, normalizedSearchQuery),
     [filteredListings, listings, normalizedSearchQuery],
   );
+  const resumeBrowseSummary = useMemo(
+    () => getBrowseSliceSummary(resumeBrowseFilters),
+    [resumeBrowseFilters],
+  );
+  const currentBrowseSnapshot = useMemo(
+    () =>
+      ({
+        searchQuery,
+        categoryFilter,
+        typeFilter,
+        sortMode,
+        localOnly,
+        availableToday,
+        popularOnly,
+      }) satisfies BuyerBrowseSnapshot,
+    [searchQuery, categoryFilter, typeFilter, sortMode, localOnly, availableToday, popularOnly],
+  );
+  const savedSliceIsDifferent =
+    resumeFiltersRestored &&
+    Boolean(resumeBrowseFilters) &&
+    getBrowseSnapshotKey(resumeBrowseFilters) !== getBrowseSnapshotKey(currentBrowseSnapshot);
+  const canResumeBrowsing =
+    resumeFiltersRestored &&
+    !hasActiveBrowseFilters &&
+    Boolean(resumeBrowseFilters) &&
+    Boolean(resumeBrowseSummary);
+  const handleResumeBrowse = () => {
+    if (!resumeBrowseFilters) {
+      return;
+    }
+
+    applyBuyerBrowseSnapshot(resumeBrowseFilters, {
+      setSearchQuery,
+      setCategoryFilter,
+      setTypeFilter,
+      setSortMode,
+      setLocalOnly,
+      setAvailableToday,
+      setPopularOnly,
+    });
+  };
 
   return (
     <ScrollView
@@ -606,21 +850,28 @@ export default function BrowseScreen() {
       <View style={styles.filterPanel}>
         <View style={styles.filterHeader}>
           <Text style={styles.filterTitle}>Browse Filters</Text>
-          {hasActiveBrowseFilters ? (
-            <Pressable
-              style={styles.clearButton}
-              onPress={() => {
-                setSearchQuery('');
-                setCategoryFilter('');
-                setTypeFilter('all');
-                setSortMode('newest');
-                setLocalOnly(false);
-                setAvailableToday(false);
-                setPopularOnly(false);
-              }}>
-              <Text style={styles.clearButtonText}>Clear</Text>
-            </Pressable>
-          ) : null}
+          <View style={styles.filterHeaderActions}>
+            {savedSliceIsDifferent ? (
+              <Pressable style={styles.savedSliceCueButton} onPress={handleResumeBrowse}>
+                <Text style={styles.savedSliceCueButtonText}>Resume browsing</Text>
+              </Pressable>
+            ) : null}
+            {hasActiveBrowseFilters ? (
+              <Pressable
+                style={styles.clearButton}
+                onPress={() => {
+                  setSearchQuery('');
+                  setCategoryFilter('');
+                  setTypeFilter('all');
+                  setSortMode('newest');
+                  setLocalOnly(false);
+                  setAvailableToday(false);
+                  setPopularOnly(false);
+                }}>
+                <Text style={styles.clearButtonText}>Clear</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
         {recommendedPreset ? (
           <View style={styles.recommendationRow}>
@@ -763,6 +1014,118 @@ export default function BrowseScreen() {
         ) : null}
       </View>
 
+      {canResumeBrowsing ? (
+        <View style={styles.resumePanel}>
+          <View style={styles.resumePanelHeader}>
+            <View>
+              <Text style={styles.resumeEyebrow}>Saved Browse Slice</Text>
+              <Text style={styles.resumeTitle}>Resume where you left off.</Text>
+            </View>
+            <Pressable
+              style={styles.resumeButton}
+              onPress={handleResumeBrowse}>
+              <Text style={styles.resumeButtonText}>Resume browsing</Text>
+            </Pressable>
+          </View>
+          {resumeBrowseSummary ? <Text style={styles.resumeSummary}>{resumeBrowseSummary}</Text> : null}
+          <Pressable
+            style={styles.resumeClearButton}
+            onPress={async () => {
+              setResumeBrowseFiltersState(null);
+              await clearBuyerBrowseResumeFilters();
+            }}>
+            <Text style={styles.resumeClearButtonText}>Clear saved browse</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {recentlyViewedListings.length > 0 ? (
+        <View style={styles.recentPanel}>
+          <View style={styles.recentHeader}>
+            <View>
+              <Text style={styles.recentEyebrow}>Recently Viewed</Text>
+              <Text style={styles.recentTitle}>Jump back into listings you opened.</Text>
+            </View>
+            <Pressable
+              style={styles.recentClearButton}
+              onPress={async () => {
+                setRecentListingIds([]);
+                await setBuyerRecentListings(JSON.stringify([]));
+              }}>
+              <Text style={styles.recentClearButtonText}>Clear History</Text>
+            </Pressable>
+          </View>
+          <View style={styles.recentList}>
+            {recentlyViewedListings.map((listing) => (
+              <Pressable
+                key={listing.id}
+                style={styles.recentCard}
+                onPress={() =>
+                  router.push({
+                    pathname: '/listings/[id]',
+                    params: { id: listing.id },
+                  })
+                }>
+                <View style={styles.recentCardTop}>
+                  <Text style={styles.recentCardType}>{listing.type}</Text>
+                  {listing.available_today ? (
+                    <Text style={styles.recentCardBadge}>Available today</Text>
+                  ) : null}
+                </View>
+                <Text style={styles.recentCardTitle} numberOfLines={2}>
+                  {listing.title}
+                </Text>
+                <Text style={styles.recentCardMeta} numberOfLines={2}>
+                  {formatLocation(listing) || 'Location pending'} · {getSuggestionSecondarySignal(listing)}
+                </Text>
+                <Text style={styles.recentCardPrice}>
+                  {formatCurrency(listing.price_cents, listing.currency)}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {recentTransactionReceipts.length > 0 ? (
+        <View style={styles.recentPanel}>
+          <View style={styles.recentHeader}>
+            <View>
+              <Text style={styles.recentEyebrow}>Recently Opened Receipts</Text>
+              <Text style={styles.recentTitle}>Jump back into orders and bookings you inspected.</Text>
+            </View>
+            <Pressable
+              style={styles.recentClearButton}
+              onPress={async () => {
+                setRecentTransactionReceiptIds([]);
+                await setBuyerRecentTransactionReceipts(JSON.stringify([]));
+              }}>
+              <Text style={styles.recentClearButtonText}>Clear saved receipt history</Text>
+            </Pressable>
+          </View>
+          <View style={styles.recentList}>
+            {recentTransactionReceipts.map((receipt) => (
+              <Pressable
+                key={`${receipt.kind}:${receipt.id}`}
+                style={styles.recentCard}
+                onPress={() =>
+                  router.push({
+                    pathname: '/transactions/[kind]/[id]',
+                    params: { kind: receipt.kind, id: receipt.id },
+                  })
+                }>
+                <Text style={styles.recentCardType}>
+                  {receipt.label} · {receipt.meta}
+                </Text>
+                <Text style={styles.recentCardMeta}>
+                  {receipt.kind} · {receipt.id}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
       <View style={styles.cardList}>
         {filteredListings.map((listing) => (
           (() => {
@@ -875,6 +1238,17 @@ export default function BrowseScreen() {
           </Text>
         ) : null}
       </View>
+
+      {hasMoreListings ? (
+        <Pressable
+          style={[styles.loadMoreButton, loadingMoreListings && styles.loadMoreButtonDisabled]}
+          onPress={() => void loadMoreListings()}
+          disabled={loadingMoreListings}>
+          <Text style={styles.loadMoreButtonText}>
+            {loadingMoreListings ? 'Loading more listings...' : 'Load more listings'}
+          </Text>
+        </Pressable>
+      ) : null}
     </ScrollView>
   );
 }
@@ -971,6 +1345,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
+  filterHeaderActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
   recommendationRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -1023,6 +1404,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  savedSliceCueButton: {
+    borderRadius: 999,
+    backgroundColor: '#eef3e4',
+    borderWidth: 1,
+    borderColor: '#c7d7ab',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  savedSliceCueButtonText: {
+    color: '#496022',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   searchInput: {
@@ -1106,6 +1502,151 @@ const styles = StyleSheet.create({
   summarySubtext: {
     color: '#6f6556',
     fontSize: 12,
+  },
+  resumePanel: {
+    backgroundColor: '#f7f0e2',
+    borderRadius: 22,
+    padding: 16,
+    gap: 8,
+  },
+  resumePanelHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  resumeEyebrow: {
+    color: '#6f6556',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  resumeTitle: {
+    color: '#1f2319',
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  resumeButton: {
+    borderRadius: 999,
+    backgroundColor: '#1f351f',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  resumeButtonText: {
+    color: '#fff8ee',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  resumeSummary: {
+    color: '#6f6556',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  resumeClearButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  resumeClearButtonText: {
+    color: '#4d4338',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  recentPanel: {
+    backgroundColor: '#f7f0e2',
+    borderRadius: 22,
+    padding: 16,
+    gap: 12,
+  },
+  recentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  recentEyebrow: {
+    color: '#6f6556',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  recentTitle: {
+    color: '#1f2319',
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  recentClearButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d8c8af',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  recentClearButtonText: {
+    color: '#4d4338',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  recentList: {
+    gap: 10,
+  },
+  recentCard: {
+    backgroundColor: '#fff8ee',
+    borderRadius: 18,
+    padding: 14,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#e1d1b5',
+  },
+  recentCardTop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  recentCardType: {
+    color: '#7c3a10',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  recentCardBadge: {
+    color: '#0f6a4a',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  recentCardTitle: {
+    color: '#1f2319',
+    fontSize: 17,
+    fontWeight: '700',
+    lineHeight: 22,
+  },
+  recentCardMeta: {
+    color: '#6f6556',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  recentCardPrice: {
+    color: '#7c3a10',
+    fontSize: 15,
+    fontWeight: '700',
   },
   cardList: {
     gap: 14,
@@ -1297,5 +1838,23 @@ const styles = StyleSheet.create({
     color: '#5f5548',
     fontSize: 14,
     lineHeight: 21,
+  },
+  loadMoreButton: {
+    alignItems: 'center',
+    backgroundColor: '#1f351f',
+    borderRadius: 999,
+    marginTop: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  loadMoreButtonDisabled: {
+    opacity: 0.7,
+  },
+  loadMoreButtonText: {
+    color: '#fff6e8',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
 });

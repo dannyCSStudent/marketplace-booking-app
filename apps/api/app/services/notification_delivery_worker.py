@@ -12,6 +12,18 @@ from app.dependencies.supabase import get_supabase_client
 def process_notification_deliveries(*, batch_size: int = 25) -> dict[str, int]:
     settings = get_settings()
     deliveries = _load_due_deliveries(batch_size=batch_size)
+    return process_notification_delivery_rows(deliveries, settings=settings, batch_size=batch_size)
+
+
+def process_notification_delivery_rows(
+    deliveries: list[dict[str, Any]],
+    *,
+    settings=None,
+    batch_size: int | None = None,
+) -> dict[str, int]:
+    settings = settings or get_settings()
+    if batch_size is None:
+        batch_size = len(deliveries)
     _log_worker_event(
         "notification_worker_batch_started",
         batch_size=batch_size,

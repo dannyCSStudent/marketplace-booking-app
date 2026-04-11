@@ -27,6 +27,14 @@ class _FakeSupabase:
                 "expo_push_token": None,
                 "admin_monetization_preferences": changes.get("admin_monetization_preferences", {}),
                 "admin_delivery_ops_preferences": changes.get("admin_delivery_ops_preferences", {}),
+                "admin_review_moderation_preferences": changes.get(
+                    "admin_review_moderation_preferences",
+                    {},
+                ),
+                "admin_transaction_support_preferences": changes.get(
+                    "admin_transaction_support_preferences",
+                    {},
+                ),
             }
         ]
 
@@ -97,6 +105,125 @@ class ProfileServiceTests(unittest.TestCase):
                 "status": "failed",
                 "channel": "push",
                 "mode": "atomic",
+            },
+        )
+
+    def test_update_profile_persists_admin_review_moderation_preferences(self):
+        fake_supabase = _FakeSupabase()
+        current_user = CurrentUser(id="user-1", access_token="token-1")
+
+        with patch("app.services.profiles.get_supabase_client", return_value=fake_supabase):
+            result = update_my_profile(
+                current_user,
+                ProfileUpdate(
+                    admin_review_moderation_preferences={
+                        "preset": "escalated_only",
+                        "status": "all",
+                        "assignee": "unassigned",
+                        "priority": "escalated",
+                        "activity_log": [
+                            {
+                                "id": "entry-1",
+                                "kind": "watchlist",
+                                "label": "Opened escalated watchlist",
+                            }
+                        ],
+                    }
+                ),
+            )
+
+        self.assertEqual(fake_supabase.update_calls[0][0], "profiles")
+        self.assertEqual(
+            fake_supabase.update_calls[0][1]["admin_review_moderation_preferences"],
+            {
+                "preset": "escalated_only",
+                "status": "all",
+                "assignee": "unassigned",
+                "priority": "escalated",
+                "activity_log": [
+                    {
+                        "id": "entry-1",
+                        "kind": "watchlist",
+                        "label": "Opened escalated watchlist",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(
+            result.admin_review_moderation_preferences,
+            {
+                "preset": "escalated_only",
+                "status": "all",
+                "assignee": "unassigned",
+                "priority": "escalated",
+                "activity_log": [
+                    {
+                        "id": "entry-1",
+                        "kind": "watchlist",
+                        "label": "Opened escalated watchlist",
+                    }
+                ],
+            },
+        )
+
+    def test_update_profile_persists_admin_transaction_support_preferences(self):
+        fake_supabase = _FakeSupabase()
+        current_user = CurrentUser(id="user-1", access_token="token-1")
+
+        with patch("app.services.profiles.get_supabase_client", return_value=fake_supabase):
+            result = update_my_profile(
+                current_user,
+                ProfileUpdate(
+                    admin_transaction_support_preferences={
+                        "preset": "trust_queue",
+                        "type": "booking",
+                        "status": "open",
+                        "assignee": "mine",
+                        "priority": "escalated",
+                        "role": "trust",
+                        "delivery": "failed",
+                        "trust": "trust_driven",
+                        "listing": "listing-1",
+                        "listingHealth": "trust_flagged",
+                        "q": "seller dispute",
+                        "focus": "booking:booking-1",
+                    }
+                ),
+            )
+
+        self.assertEqual(fake_supabase.update_calls[0][0], "profiles")
+        self.assertEqual(
+            fake_supabase.update_calls[0][1]["admin_transaction_support_preferences"],
+            {
+                "preset": "trust_queue",
+                "type": "booking",
+                "status": "open",
+                "assignee": "mine",
+                "priority": "escalated",
+                "role": "trust",
+                "delivery": "failed",
+                "trust": "trust_driven",
+                "listing": "listing-1",
+                "listingHealth": "trust_flagged",
+                "q": "seller dispute",
+                "focus": "booking:booking-1",
+            },
+        )
+        self.assertEqual(
+            result.admin_transaction_support_preferences,
+            {
+                "preset": "trust_queue",
+                "type": "booking",
+                "status": "open",
+                "assignee": "mine",
+                "priority": "escalated",
+                "role": "trust",
+                "delivery": "failed",
+                "trust": "trust_driven",
+                "listing": "listing-1",
+                "listingHealth": "trust_flagged",
+                "q": "seller dispute",
+                "focus": "booking:booking-1",
             },
         )
 

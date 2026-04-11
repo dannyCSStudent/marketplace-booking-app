@@ -8,6 +8,7 @@ from app.dependencies.admin import require_admin_user
 from app.schemas.listings import (
     ListingAiAssistRequest,
     ListingAiAssistResponse,
+    ListingBookingSuggestionRead,
     ListingCreate,
     ListingImageCreate,
     ListingImageRead,
@@ -20,6 +21,7 @@ from app.schemas.listings import (
 )
 from app.services.listings import (
     add_listing_image,
+    build_booking_schedule_suggestion,
     create_listing,
     delete_listing_image,
     generate_listing_ai_assist,
@@ -39,8 +41,10 @@ def list_listings(
     query: str | None = Query(default=None),
     category: str | None = Query(default=None),
     type: str | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1),
+    offset: int | None = Query(default=None, ge=0),
 ) -> ListingListResponse:
-    params = ListingQueryParams(query=query, category=category, type=type)
+    params = ListingQueryParams(query=query, category=category, type=type, limit=limit, offset=offset)
     return list_public_listings(params)
 
 
@@ -111,6 +115,12 @@ def request_ai_listing_suggestion(
 @router.get("/{listing_id}/price-insights", response_model=ListingPriceInsight)
 def read_listing_price_insight(listing_id: str, current_user=Depends(get_current_user)) -> ListingPriceInsight:
     return get_listing_price_insight(current_user, listing_id)
+
+
+@router.get("/{listing_id}/booking-suggestion", response_model=ListingBookingSuggestionRead)
+def read_listing_booking_suggestion(listing_id: str) -> ListingBookingSuggestionRead:
+    listing = get_listing_by_id(listing_id)
+    return build_booking_schedule_suggestion(listing)
 
 @router.get("/{listing_id}", response_model=ListingRead)
 def read_listing(listing_id: str) -> ListingRead:

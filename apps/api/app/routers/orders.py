@@ -9,6 +9,7 @@ from app.schemas.orders import (
     OrderBulkStatusUpdateResult,
     OrderCreate,
     OrderRead,
+    OrderResponseAiAssistResponse,
     OrderStatusUpdate,
 )
 from app.services.orders import (
@@ -18,6 +19,7 @@ from app.services.orders import (
     get_order_by_id_for_user,
     get_my_orders,
     get_seller_orders,
+    generate_order_response_ai_assist,
     update_admin_order_support,
     update_order_status,
 )
@@ -68,6 +70,14 @@ def patch_order_status(
     current_user=Depends(get_current_user),
 ) -> OrderRead:
     return update_order_status(current_user, order_id, payload)
+
+
+@router.post("/{order_id}/response-ai-assist", response_model=OrderResponseAiAssistResponse)
+def request_order_response_ai_assist(
+    order_id: str,
+    current_user=Depends(get_current_user),
+) -> OrderResponseAiAssistResponse:
+    return generate_order_response_ai_assist(current_user, order_id)
 
 
 @router.post("/bulk-status", response_model=OrderBulkStatusUpdateResult)

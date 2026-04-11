@@ -10,6 +10,7 @@ import {
   type PlatformFeeRateRead,
 } from '@/lib/api';
 import { setBuyerBrowseFilters } from '@/lib/session-storage';
+import { getBuyerRecentListings, setBuyerRecentListings } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
 function getFulfillmentOptions(listing: {
@@ -331,6 +332,7 @@ export default function ListingDetailScreen() {
   const [platformFeeLoading, setPlatformFeeLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recentListingIds, setRecentListingIds] = useState<string[]>([]);
   const listing = useMemo(() => listings.find((item) => item.id === id), [id, listings]);
   const fulfillmentOptions = useMemo(
     () => (listing ? getFulfillmentOptions(listing) : []),
@@ -403,6 +405,17 @@ export default function ListingDetailScreen() {
     const parsedOffset = Number(bookingDayOffset);
     return computeBookingWindow(listing, Number.isFinite(parsedOffset) ? parsedOffset : 1);
   }, [bookingDayOffset, listing]);
+  const recentViewedListings = useMemo(
+    () =>
+      recentListingIds
+        .map((listingId) => listings.find((item) => item.id === listingId) ?? null)
+        .filter((item): item is (typeof listings)[number] => Boolean(item))
+        .filter((item) => item.id !== listing?.id)
+        .slice(0, 3),
+    [listing?.id, listings, recentListingIds],
+  );
+  const latestRecentViewedListing = recentViewedListings[0] ?? null;
+  const hasRecentListingHistory = recentViewedListings.length > 0;
 
   useEffect(() => {
     if (fulfillmentOptions.length > 0) {
@@ -415,6 +428,52 @@ export default function ListingDetailScreen() {
       setSelectedFulfillment('');
     }
   }, [fulfillmentOptions]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const stored = await getBuyerRecentListings();
+        const parsed = stored ? (JSON.parse(stored) as string[]) : [];
+        if (Array.isArray(parsed)) {
+          setRecentListingIds(parsed.filter((item) => typeof item === 'string'));
+        }
+      } catch {
+        // Ignore corrupted recent-listing state.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!listing) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        setRecentListingIds((current) => {
+          const nextIds = [listing.id, ...current.filter((item) => item !== listing.id)].slice(0, 4);
+          const isSame = nextIds.length === current.length && nextIds.every((item, index) => item === current[index]);
+          if (isSame) {
+            return current;
+          }
+
+          void setBuyerRecentListings(JSON.stringify(nextIds));
+          return nextIds;
+        });
+      } catch {
+        // Ignore corrupted recent-listing state.
+      }
+    })();
+  }, [listing]);
+
+  function clearRecentListingHistory() {
+    void setBuyerRecentListings(JSON.stringify([]));
+    setRecentListingIds([]);
+  }
+
+  function openRecentListing(listingId: string) {
+    router.push({ pathname: '/listings/[id]', params: { id: listingId } });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -561,6 +620,16 @@ export default function ListingDetailScreen() {
           <Text style={styles.platformFeeValue}>{platformFeePercentLabel}</Text>
         </View>
         <Text style={styles.platformFeeDetail}>{platformFeeDetail}</Text>
+        {hasRecentListingHistory ? (
+          <View style={styles.recentSummaryRow}>
+            <Text style={styles.recentSummaryLabel}>Saved listing history available</Text>
+            <Text style={styles.recentSummaryText}>
+              {latestRecentViewedListing
+                ? `Open latest listing · ${latestRecentViewedListing.title}`
+                : `${recentViewedListings.length} recent listings saved`}
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.heroBadgeRow}>
           <View style={[styles.heroBadge, styles.heroBadgeBooking]}>
             <Text style={[styles.heroBadgeText, styles.heroBadgeBookingText]}>
@@ -592,7 +661,7 @@ export default function ListingDetailScreen() {
               <Text style={[styles.heroBadgeText, styles.heroBadgeNewText]}>New listing</Text>
             </View>
           ) : null}
-          {listing.is_promoted ? (
+        {listing.is_promoted ? (
             <View style={[styles.heroBadge, styles.heroBadgePromoted]}>
               <Text style={[styles.heroBadgeText, styles.heroBadgePromotedText]}>Promoted</Text>
             </View>
@@ -605,6 +674,33 @@ export default function ListingDetailScreen() {
             </View>
           ) : null}
         </View>
+        {latestRecentViewedListing ? (
+          <View style={styles.recentRail}>
+            <View style={styles.recentRailHeader}>
+              <View>
+                <Text style={styles.recentRailLabel}>Recently Viewed</Text>
+                <Text style={styles.recentRailText}>
+                  Jump back into the latest listing you opened in this app.
+                </Text>
+              </View>
+              <Pressable style={styles.recentClearButton} onPress={clearRecentListingHistory}>
+                <Text style={styles.recentClearButtonText}>Clear history</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              style={styles.recentOpenButton}
+              onPress={() => openRecentListing(latestRecentViewedListing.id)}
+            >
+              <Text style={styles.recentOpenButtonText}>
+                Open latest listing · {latestRecentViewedListing.title}
+              </Text>
+              <Text style={styles.recentOpenButtonSubtext}>
+                {formatLocation(latestRecentViewedListing) || 'Location pending'} ·{' '}
+                {getSuggestionSecondarySignal(latestRecentViewedListing)}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.quickGrid}>
@@ -1043,6 +1139,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
+  recentSummaryRow: {
+    gap: 4,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e4d6be',
+    backgroundColor: '#fff6e7',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  recentSummaryLabel: {
+    color: '#7a6d5a',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+  },
+  recentSummaryText: {
+    color: '#8f3f17',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
   heroBadgeRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1100,6 +1218,68 @@ const styles = StyleSheet.create({
   },
   heroBadgePromotedText: {
     color: '#b94c23',
+  },
+  recentRail: {
+    gap: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#e4d6be',
+    backgroundColor: '#fff8ee',
+    padding: 16,
+  },
+  recentRailHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  recentRailLabel: {
+    color: '#7a6d5a',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  recentRailText: {
+    color: '#5f5548',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 4,
+    maxWidth: 260,
+  },
+  recentClearButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d9c7a8',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  recentClearButtonText: {
+    color: '#4d4338',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  recentOpenButton: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#f4b24f',
+    backgroundColor: '#fff6e7',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 4,
+  },
+  recentOpenButtonText: {
+    color: '#8f3f17',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+  recentOpenButtonSubtext: {
+    color: '#6f6556',
+    fontSize: 12,
+    lineHeight: 18,
   },
   quickGrid: {
     flexDirection: 'row',

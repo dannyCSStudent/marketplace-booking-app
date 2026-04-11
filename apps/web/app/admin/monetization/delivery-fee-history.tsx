@@ -17,6 +17,29 @@ import { restoreAdminSession } from "@/app/lib/admin-auth";
 
 const CLIENT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const WINDOW_OPTIONS = [7, 14, 30] as const;
+const DELIVERY_FEE_HISTORY_ACTIVITY_KEY = "admin.delivery-fee-history.recent-activity";
+const DELIVERY_FEE_HISTORY_ACTIVITY_FILTER_KEY = "admin.delivery-fee-history.recent-activity-filter";
+const MAX_RECENT_ACTIVITY_ENTRIES = 4;
+
+type RecentActivityFilter = "all" | "window" | "export";
+
+type DeliveryFeeHistoryRecentActivityEntry =
+  | {
+      id: string;
+      kind: "window";
+      label: string;
+      detail: string;
+      createdAt: string;
+      windowDays: (typeof WINDOW_OPTIONS)[number];
+    }
+  | {
+      id: string;
+      kind: "export";
+      label: string;
+      detail: string;
+      createdAt: string;
+      windowDays: (typeof WINDOW_OPTIONS)[number];
+    };
 
 function escapeCsvValue(value: string | number | null | undefined) {
   const normalized = String(value ?? "");
@@ -32,6 +55,61 @@ export default function DeliveryFeeHistory() {
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [recentActivity, setRecentActivity] = useState<DeliveryFeeHistoryRecentActivityEntry[]>([]);
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(DELIVERY_FEE_HISTORY_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as DeliveryFeeHistoryRecentActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setRecentActivity(parsed);
+      }
+    } catch {
+      window.sessionStorage.removeItem(DELIVERY_FEE_HISTORY_ACTIVITY_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const stored = window.sessionStorage.getItem(DELIVERY_FEE_HISTORY_ACTIVITY_FILTER_KEY);
+    if (stored === "all" || stored === "window" || stored === "export") {
+      setRecentActivityFilter(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      DELIVERY_FEE_HISTORY_ACTIVITY_KEY,
+      JSON.stringify(recentActivity),
+    );
+  }, [recentActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      DELIVERY_FEE_HISTORY_ACTIVITY_FILTER_KEY,
+      recentActivityFilter,
+    );
+  }, [recentActivityFilter]);
 
   const fetchHistory = async (days: number) => {
     setStatus("loading");
@@ -74,6 +152,29 @@ export default function DeliveryFeeHistory() {
     [history],
   );
 
+  const recordRecentActivity = (entry: Omit<DeliveryFeeHistoryRecentActivityEntry, "id" | "createdAt">) => {
+    setRecentActivity((current) =>
+      [
+        {
+          ...entry,
+          id: `${entry.kind}:${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        },
+        ...current,
+      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+    );
+  };
+
+  const setWindowDaysWithActivity = (nextWindowDays: (typeof WINDOW_OPTIONS)[number]) => {
+    recordRecentActivity({
+      kind: "window",
+      label: `${nextWindowDays}d delivery fees`,
+      detail: `${history.length} history points`,
+      windowDays: nextWindowDays,
+    });
+    setWindowDays(nextWindowDays);
+  };
+
   const exportCsv = () => {
     if (history.length === 0) {
       return;
@@ -96,6 +197,16 @@ export default function DeliveryFeeHistory() {
     URL.revokeObjectURL(url);
   };
 
+  const runExport = () => {
+    recordRecentActivity({
+      kind: "export",
+      label: `Exported ${history.length} fee points`,
+      detail: `${windowDays}d · ${formatCurrency(totalCollected, "USD")}`,
+      windowDays,
+    });
+    exportCsv();
+  };
+
   useEffect(() => {
     const handleExportEvent = (event: Event) => {
       const detail = (event as CustomEvent<MonetizationExportDetail>).detail;
@@ -103,14 +214,14 @@ export default function DeliveryFeeHistory() {
         return;
       }
       highlightMonetizationSection("delivery-fee-history-panel");
-      exportCsv();
+      runExport();
     };
 
     window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [history, windowDays]);
+  }, [history, runExport, windowDays]);
 
   const renderBody = () => {
     if (!lastUpdated && !error && history.length === 0) {
@@ -196,7 +307,7 @@ export default function DeliveryFeeHistory() {
                     ? "bg-foreground text-background"
                     : "text-foreground/66 hover:text-foreground"
                 }`}
-                onClick={() => setWindowDays(option)}
+                onClick={() => setWindowDaysWithActivity(option)}
               >
                 {option}d
               </button>
@@ -205,7 +316,7 @@ export default function DeliveryFeeHistory() {
           <button
             type="button"
             className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
-            onClick={exportCsv}
+            onClick={runExport}
           >
             Export CSV
           </button>
@@ -227,6 +338,96 @@ export default function DeliveryFeeHistory() {
           </div>
         </div>
       </div>
+      {recentActivity.length > 0 ? (
+        <div className="mt-5 rounded-[1.8rem] border border-border/60 bg-background p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                Recent Activity
+              </p>
+              <p className="mt-2 text-sm text-foreground/72">
+                Re-open the last window you inspected or rerun the latest export.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
+              onClick={() => {
+                setRecentActivity([]);
+                window.sessionStorage.removeItem(DELIVERY_FEE_HISTORY_ACTIVITY_KEY);
+              }}
+            >
+              Clear history
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {([
+              ["all", "All"],
+              ["window", "Window"],
+              ["export", "Export"],
+            ] as const).map(([value, label]) => {
+              const filteredCount = recentActivity.filter(
+                (entry) => value === "all" || entry.kind === value,
+              ).length;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition ${
+                    recentActivityFilter === value
+                      ? "border-accent bg-accent text-white"
+                      : "border-border text-foreground hover:border-accent hover:text-accent"
+                  }`}
+                  onClick={() => setRecentActivityFilter(value)}
+                >
+                  {label} ({filteredCount})
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-4 space-y-2">
+            {recentActivity
+              .filter((entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter)
+              .map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-[1.1rem] border border-border bg-white px-4 py-3"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{entry.label}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-foreground/58">
+                      {entry.kind === "window" ? "Window" : "Export"} · {entry.detail}
+                    </p>
+                  </div>
+                  {entry.kind === "window" ? (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() => setWindowDaysWithActivity(entry.windowDays)}
+                      type="button"
+                    >
+                      Re-open window
+                    </button>
+                  ) : (
+                    <button
+                      className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={runExport}
+                      type="button"
+                    >
+                      Re-export slice
+                    </button>
+                  )}
+                </div>
+              ))}
+          </div>
+          {recentActivity.filter((entry) => recentActivityFilter === "all" || entry.kind === recentActivityFilter).length === 0 ? (
+            <div className="mt-4 rounded-[1.1rem] border border-dashed border-border bg-white/55 px-4 py-4 text-sm leading-6 text-foreground/66">
+              {recentActivityFilter === "all"
+                ? "No recent delivery fee activity yet."
+                : `No ${recentActivityFilter} activity has been recorded in this session yet.`}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="mt-4">{renderBody()}</div>
     </section>
   );

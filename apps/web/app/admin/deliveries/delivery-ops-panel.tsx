@@ -16,6 +16,7 @@ import {
   type OrderAdminSupportUpdateInput,
   type Profile,
   type ReviewModerationItem,
+  type SellerTrustIntervention,
 } from "@/app/lib/api";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 
@@ -26,7 +27,13 @@ type DeliveryRecencyFilter = "all" | "today" | "week";
 type DeliveryTrustFilter = "all" | "trust_driven";
 type DeliveryOwnershipFilter = "all" | "mine" | "unassigned" | "assigned";
 type DeliveryListingHealthFilter = "all" | "softening" | "recent_pricing" | "trust_flagged";
-type DeliveryPreset = "needs_attention" | "failed_only" | "queued_only" | "push_failures" | "trust_driven";
+type DeliveryPreset =
+  | "needs_attention"
+  | "failed_only"
+  | "queued_only"
+  | "push_failures"
+  | "trust_driven"
+  | "seller_trust_intervention";
 type ExecutionMode = "best_effort" | "atomic";
 type DeliveryWatchlistSeverityFilter = "all" | "high" | "medium" | "monitor";
 type DeliveryWatchlistViewState = {
@@ -65,6 +72,7 @@ type DeliverySavedPresetId =
   | "push_failures"
   | "trust_queue"
   | "trust_unassigned"
+  | "seller_trust_intervention"
   | "listing_softening";
 type DeliveryOpsActivityEntry = {
   id: string;
@@ -214,6 +222,7 @@ function normalizeDeliveryOpsPreferences(value: unknown): DeliveryOpsPreferences
                 (entry as DeliveryOpsActivityEntry).presetId === "push_failures" ||
                 (entry as DeliveryOpsActivityEntry).presetId === "trust_queue" ||
                 (entry as DeliveryOpsActivityEntry).presetId === "trust_unassigned" ||
+                (entry as DeliveryOpsActivityEntry).presetId === "seller_trust_intervention" ||
                 (entry as DeliveryOpsActivityEntry).presetId === "listing_softening") &&
               (typeof (entry as DeliveryOpsActivityEntry).watchlistTarget === "undefined" ||
                 (entry as DeliveryOpsActivityEntry).watchlistTarget === null ||
@@ -362,7 +371,11 @@ function formatWatchlistActivityLabel(entry: Pick<DeliveryOpsActivityEntry, "wat
   return parts.length > 0 ? parts.join(" · ") : "all alerts";
 }
 
-function formatWatchlistBadgeLabel(entry: Pick<DeliveryOpsActivityEntry, "watchlistSeverityFilter" | "watchlistNewOnly">) {
+function formatWatchlistBadgeLabel(
+  entry: Pick<DeliveryOpsActivityEntry, "watchlistSeverityFilter" | "watchlistNewOnly"> & {
+    label?: string;
+  },
+) {
   const parts: string[] = [];
   if (entry.watchlistSeverityFilter && entry.watchlistSeverityFilter !== "all") {
     parts.push(entry.watchlistSeverityFilter[0].toUpperCase() + entry.watchlistSeverityFilter.slice(1));
@@ -370,7 +383,8 @@ function formatWatchlistBadgeLabel(entry: Pick<DeliveryOpsActivityEntry, "watchl
   if (entry.watchlistNewOnly) {
     parts.push("New since review");
   }
-  return parts.length > 0 ? parts.join(" + ") : "All alerts";
+  const baseLabel = parts.length > 0 ? parts.join(" + ") : "All alerts";
+  return entry.label?.toLowerCase().includes("export") ? `Exported ${baseLabel}` : baseLabel;
 }
 
 function formatWatchlistSliceLabel(entry: Pick<DeliveryOpsActivityEntry, "watchlistSeverityFilter" | "watchlistNewOnly">) {
@@ -383,8 +397,14 @@ function formatWatchlistSliceLabel(entry: Pick<DeliveryOpsActivityEntry, "watchl
   return "all watchlist alerts";
 }
 
-function formatWatchlistResumeLabel(entry: Pick<DeliveryOpsActivityEntry, "watchlistSeverityFilter" | "watchlistNewOnly">) {
-  return `Re-open ${formatWatchlistSliceLabel(entry)}`;
+function formatWatchlistResumeLabel(
+  entry: Pick<DeliveryOpsActivityEntry, "watchlistSeverityFilter" | "watchlistNewOnly"> & {
+    label?: string;
+  },
+) {
+  return entry.label?.toLowerCase().includes("export")
+    ? `Re-open exported ${formatWatchlistSliceLabel(entry)}`
+    : `Re-open ${formatWatchlistSliceLabel(entry)}`;
 }
 
 function watchlistViewMatchesActivityEntry(
@@ -420,6 +440,9 @@ function getSavedViewActivityLabel(entry: DeliveryOpsActivityEntry) {
 function getOperationActivityLabel(entry: DeliveryOpsActivityEntry) {
   const label = entry.label.toLowerCase();
 
+  if (label.includes("export")) {
+    return "Export";
+  }
   if (label.includes("bulk retry")) {
     return "Bulk retry";
   }
@@ -430,6 +453,15 @@ function getOperationActivityLabel(entry: DeliveryOpsActivityEntry) {
     return "Trust";
   }
   return "Support";
+}
+
+function formatActivityLaneResumeLabel(
+  entry: Pick<DeliveryOpsActivityEntry, "activityFilterSnapshot" | "label">,
+) {
+  const lane = entry.activityFilterSnapshot ?? "all";
+  return entry.label.toLowerCase().includes("export")
+    ? `Re-open exported ${lane} lane`
+    : `Re-open ${lane} lane`;
 }
 
 function normalizeWatchlistViewState(value: unknown): DeliveryWatchlistViewState | null {
@@ -590,6 +622,23 @@ const DELIVERY_SAVED_PRESETS: Array<{
       recency: "week",
       trust: "trust_driven",
       ownership: "unassigned",
+      listingHealth: "all",
+      query: "",
+      mode: "best_effort",
+    },
+  },
+  {
+    id: "seller_trust_intervention",
+    label: "Seller trust intervention",
+    description: "Deliveries tied to sellers with worsening elevated or critical trust.",
+    apply: {
+      preset: "seller_trust_intervention",
+      status: "all",
+      channel: "all",
+      kind: "all",
+      recency: "week",
+      trust: "all",
+      ownership: "all",
       listingHealth: "all",
       query: "",
       mode: "best_effort",
@@ -892,6 +941,7 @@ export function DeliveryOpsPanel() {
   const [admins, setAdmins] = useState<AdminUser[]>([]);
   const [listings, setListings] = useState<Listing[]>([]);
   const [reviewReports, setReviewReports] = useState<ReviewModerationItem[]>([]);
+  const [sellerTrustInterventions, setSellerTrustInterventions] = useState<SellerTrustIntervention[]>([]);
   const [transactionSellerByKey, setTransactionSellerByKey] = useState<Record<string, string>>({});
   const [transactionListingByKey, setTransactionListingByKey] = useState<Record<string, string>>({});
   const [transactionBrowseContextByKey, setTransactionBrowseContextByKey] = useState<Record<string, string | null>>({});
@@ -951,7 +1001,8 @@ export function DeliveryOpsPanel() {
         nextPreset === "failed_only" ||
         nextPreset === "queued_only" ||
         nextPreset === "push_failures" ||
-        nextPreset === "trust_driven"
+        nextPreset === "trust_driven" ||
+        nextPreset === "seller_trust_intervention"
         ? nextPreset
         : "needs_attention",
     );
@@ -1131,11 +1182,14 @@ export function DeliveryOpsPanel() {
           throw new Error("Admin session not available. Sign in through the seller workspace first.");
         }
         setCurrentAdminUserId(session.user_id);
-        const [data, transactions, reports, profile] = await Promise.all([
+        const [data, transactions, reports, profile, interventions] = await Promise.all([
           api.loadAdminNotificationDeliveries(session.access_token),
           api.loadAdminTransactions(session.access_token),
           api.listAdminReviewReports(session.access_token, "all"),
           api.get<Profile>("/profiles/me", { accessToken: session.access_token }).catch(() => null),
+          api
+            .listAdminSellerTrustInterventions(50, { accessToken: session.access_token })
+            .catch(() => [] as SellerTrustIntervention[]),
         ]);
         if (!cancelled) {
           setAdmins(data.admins);
@@ -1193,6 +1247,7 @@ export function DeliveryOpsPanel() {
             ),
           });
           setReviewReports(reports);
+          setSellerTrustInterventions(interventions);
           const savedPreferences = normalizeDeliveryOpsPreferences(
             profile?.admin_delivery_ops_preferences ?? DEFAULT_DELIVERY_OPS_PREFERENCES,
           );
@@ -1278,6 +1333,11 @@ export function DeliveryOpsPanel() {
       setChannelFilter("all");
       setTrustFilter("trust_driven");
       setOwnershipFilter("all");
+    } else if (nextPreset === "seller_trust_intervention") {
+      setStatusFilter("all");
+      setChannelFilter("all");
+      setTrustFilter("all");
+      setOwnershipFilter("all");
     } else {
       setStatusFilter("all");
       setChannelFilter("all");
@@ -1285,6 +1345,15 @@ export function DeliveryOpsPanel() {
       setOwnershipFilter("all");
     }
   }
+
+  const sellerTrustInterventionBySellerId = useMemo(
+    () => new Map(sellerTrustInterventions.map((entry) => [entry.seller.id, entry] as const)),
+    [sellerTrustInterventions],
+  );
+  const sellerTrustInterventionSellerIds = useMemo(
+    () => new Set(sellerTrustInterventions.map((entry) => entry.seller.id)),
+    [sellerTrustInterventions],
+  );
 
   function applyQueueState(next: {
     preset?: DeliveryPreset;
@@ -1412,6 +1481,15 @@ export function DeliveryOpsPanel() {
           transactionSupportByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`]?.trustDriven &&
           transactionSupportByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`]?.escalated,
       ).length,
+      sellerTrustIntervention: deliveries.filter((delivery) => {
+        const sellerId = transactionSellerByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`];
+        return (
+          sellerTrustInterventionSellerIds.has(sellerId) &&
+          (delivery.delivery_status === "failed" ||
+            delivery.delivery_status === "queued" ||
+            transactionSupportByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`]?.trustDriven)
+        );
+      }).length,
       trustDrivenSent7d: deliveries.filter(
         (delivery) =>
           transactionSupportByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`]?.trustDriven &&
@@ -1419,7 +1497,13 @@ export function DeliveryOpsPanel() {
           isRecentWithinDays(delivery.sent_at ?? delivery.created_at, 7),
       ).length,
     }),
-    [currentAdminUserId, deliveries, transactionSupportByKey],
+    [
+      currentAdminUserId,
+      deliveries,
+      sellerTrustInterventionSellerIds,
+      transactionSellerByKey,
+      transactionSupportByKey,
+    ],
   );
 
   const listingsById = useMemo(
@@ -1640,6 +1724,18 @@ export function DeliveryOpsPanel() {
       if (!supportState?.trustDriven && preset === "trust_driven") {
         return false;
       }
+      if (preset === "seller_trust_intervention") {
+        if (
+          !sellerTrustInterventionSellerIds.has(sellerId) ||
+          !(
+            delivery.delivery_status === "failed" ||
+            delivery.delivery_status === "queued" ||
+            supportState?.trustDriven
+          )
+        ) {
+          return false;
+        }
+      }
 
       if (statusFilter !== "all" && delivery.delivery_status !== statusFilter) {
         return false;
@@ -1692,6 +1788,7 @@ export function DeliveryOpsPanel() {
         delivery.delivery_status,
         delivery.failure_reason,
         JSON.stringify(delivery.payload),
+        sellerTrustInterventionBySellerId.get(sellerId)?.intervention_reason,
         listingOpsContext?.listing.title,
         listingOpsContext?.adjustmentSummary,
         listingOpsContext?.adjustmentType,
@@ -1703,7 +1800,25 @@ export function DeliveryOpsPanel() {
 
       return haystack.includes(normalizedQuery);
     });
-  }, [channelFilter, currentAdminUserId, deliveries, getSellerTrustSummary, kindFilter, listingHealthFilter, listingOpsContextByTransactionKey, ownershipFilter, preset, recencyFilter, searchQuery, statusFilter, transactionSellerByKey, transactionSupportByKey, trustFilter]);
+  }, [
+    channelFilter,
+    currentAdminUserId,
+    deliveries,
+    getSellerTrustSummary,
+    kindFilter,
+    listingHealthFilter,
+    listingOpsContextByTransactionKey,
+    ownershipFilter,
+    preset,
+    recencyFilter,
+    searchQuery,
+    statusFilter,
+    transactionSellerByKey,
+    transactionSupportByKey,
+    trustFilter,
+    sellerTrustInterventionBySellerId,
+    sellerTrustInterventionSellerIds,
+  ]);
 
   const retryableDeliveriesInView = useMemo(
     () =>
@@ -3285,9 +3400,11 @@ export function DeliveryOpsPanel() {
   function renderDeliveryRowHeader({
     delivery,
     trustSummary,
+    sellerTrustIntervention,
   }: {
     delivery: NotificationDelivery;
     trustSummary: ReturnType<typeof getSellerTrustSummary>;
+    sellerTrustIntervention: SellerTrustIntervention | null;
   }) {
     return (
       <>
@@ -3347,6 +3464,23 @@ export function DeliveryOpsPanel() {
             {renderDeliveryRowPill(`trust-open-${delivery.id}`, `${trustSummary.open} open`)}
             {renderDeliveryRowPill(`trust-escalated-${delivery.id}`, `${trustSummary.escalated} escalated`)}
             {renderDeliveryRowPill(`trust-hidden-${delivery.id}`, `${trustSummary.hidden} hidden`)}
+          </div>
+        ) : null}
+        {sellerTrustIntervention ? (
+          <div className="flex flex-wrap gap-2">
+            {renderDeliveryRowPill(`seller-risk-${delivery.id}`, "Seller Risk Intervention", "danger")}
+            {renderDeliveryRowPill(
+              `seller-risk-level-${delivery.id}`,
+              sellerTrustIntervention.risk_level,
+            )}
+            {renderDeliveryRowPill(
+              `seller-risk-trend-${delivery.id}`,
+              sellerTrustIntervention.trend_direction,
+            )}
+            {renderDeliveryRowPill(
+              `seller-risk-priority-${delivery.id}`,
+              sellerTrustIntervention.intervention_priority,
+            )}
           </div>
         ) : null}
       </>
@@ -4607,7 +4741,7 @@ export function DeliveryOpsPanel() {
                             {entry.activityFilterSnapshot ? (
                               renderSurfaceActionButton(
                                 `reopen-activity-lane-${entry.id}`,
-                                `Re-open ${entry.activityFilterSnapshot} lane`,
+                                formatActivityLaneResumeLabel(entry),
                                 () => reopenActivityLane(entry),
                               )
                             ) : null}
@@ -5202,7 +5336,7 @@ export function DeliveryOpsPanel() {
         )
       )}
 
-      {renderMetricGrid("trust-metric-grid", "grid gap-3 sm:grid-cols-2 xl:grid-cols-5",
+      {renderMetricGrid("trust-metric-grid", "grid gap-3 sm:grid-cols-2 xl:grid-cols-6",
         [
           {
             label: "Trust-Driven Open",
@@ -5276,6 +5410,21 @@ export function DeliveryOpsPanel() {
                 kind: "all",
                 recency: "week",
                 trust: "trust_driven",
+                ownership: "all",
+              }),
+          },
+          {
+            label: "Seller Risk Intervention",
+            value: counts.sellerTrustIntervention.toString(),
+            detail: "Deliveries tied to sellers with worsening elevated or critical trust",
+            onClick: () =>
+              applyQueueState({
+                preset: "seller_trust_intervention",
+                status: "all",
+                channel: "all",
+                kind: "all",
+                recency: "week",
+                trust: "all",
                 ownership: "all",
               }),
           },
@@ -5728,13 +5877,21 @@ export function DeliveryOpsPanel() {
             const trustSummary = getSellerTrustSummary(
               transactionSellerByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`],
             );
+            const sellerId = transactionSellerByKey[`${delivery.transaction_kind}:${delivery.transaction_id}`];
+            const sellerTrustIntervention = sellerId
+              ? sellerTrustInterventionBySellerId.get(sellerId) ?? null
+              : null;
             return renderDeliveryRowSurface({
               key: delivery.id,
               status: delivery.delivery_status,
               children: (
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="space-y-3 lg:flex-1">
-                    {renderDeliveryRowHeader({ delivery, trustSummary })}
+                    {renderDeliveryRowHeader({
+                      delivery,
+                      trustSummary,
+                      sellerTrustIntervention,
+                    })}
 
                     {renderListingOpsContextPanel({
                       deliveryId: delivery.id,

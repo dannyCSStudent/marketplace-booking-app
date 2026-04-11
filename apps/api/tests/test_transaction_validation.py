@@ -50,6 +50,173 @@ class OrderCreationValidationTests(unittest.TestCase):
 
 
 class BookingCreationValidationTests(unittest.TestCase):
+    def test_auto_accept_booking_confirms_request_immediately(self):
+        now = datetime.now(timezone.utc)
+        current_booking = {
+            "id": "booking-1",
+            "buyer_id": BUYER_USER.id,
+            "seller_id": "seller-profile-id",
+            "listing_id": "listing-1",
+            "status": "confirmed",
+            "scheduled_start": (now + timedelta(hours=30)).isoformat(),
+            "scheduled_end": (now + timedelta(hours=31, minutes=30)).isoformat(),
+            "total_cents": 4500,
+            "currency": "USD",
+            "notes": "Please confirm if Tuesday works.",
+            "seller_response_note": None,
+            "listings": {
+                "title": "Service Visit",
+                "type": "service",
+                "is_local_only": True,
+                "auto_accept_bookings": True,
+            },
+            "booking_status_events": [
+                {
+                    "id": "event-1",
+                    "status": "confirmed",
+                    "actor_role": "system",
+                    "note": "Auto-confirmed by listing settings.",
+                    "created_at": "2026-04-07T15:00:00+00:00",
+                }
+            ],
+        }
+        fake_supabase = _ValidationSupabase(
+            select_results=[
+                {
+                    "id": "listing-1",
+                    "seller_id": "seller-profile-id",
+                    "title": "Service Visit",
+                    "price_cents": 4500,
+                    "currency": "USD",
+                    "status": "active",
+                    "type": "service",
+                    "requires_booking": True,
+                    "duration_minutes": 90,
+                    "lead_time_hours": 2,
+                    "auto_accept_bookings": True,
+                },
+                [],
+                {"user_id": "seller-user-id"},
+                current_booking,
+            ],
+            insert_results=[[current_booking], [{"id": "event-1"}]],
+        )
+
+        with (
+            patch("app.services.bookings.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.bookings.queue_transaction_notification_jobs") as mock_queue,
+        ):
+            result = create_booking(
+                BUYER_USER,
+                BookingCreate(
+                    seller_id="seller-profile-id",
+                    listing_id="listing-1",
+                    scheduled_start=now + timedelta(hours=30),
+                    scheduled_end=now + timedelta(hours=31, minutes=30),
+                    notes="Please confirm if Tuesday works.",
+                ),
+            )
+
+        self.assertEqual(result.status, "confirmed")
+        self.assertEqual(fake_supabase.insert_calls, 2)
+        self.assertEqual(fake_supabase.insert_payloads[0]["status"], "confirmed")
+        self.assertEqual(fake_supabase.insert_payloads[1]["status"], "confirmed")
+        self.assertEqual(fake_supabase.insert_payloads[1]["actor_role"], "system")
+        self.assertEqual(mock_queue.call_count, 2)
+
+    def test_auto_accept_booking_conflict_stays_requested_and_alerts_seller(self):
+        now = datetime.now(timezone.utc)
+        current_booking = {
+            "id": "booking-1",
+            "buyer_id": BUYER_USER.id,
+            "seller_id": "seller-profile-id",
+            "listing_id": "listing-1",
+            "status": "requested",
+            "scheduled_start": (now + timedelta(hours=30)).isoformat(),
+            "scheduled_end": (now + timedelta(hours=31, minutes=30)).isoformat(),
+            "total_cents": 4500,
+            "currency": "USD",
+            "notes": "Please confirm if Tuesday works.",
+            "seller_response_note": None,
+            "listings": {
+                "title": "Service Visit",
+                "type": "service",
+                "is_local_only": True,
+                "auto_accept_bookings": True,
+            },
+            "booking_status_events": [
+                {
+                    "id": "event-1",
+                    "status": "requested",
+                    "actor_role": "buyer",
+                    "note": "Please confirm if Tuesday works.",
+                    "created_at": "2026-04-07T15:00:00+00:00",
+                }
+            ],
+        }
+        fake_supabase = _ValidationSupabase(
+            select_results=[
+                {
+                    "id": "listing-1",
+                    "seller_id": "seller-profile-id",
+                    "title": "Service Visit",
+                    "price_cents": 4500,
+                    "currency": "USD",
+                    "status": "active",
+                    "type": "service",
+                    "requires_booking": True,
+                    "duration_minutes": 90,
+                    "lead_time_hours": 2,
+                    "auto_accept_bookings": True,
+                },
+                [
+                    {
+                        "id": "booking-conflict-1",
+                        "status": "confirmed",
+                        "scheduled_start": (now + timedelta(hours=30, minutes=15)).isoformat(),
+                        "scheduled_end": (now + timedelta(hours=31, minutes=45)).isoformat(),
+                    }
+                ],
+                {
+                    "id": "seller-profile-id",
+                    "slug": "service-seller",
+                    "display_name": "Service Seller",
+                    "user_id": "seller-user-id",
+                },
+                [],
+                current_booking,
+            ],
+            insert_results=[
+                [current_booking],
+                [{"id": "event-1"}],
+                [{"id": "delivery-1"}, {"id": "delivery-2"}],
+            ],
+        )
+
+        with (
+            patch("app.services.bookings.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.bookings.queue_transaction_notification_jobs") as mock_queue,
+            patch("app.services.bookings.process_notification_delivery_rows"),
+        ):
+            result = create_booking(
+                BUYER_USER,
+                BookingCreate(
+                    seller_id="seller-profile-id",
+                    listing_id="listing-1",
+                    scheduled_start=now + timedelta(hours=30),
+                    scheduled_end=now + timedelta(hours=31, minutes=30),
+                    notes="Please confirm if Tuesday works.",
+                ),
+            )
+
+        self.assertEqual(result.status, "requested")
+        self.assertEqual(fake_supabase.insert_calls, 3)
+        self.assertEqual(fake_supabase.insert_payloads[0]["status"], "requested")
+        self.assertEqual(fake_supabase.insert_payloads[1]["status"], "requested")
+        self.assertEqual(fake_supabase.insert_payloads[1]["actor_role"], "buyer")
+        self.assertEqual(fake_supabase.insert_payloads[2][0]["payload"]["alert_type"], "booking_conflict")
+        self.assertEqual(mock_queue.call_count, 1)
+
     def test_rejects_booking_before_lead_time(self):
         now = datetime.now(timezone.utc)
         fake_supabase = _ValidationSupabase(
@@ -121,9 +288,11 @@ class BookingCreationValidationTests(unittest.TestCase):
 
 
 class _ValidationSupabase:
-    def __init__(self, *, select_results):
+    def __init__(self, *, select_results, insert_results=None):
         self._select_results = list(select_results)
+        self._insert_results = list(insert_results or [])
         self.insert_calls = 0
+        self.insert_payloads = []
 
     def select(self, *args, **kwargs):
         if not self._select_results:
@@ -132,6 +301,10 @@ class _ValidationSupabase:
 
     def insert(self, *args, **kwargs):
         self.insert_calls += 1
+        payload = args[1] if len(args) > 1 else kwargs.get("values")
+        self.insert_payloads.append(payload)
+        if self._insert_results:
+            return self._insert_results.pop(0)
         return []
 
 

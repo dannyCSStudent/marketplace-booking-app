@@ -11,6 +11,7 @@ from app.schemas.listings import (
 )
 from app.schemas.platform_fees import DeliveryFeeHistoryPoint, PlatformFeeHistoryPoint
 from app.schemas.sellers import SellerLookupRead
+from app.schemas.sellers import SellerTrustInterventionRead
 from app.schemas.subscriptions import (
     SellerSubscriptionAssign,
     SellerSubscriptionEventRead,
@@ -21,6 +22,7 @@ from app.schemas.subscriptions import (
 from app.services.admin import list_admin_users
 from app.services.listings import (
     list_pricing_scope_counts,
+    list_pricing_scope_listings,
     list_promoted_listings,
     list_promoted_summary,
     list_promotion_events,
@@ -29,6 +31,7 @@ from app.services.listings import (
 from app.services.delivery_fees import list_delivery_fee_history
 from app.services.platform_fees import list_platform_fee_history
 from app.services.sellers import search_sellers
+from app.services.sellers import list_seller_trust_interventions
 from app.services.subscriptions import (
     assign_seller_subscription,
     create_subscription_tier,
@@ -54,12 +57,31 @@ def read_admin_sellers(
     return search_sellers(query_text=query, limit=limit)
 
 
+@router.get("/seller-trust/interventions", response_model=list[SellerTrustInterventionRead])
+def read_seller_trust_interventions(
+    limit: int = Query(20, ge=1, le=50),
+    current_user=Depends(require_admin_user),
+) -> list[SellerTrustInterventionRead]:
+    return list_seller_trust_interventions(limit=limit)
+
+
 @router.get(
     "/listings/pricing-scope-summary",
     response_model=list[ListingPricingScopeCount],
 )
 def read_pricing_scope_counts(current_user=Depends(require_admin_user)):
     return list_pricing_scope_counts()
+
+
+@router.get(
+    "/listings/pricing-scope-items",
+    response_model=list[ListingRead],
+)
+def read_pricing_scope_listings(
+    scope: str = Query(..., min_length=1),
+    current_user=Depends(require_admin_user),
+) -> list[ListingRead]:
+    return list_pricing_scope_listings(scope)
 
 
 @router.get("/listings/promoted", response_model=list[ListingPromotionDetail])

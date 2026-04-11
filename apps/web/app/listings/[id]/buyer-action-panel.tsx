@@ -4,7 +4,15 @@ import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { ApiError, createApiClient, formatCurrency, type Listing, type Profile } from "@/app/lib/api";
+import {
+  ApiError,
+  createApiClient,
+  formatCurrency,
+  type Listing,
+  type ListingBookingSuggestionRead,
+  type Profile,
+} from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import {
   authenticateBuyer,
   clearBuyerSession,
@@ -21,6 +29,7 @@ type BuyerActionPanelProps = {
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const api = createApiClient(apiBaseUrl);
+const BUYER_CHECKOUT_DRAFT_KEY = "buyer_checkout_draft";
 
 function getFulfillmentOptions(listing: Listing) {
   return [
@@ -41,6 +50,57 @@ function computeBookingWindow(listing: Listing, dayOffset: number) {
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
 
   return { start, end };
+}
+
+function formatBookingPlanLabel(offset: number) {
+  if (offset <= 0) {
+    return "Soonest";
+  }
+
+  if (offset === 1) {
+    return "Tomorrow";
+  }
+
+  if (offset === 2) {
+    return "In 2 days";
+  }
+
+  return `In ${offset} days`;
+}
+
+function getBookingPlanOptions(listing: Listing) {
+  const offsets = listing.available_today ? [0, 1, 2] : [1, 2, 3];
+
+  return offsets.map((offset) => {
+    const window = computeBookingWindow(listing, offset);
+    return {
+      offset,
+      label: formatBookingPlanLabel(offset),
+      weekday: window.start.toLocaleDateString([], { weekday: "short" }),
+      monthDay: window.start.toLocaleDateString([], {
+        month: "short",
+        day: "numeric",
+      }),
+      timeLabel: window.start.toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      }),
+      detail: `${window.start.toLocaleDateString()} · ${window.start.toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      })}`,
+    };
+  });
+}
+
+function formatBookingWindowSummary(start: Date, end: Date) {
+  return `${start.toLocaleDateString()} · ${start.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })} to ${end.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
 }
 
 function getSuggestionSecondarySignal(listing: Listing) {
@@ -100,6 +160,38 @@ function buildBuyerBrowseContext(
 ) {
   const parts = [originSliceSummary, formatFollowOnContext(followOn)].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+type BuyerCheckoutDraft = {
+  fulfillment: string;
+  bookingDayOffset: string;
+  quantity: string;
+};
+
+function normalizeCheckoutDraft(value: unknown): BuyerCheckoutDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const input = value as Record<string, unknown>;
+  if (typeof input.fulfillment !== "string") {
+    return null;
+  }
+
+  return {
+    fulfillment: input.fulfillment,
+    bookingDayOffset: typeof input.bookingDayOffset === "string" ? input.bookingDayOffset : "1",
+    quantity: typeof input.quantity === "string" ? input.quantity : "1",
+  };
+}
+
+function formatCheckoutDraftLabel(draft: BuyerCheckoutDraft, listing: Listing) {
+  const fulfillmentLabel = draft.fulfillment ? titleCaseLabel(draft.fulfillment) : "No fulfillment";
+  const bookingPlan = getBookingPlanOptions(listing).find(
+    (option) => option.offset === Number(draft.bookingDayOffset),
+  );
+
+  return `${fulfillmentLabel}${bookingPlan ? ` · ${bookingPlan.label}` : ""} · Qty ${draft.quantity}`;
 }
 
 function buildListingHref(
@@ -346,12 +438,18 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
   const [quantity, setQuantity] = useState("1");
   const [notes, setNotes] = useState("Buyer flow test from web.");
   const [bookingDayOffset, setBookingDayOffset] = useState("1");
+  const [bookingSuggestion, setBookingSuggestion] = useState<{
+    loading: boolean;
+    error: string | null;
+    suggestion: ListingBookingSuggestionRead | null;
+  } | null>(null);
   const [platformFeeRate, setPlatformFeeRate] = useState(0);
   const [deliveryFeeCents, setDeliveryFeeCents] = useState({
     delivery: 0,
     shipping: 0,
   });
   const [selectedFulfillment, setSelectedFulfillment] = useState("");
+  const [checkoutDraft, setCheckoutDraft] = useState<BuyerCheckoutDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -412,6 +510,19 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
     const parsedOffset = Number(bookingDayOffset);
     return computeBookingWindow(listing, Number.isFinite(parsedOffset) ? parsedOffset : 1);
   }, [bookingDayOffset, listing]);
+  const bookingPlanOptions = useMemo(() => getBookingPlanOptions(listing), [listing]);
+  const selectedBookingPlan = useMemo(
+    () => bookingPlanOptions.find((option) => bookingDayOffset === String(option.offset)) ?? null,
+    [bookingDayOffset, bookingPlanOptions],
+  );
+  const bookingWindowSummary = useMemo(
+    () => formatBookingWindowSummary(bookingWindow.start, bookingWindow.end),
+    [bookingWindow],
+  );
+  const savedCheckoutDraftLabel = useMemo(
+    () => (checkoutDraft ? formatCheckoutDraftLabel(checkoutDraft, listing) : null),
+    [checkoutDraft, listing],
+  );
 
   useEffect(() => {
     if (fulfillmentOptions.length > 0) {
@@ -426,6 +537,98 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
   }, [fulfillmentOptions]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    if (!canBook) {
+      setBookingSuggestion(null);
+      return;
+    }
+
+    setBookingSuggestion({ loading: true, error: null, suggestion: null });
+    void api
+      .getListingBookingSuggestion(listing.id)
+      .then((suggestion) => {
+        if (cancelled) {
+          return;
+        }
+        setBookingSuggestion({ loading: false, error: null, suggestion });
+        setBookingDayOffset(String(suggestion.suggested_day_offset));
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setBookingSuggestion({
+          loading: false,
+          error: error instanceof Error ? error.message : "Unable to load booking suggestion.",
+          suggestion: null,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canBook, listing.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(BUYER_CHECKOUT_DRAFT_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = normalizeCheckoutDraft(JSON.parse(stored));
+      if (parsed) {
+        setCheckoutDraft(parsed);
+      }
+    } catch {
+      window.sessionStorage.removeItem(BUYER_CHECKOUT_DRAFT_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!checkoutDraft) {
+      return;
+    }
+
+    if (checkoutDraft.fulfillment && fulfillmentOptions.some((option) => option.value === checkoutDraft.fulfillment)) {
+      setSelectedFulfillment(checkoutDraft.fulfillment);
+    }
+
+    if (checkoutDraft.bookingDayOffset) {
+      setBookingDayOffset(checkoutDraft.bookingDayOffset);
+    }
+
+    if (checkoutDraft.quantity) {
+      setQuantity(checkoutDraft.quantity);
+    }
+  }, [checkoutDraft, fulfillmentOptions]);
+
+  function clearCheckoutDraft() {
+    setCheckoutDraft(null);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(BUYER_CHECKOUT_DRAFT_KEY);
+    }
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const snapshot: BuyerCheckoutDraft = {
+      fulfillment: selectedFulfillment,
+      bookingDayOffset,
+      quantity,
+    };
+    window.sessionStorage.setItem(BUYER_CHECKOUT_DRAFT_KEY, JSON.stringify(snapshot));
+  }, [bookingDayOffset, quantity, selectedFulfillment]);
+
+  useEffect(() => {
     void (async () => {
       try {
         const refreshedSession = await restoreBuyerSession();
@@ -436,15 +639,18 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
         setSession(refreshedSession);
         const nextProfile = await ensureBuyerProfile(refreshedSession.access_token);
         setProfile(nextProfile);
-        const dashboard = await api.loadBuyerDashboard(refreshedSession.access_token);
+        const [engagement, listings] = await Promise.all([
+          api.loadBuyerEngagementContext(refreshedSession.access_token),
+          api.loadPublicListingsPage({ limit: 100, offset: 0 }),
+        ]);
         const preset = getRecommendedBrowsePreset({
-          listings: dashboard.listings,
-          orders: dashboard.orders,
-          bookings: dashboard.bookings,
+          listings,
+          orders: engagement.orders,
+          bookings: engagement.bookings,
         });
         setRecommendationReason(getRecommendationReason(listing, preset));
         setMoreLikeThisListings(
-          dashboard.listings
+          listings
             .filter((item) => item.id !== listing.id)
             .map((item) => ({
               listing: item,
@@ -582,6 +788,8 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
         },
         { accessToken: session.access_token },
       );
+      await invalidateMarketplaceCaches();
+      router.refresh();
       const nextReceiptHref = fromParam
         ? `/transactions/order/${order.id}?from=${encodeURIComponent(fromParam)}`
         : `/transactions/order/${order.id}`;
@@ -615,10 +823,15 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
         },
         { accessToken: session.access_token },
       );
+      await invalidateMarketplaceCaches();
+      router.refresh();
       const nextReceiptHref = fromParam
         ? `/transactions/booking/${booking.id}?from=${encodeURIComponent(fromParam)}`
         : `/transactions/booking/${booking.id}`;
-      router.push(nextReceiptHref);
+      setMessage(`Booking requested for ${bookingWindowSummary}. Opening confirmation...`);
+      window.setTimeout(() => {
+        router.push(nextReceiptHref);
+      }, 500);
     } catch (actionError) {
       setError(formatBuyerActionError(actionError));
     } finally {
@@ -660,6 +873,30 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
               </button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {savedCheckoutDraftLabel ? (
+        <div className="mt-4 rounded-[1.2rem] border border-white/12 bg-white/8 px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-white/58">
+                Saved Checkout Draft
+              </p>
+              <p className="mt-2 text-sm leading-6 text-white/76">
+                This browser session will reopen the last checkout choices you used here.
+              </p>
+              <div className="mt-3 inline-flex rounded-full border border-white/14 bg-white/12 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/82">
+                {savedCheckoutDraftLabel}
+              </div>
+            </div>
+            <button
+              className="rounded-full border border-white/16 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/36"
+              onClick={clearCheckoutDraft}
+              type="button"
+            >
+              Clear Draft
+            </button>
+          </div>
         </div>
       ) : null}
       {recommendationReason ? (
@@ -850,28 +1087,93 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
               </div>
             ) : null}
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm text-white/76">
-                <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-white/52">
-                  Quantity
-                </span>
-                <input
-                  className="w-full rounded-2xl border border-white/12 bg-white/10 px-4 py-3 text-white outline-none transition placeholder:text-white/35 focus:border-white/36"
-                  onChange={(event) => setQuantity(event.target.value)}
-                  value={quantity}
-                />
-              </label>
-              <label className="block text-sm text-white/76">
-                <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-white/52">
-                  Booking Day Offset
-                </span>
-                <input
-                  className="w-full rounded-2xl border border-white/12 bg-white/10 px-4 py-3 text-white outline-none transition placeholder:text-white/35 focus:border-white/36"
-                  onChange={(event) => setBookingDayOffset(event.target.value)}
-                  value={bookingDayOffset}
-                />
-              </label>
-            </div>
+            <label className="block text-sm text-white/76">
+              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-white/52">
+                Quantity
+              </span>
+              <input
+                className="w-full rounded-2xl border border-white/12 bg-white/10 px-4 py-3 text-white outline-none transition placeholder:text-white/35 focus:border-white/36"
+                onChange={(event) => setQuantity(event.target.value)}
+                value={quantity}
+              />
+            </label>
+
+            {canBook ? (
+              <div className="space-y-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-white/52">
+                    Choose a time window
+                  </p>
+                  <p className="mt-2 text-sm text-white/72">
+                    Pick one of the next available booking windows for this service.
+                  </p>
+                </div>
+                {bookingSuggestion?.suggestion ? (
+                  <div className="rounded-[1.2rem] border border-white/12 bg-white/8 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-white/58">
+                          Smart scheduling
+                        </p>
+                        <p className="mt-2 text-sm text-white/78">
+                          {bookingSuggestion.suggestion.summary}
+                        </p>
+                      </div>
+                      <button
+                        className="rounded-full border border-white/16 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white transition hover:border-white/36 disabled:opacity-55"
+                        disabled={bookingSuggestion.loading}
+                        onClick={() =>
+                          setBookingDayOffset(String(bookingSuggestion.suggestion?.suggested_day_offset ?? 1))
+                        }
+                        type="button"
+                      >
+                        Use suggestion
+                      </button>
+                    </div>
+                    <p className="mt-3 text-xs text-white/60">
+                      {bookingSuggestion.suggestion.rationale}
+                    </p>
+                  </div>
+                ) : bookingSuggestion?.error ? (
+                  <p className="text-xs text-rose-200">{bookingSuggestion.error}</p>
+                ) : bookingSuggestion?.loading ? (
+                  <p className="text-xs text-white/60">Loading smart scheduling suggestion...</p>
+                ) : null}
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {bookingPlanOptions.map((option) => (
+                    <button
+                      key={option.offset}
+                      className={`rounded-[1.4rem] border px-4 py-4 text-left transition ${
+                        bookingDayOffset === String(option.offset)
+                          ? "border-white bg-white text-[#213018]"
+                          : "border-white/12 bg-white/[0.04] text-white/82 hover:border-white/36 hover:bg-white/[0.08]"
+                      }`}
+                      onClick={() => setBookingDayOffset(String(option.offset))}
+                      type="button"
+                    >
+                      <p className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-60">
+                        {option.weekday}
+                      </p>
+                      <p className="mt-2 text-lg font-semibold">{option.monthDay}</p>
+                      <p className="mt-1 text-sm opacity-80">{option.timeLabel}</p>
+                      <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] opacity-70">
+                        {option.label}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+                {listing.auto_accept_bookings ? (
+                  <div className="rounded-[1.2rem] border border-white/12 bg-white/8 px-4 py-3 text-sm text-white/78">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-white/58">
+                      Instant confirmation
+                    </p>
+                    <p className="mt-2">
+                      This listing auto-confirms booking requests when the chosen window does not overlap an active booking.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <label className="block text-sm text-white/76">
               <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-white/52">
@@ -886,8 +1188,16 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
 
             {canBook ? (
               <div className="rounded-[1.2rem] border border-white/12 bg-white/6 px-4 py-3 text-sm text-white/76">
-                Booking window preview: {bookingWindow.start.toLocaleString()} to{" "}
-                {bookingWindow.end.toLocaleString()}
+                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-white/52">
+                  Booking window preview
+                </p>
+                <p className="mt-2">
+                  {bookingWindow.start.toLocaleString()} to {bookingWindow.end.toLocaleString()}
+                </p>
+                <p className="mt-2 text-xs text-white/58">
+                  Lead time: {listing.lead_time_hours ?? 24} hours · Duration:{" "}
+                  {listing.duration_minutes ?? 90} minutes
+                </p>
               </div>
             ) : null}
 
@@ -907,18 +1217,28 @@ export function BuyerActionPanel({ listing, sellerDisplayName }: BuyerActionPane
                 </button>
               ) : null}
               {canBook ? (
-                <button
-                  className={`rounded-full px-5 py-3 text-xs font-semibold uppercase tracking-[0.16em] transition ${
-                    primaryAction === "booking"
-                      ? "bg-white text-[#213018]"
-                      : "border border-white/16 text-white/82 hover:border-white/36"
-                  }`}
-                  disabled={loading}
-                  onClick={handleBooking}
-                  type="button"
-                >
-                  {loading && primaryAction === "booking" ? "Requesting..." : "Request Booking"}
-                </button>
+                <div className="space-y-2">
+                  <button
+                    className={`rounded-full px-5 py-3 text-xs font-semibold uppercase tracking-[0.16em] transition ${
+                      primaryAction === "booking"
+                        ? "bg-white text-[#213018]"
+                        : "border border-white/16 text-white/82 hover:border-white/36"
+                    }`}
+                    disabled={loading}
+                    onClick={handleBooking}
+                    type="button"
+                  >
+                    {loading && primaryAction === "booking" ? "Requesting..." : "Request Booking"}
+                  </button>
+                  <p className="text-xs text-white/62">
+                    Booking for{" "}
+                    <span className="font-semibold text-white/84">
+                      {selectedBookingPlan?.label ?? "Selected window"}
+                    </span>
+                    {" · "}
+                    {bookingWindowSummary}
+                  </p>
+                </div>
               ) : null}
             </div>
           </div>

@@ -2,7 +2,6 @@ import {
   ApiError,
   buildNotifications,
   createApiClient,
-  type BuyerDashboardData,
   formatCurrency,
   formatLocation,
   type Booking,
@@ -67,7 +66,6 @@ export { createApiClient };
 export type {
   Booking,
   BookingCreateInput,
-  BuyerDashboardData,
   Listing,
   ListingResponse,
   NotificationDeliveryBulkRetryResult,
@@ -164,8 +162,12 @@ export function loadBuyerBooking(accessToken: string, bookingId: string) {
   return api.getBookingById(bookingId, { accessToken });
 }
 
-export function loadBuyerDashboard(accessToken: string) {
-  return api.loadBuyerDashboard(accessToken);
+export function loadBuyerProfile(accessToken: string) {
+  return api.loadMyProfile(accessToken);
+}
+
+export function loadBuyerEngagementContext(accessToken: string) {
+  return api.loadBuyerEngagementContext(accessToken);
 }
 
 export function loadBuyerNotificationDeliveries(accessToken: string) {
@@ -193,8 +195,8 @@ export function retryBuyerNotificationDelivery(
   return api.retryNotificationDelivery(deliveryIdOrIds, accessToken);
 }
 
-export function loadPublicListings() {
-  return api.loadPublicListings();
+export function loadPublicListingsPage(limit = 100, offset = 0) {
+  return api.loadPublicListingsPage({ limit, offset });
 }
 
 export function formatBuyerActionError(error: unknown) {

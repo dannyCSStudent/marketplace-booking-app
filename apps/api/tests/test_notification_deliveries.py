@@ -6,8 +6,11 @@ from fastapi import HTTPException
 
 from app.dependencies.auth import CurrentUser
 from app.services.notification_deliveries import (
+    acknowledge_admin_trust_alert,
+    clear_admin_trust_alert_acknowledgement,
     get_admin_notification_delivery_summary,
     get_admin_notification_worker_health,
+    list_admin_trust_alert_seller_summaries,
     retry_admin_notification_deliveries,
     retry_my_notification_delivery,
 )
@@ -257,6 +260,162 @@ class NotificationDeliveryRetryTests(unittest.TestCase):
         self.assertEqual(len(result.failed), 1)
         self.assertEqual(result.failed[0].id, "delivery-1")
         self.assertIn("Only failed or queued", result.failed[0].detail)
+
+    def test_admin_can_acknowledge_trust_alert_deliveries(self):
+        delivery = {
+            "id": "delivery-1",
+            "recipient_user_id": "trust-admin",
+            "transaction_kind": "seller",
+            "transaction_id": "seller-1",
+            "event_id": "seller-trust-intervention:seller-1:critical:worsening",
+            "channel": "email",
+            "delivery_status": "sent",
+            "payload": {
+                "alert_type": "seller_trust_intervention",
+                "seller_id": "seller-1",
+                "alert_signature": "seller-1|critical|worsening|high|Trend|Reason|Hidden reviews are present",
+            },
+            "failure_reason": None,
+            "attempts": 1,
+            "sent_at": "2026-04-08T11:00:00+00:00",
+            "created_at": "2026-04-08T11:00:00+00:00",
+        }
+        updated_delivery = {
+            **delivery,
+            "payload": {
+                **delivery["payload"],
+                "acknowledged_at": "2026-04-08T12:00:00+00:00",
+                "acknowledged_by_user_id": "admin-user-id",
+                "acknowledged_signature": delivery["payload"]["alert_signature"],
+            },
+        }
+        fake_supabase = _FakeSupabase(select_side_effect=[[delivery]], update_result=[updated_delivery])
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = acknowledge_admin_trust_alert("seller-1", actor_user_id="admin-user-id")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].payload["acknowledged_by_user_id"], "admin-user-id")
+        self.assertEqual(result[0].payload["acknowledged_signature"], delivery["payload"]["alert_signature"])
+
+    def test_admin_can_clear_trust_alert_acknowledgement(self):
+        delivery = {
+            "id": "delivery-1",
+            "recipient_user_id": "trust-admin",
+            "transaction_kind": "seller",
+            "transaction_id": "seller-1",
+            "event_id": "seller-trust-intervention:seller-1:critical:worsening",
+            "channel": "email",
+            "delivery_status": "sent",
+            "payload": {
+                "alert_type": "seller_trust_intervention",
+                "seller_id": "seller-1",
+                "alert_signature": "seller-1|critical|worsening|high|Trend|Reason|Hidden reviews are present",
+                "acknowledged_at": "2026-04-08T12:00:00+00:00",
+                "acknowledged_by_user_id": "admin-user-id",
+                "acknowledged_signature": "seller-1|critical|worsening|high|Trend|Reason|Hidden reviews are present",
+            },
+            "failure_reason": None,
+            "attempts": 1,
+            "sent_at": "2026-04-08T11:00:00+00:00",
+            "created_at": "2026-04-08T11:00:00+00:00",
+        }
+        updated_delivery = {
+            **delivery,
+            "payload": {
+                "alert_type": "seller_trust_intervention",
+                "seller_id": "seller-1",
+                "alert_signature": delivery["payload"]["alert_signature"],
+            },
+        }
+        fake_supabase = _FakeSupabase(select_side_effect=[[delivery]], update_result=[updated_delivery])
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = clear_admin_trust_alert_acknowledgement("seller-1")
+
+        self.assertEqual(len(result), 1)
+        self.assertNotIn("acknowledged_at", result[0].payload)
+        self.assertNotIn("acknowledged_signature", result[0].payload)
+
+    def test_admin_can_group_trust_alert_seller_summaries(self):
+        fake_supabase = _FakeSupabase(
+            select_side_effect=[
+                [
+                    {
+                        "seller_id": "seller-1",
+                        "seller_slug": "seller-one",
+                        "seller_display_name": "Seller One",
+                        "action": "acknowledged",
+                        "risk_level": "critical",
+                        "trend_direction": "worsening",
+                        "created_at": "2026-04-08T12:00:00+00:00",
+                    },
+                    {
+                        "seller_id": "seller-1",
+                        "seller_slug": "seller-one",
+                        "seller_display_name": "Seller One",
+                        "action": "cleared",
+                        "risk_level": "critical",
+                        "trend_direction": "worsening",
+                        "created_at": "2026-04-08T11:00:00+00:00",
+                    },
+                    {
+                        "seller_id": "seller-2",
+                        "seller_slug": "seller-two",
+                        "seller_display_name": "Seller Two",
+                        "action": "acknowledged",
+                        "risk_level": "elevated",
+                        "trend_direction": "steady",
+                        "created_at": "2026-04-08T10:00:00+00:00",
+                    },
+                ],
+            ],
+            update_result=[],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = list_admin_trust_alert_seller_summaries(limit=2)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].seller_id, "seller-1")
+        self.assertEqual(result[0].event_count, 2)
+        self.assertEqual(result[0].latest_event_action, "acknowledged")
+        self.assertEqual(result[0].latest_event_risk_level, "critical")
+        self.assertEqual(result[1].seller_id, "seller-2")
+        self.assertEqual(result[1].event_count, 1)
+
+    def test_admin_can_filter_trust_alert_seller_summaries_by_action(self):
+        fake_supabase = _FakeSupabase(
+            select_side_effect=[
+                [
+                    {
+                        "seller_id": "seller-1",
+                        "seller_slug": "seller-one",
+                        "seller_display_name": "Seller One",
+                        "action": "acknowledged",
+                        "risk_level": "critical",
+                        "trend_direction": "worsening",
+                        "created_at": "2026-04-08T12:00:00+00:00",
+                    },
+                    {
+                        "seller_id": "seller-2",
+                        "seller_slug": "seller-two",
+                        "seller_display_name": "Seller Two",
+                        "action": "cleared",
+                        "risk_level": "elevated",
+                        "trend_direction": "steady",
+                        "created_at": "2026-04-08T10:00:00+00:00",
+                    },
+                ],
+            ],
+            update_result=[],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = list_admin_trust_alert_seller_summaries(limit=8, action="acknowledged")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].seller_id, "seller-1")
 
 
 class _FakeSupabase:

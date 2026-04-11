@@ -3,9 +3,10 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 import { ListingContextBar } from "@/app/listings/[id]/listing-context-bar";
-import { ReviewReportButton } from "@/app/components/review-report-button";
+import { ReviewReportButton, getBuyerReviewReportHistory } from "@/app/components/review-report-button";
 import { BuyerActionPanel } from "@/app/listings/[id]/buyer-action-panel";
-import { formatCurrency, getListingDetailData } from "@/app/lib/api";
+import { formatCurrency } from "@/app/lib/api";
+import { getListingDetailData } from "@/app/lib/server-data";
 
 function getLocationLabel(parts: Array<string | null | undefined>) {
   return parts.filter(Boolean).join(", ") || "Location pending";
@@ -93,6 +94,7 @@ export default async function ListingDetailPage({
   const isPopularNearYou = transactionCount >= 3;
   const listingLocationLabel = getLocationLabel([listing.city, listing.state, listing.country]);
   const comparisonScopeBadge = getListingComparisonScopeBadge(listing.last_pricing_comparison_scope);
+  const recentReviewReports = getBuyerReviewReportHistory();
   const tractionValue = transactionCount > 0
     ? `${transactionCount} recent requests${transactionCount >= 3 ? ' · Popular near you' : ''}`
     : listing.is_new_listing
@@ -206,7 +208,11 @@ export default async function ListingDetailPage({
               </div>
 
               <Suspense fallback={null}>
-                <ListingContextBar storefrontHref={seller?.slug ? `/sellers/${seller.slug}` : null} />
+                <ListingContextBar
+                  listing={listing}
+                  sellerDisplayName={seller?.display_name ?? null}
+                  storefrontHref={seller?.slug ? `/sellers/${seller.slug}` : null}
+                />
               </Suspense>
             </div>
           </div>
@@ -221,22 +227,36 @@ export default async function ListingDetailPage({
               <InfoCard label="Fulfillment" value={getFulfillmentLabel(listing)} />
               <InfoCard
                 label="Booking"
-                value={canBook ? "Accepts booking requests" : "Order flow only"}
-              />
-              <InfoCard
-                label="Service Time"
                 value={
-                  listing.duration_minutes
-                    ? `${listing.duration_minutes} minutes`
-                    : "No duration set"
+                  canBook
+                    ? listing.auto_accept_bookings
+                      ? "Auto-confirms when no conflict"
+                      : "Accepts booking requests"
+                    : "Order flow only"
                 }
               />
               <InfoCard
-                label="Lead Time"
+                label="Typical Session"
                 value={
-                  listing.lead_time_hours
-                    ? `${listing.lead_time_hours} hours`
-                    : "Ready without extra lead time"
+                  listing.duration_minutes
+                    ? `${listing.duration_minutes} minutes per booking`
+                    : canBook
+                      ? "Session length shared after request"
+                      : "No service session"
+                }
+              />
+              <InfoCard
+                label="Booking Notice"
+                value={
+                  listing.auto_accept_bookings
+                    ? listing.lead_time_hours
+                      ? `${listing.lead_time_hours} hours before start · Auto-confirms when clear`
+                      : "Auto-confirms when clear"
+                    : listing.lead_time_hours
+                      ? `${listing.lead_time_hours} hours before start`
+                      : canBook
+                        ? "Can be requested without extra notice"
+                        : "No booking notice needed"
                 }
               />
               <InfoCard label="Recent traction" value={tractionValue} />
@@ -274,6 +294,11 @@ export default async function ListingDetailPage({
               {reviews.length} shown
             </span>
           </div>
+          {recentReviewReports.some((entry) => entry.reviewId) ? (
+            <div className="mt-4 rounded-[1rem] border border-border bg-white/70 px-4 py-3 text-xs text-foreground/58">
+              Review reporting history is saved in this browser session.
+            </div>
+          ) : null}
 
           <div className="mt-6 grid gap-4 lg:grid-cols-3">
             {reviews.length > 0 ? (

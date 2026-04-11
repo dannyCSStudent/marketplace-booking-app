@@ -22,6 +22,8 @@ from app.services.platform_fees import (
     calculate_platform_fee,
     get_active_platform_fee_rate_value,
 )
+from app.services.notification_delivery_worker import process_notification_delivery_rows
+from app.services.response_ai import build_transaction_response_ai_response
 from app.services.workflows import BOOKING_TRANSITIONS_BY_ACTOR, validate_transition
 from app.services.notifications import queue_transaction_notification_jobs
 
@@ -29,7 +31,7 @@ BOOKING_SELECT = (
     "id,buyer_id,seller_id,listing_id,status,scheduled_start,scheduled_end,total_cents,currency,"
     "platform_fee_cents,platform_fee_rate,"
     "seller_response_note,"
-    "notes,buyer_browse_context,listings(title,type),booking_status_events(id,status,actor_role,note,created_at)"
+    "notes,buyer_browse_context,listings(title,type,is_local_only,auto_accept_bookings),booking_status_events(id,status,actor_role,note,created_at)"
 )
 BOOKING_ADMIN_SELECT = (
     f"{BOOKING_SELECT},admin_note,admin_handoff_note,admin_assignee_user_id,admin_assigned_at,admin_is_escalated,admin_escalated_at,"
@@ -70,6 +72,7 @@ def _serialize_booking(row: dict, *, include_admin: bool = False) -> BookingRead
         seller_response_note=row.get("seller_response_note"),
         listing_title=listing.get("title"),
         listing_type=listing.get("type"),
+        is_local_only=listing.get("is_local_only"),
         status_history=status_history,
     )
     if include_admin:
@@ -183,6 +186,166 @@ def _get_seller_user_id(*, seller_id: str) -> str | None:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return seller_profile.get("user_id")
+
+
+def _booking_windows_overlap(
+    start_a: datetime,
+    end_a: datetime,
+    start_b: datetime,
+    end_b: datetime,
+) -> bool:
+    return start_a < end_b and end_a > start_b
+
+
+def _find_booking_conflicts(
+    *,
+    listing_id: str,
+    scheduled_start: datetime,
+    scheduled_end: datetime,
+    supabase,
+) -> list[dict]:
+    try:
+        rows = supabase.select(
+            "bookings",
+            query={
+                "select": "id,status,scheduled_start,scheduled_end",
+                "listing_id": f"eq.{listing_id}",
+                "status": "in.(requested,confirmed,in_progress)",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        return []
+
+    conflicts: list[dict] = []
+    for row in rows:
+        existing_start = row.get("scheduled_start")
+        existing_end = row.get("scheduled_end")
+        if not isinstance(existing_start, str) or not isinstance(existing_end, str):
+            continue
+
+        try:
+            parsed_start = datetime.fromisoformat(existing_start.replace("Z", "+00:00"))
+            parsed_end = datetime.fromisoformat(existing_end.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+
+        if _booking_windows_overlap(scheduled_start, scheduled_end, parsed_start, parsed_end):
+            conflicts.append(row)
+
+    return conflicts
+
+
+def _queue_booking_conflict_alert_notification(
+    *,
+    seller_user_id: str | None,
+    seller_id: str,
+    seller_slug: str,
+    seller_display_name: str,
+    booking_id: str,
+    listing_id: str,
+    listing_title: str | None,
+    scheduled_start: datetime,
+    scheduled_end: datetime,
+    conflicts: list[dict],
+) -> None:
+    if not seller_user_id:
+        return
+
+    alert_signature = f"booking-conflict:{listing_id}:{booking_id}"
+    try:
+        supabase = get_supabase_client()
+        existing = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "id",
+                "event_id": f"eq.{alert_signature}",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        existing = []
+
+    if existing:
+        return
+
+    conflict_count = len(conflicts)
+    conflict_booking_ids = [str(row.get("id")) for row in conflicts if row.get("id")]
+    subject = f"Booking conflict detected for {listing_title or listing_id}"
+    body = (
+        f"{listing_title or listing_id} has {conflict_count} overlapping booking"
+        f"{'' if conflict_count == 1 else 's'}."
+    )
+    html = (
+        f"<p>Booking conflict detected for <strong>{listing_title or listing_id}</strong>.</p>"
+        f"<p><strong>Overlaps:</strong> {conflict_count}</p>"
+        f"<p><strong>Conflicting booking IDs:</strong> {', '.join(conflict_booking_ids) or 'none'}</p>"
+        f"<p><strong>Window:</strong> {scheduled_start.isoformat()} to {scheduled_end.isoformat()}</p>"
+    )
+
+    deliveries = [
+        {
+            "recipient_user_id": seller_user_id,
+            "transaction_kind": "booking",
+            "transaction_id": booking_id,
+            "event_id": alert_signature,
+            "channel": "email",
+            "delivery_status": "queued",
+            "payload": {
+                "alert_type": "booking_conflict",
+                "seller_id": seller_id,
+                "seller_slug": seller_slug,
+                "seller_display_name": seller_display_name,
+                "booking_id": booking_id,
+                "listing_id": listing_id,
+                "listing_title": listing_title,
+                "conflict_booking_ids": conflict_booking_ids,
+                "conflict_count": conflict_count,
+                "scheduled_start": scheduled_start.isoformat(),
+                "scheduled_end": scheduled_end.isoformat(),
+                "alert_signature": alert_signature,
+                "subject": subject,
+                "body": body,
+                "html": html,
+            },
+        },
+        {
+            "recipient_user_id": seller_user_id,
+            "transaction_kind": "booking",
+            "transaction_id": booking_id,
+            "event_id": alert_signature,
+            "channel": "push",
+            "delivery_status": "queued",
+            "payload": {
+                "alert_type": "booking_conflict",
+                "seller_id": seller_id,
+                "seller_slug": seller_slug,
+                "seller_display_name": seller_display_name,
+                "booking_id": booking_id,
+                "listing_id": listing_id,
+                "listing_title": listing_title,
+                "conflict_booking_ids": conflict_booking_ids,
+                "conflict_count": conflict_count,
+                "scheduled_start": scheduled_start.isoformat(),
+                "scheduled_end": scheduled_end.isoformat(),
+                "alert_signature": alert_signature,
+                "subject": subject,
+                "body": body,
+                "html": html,
+            },
+        },
+    ]
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if inserted_rows:
+        try:
+            process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
 
 def get_my_bookings(current_user: CurrentUser) -> list[BookingRead]:
     supabase = get_supabase_client()
@@ -368,8 +531,8 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
             "listings",
             query={
                 "select": (
-                    "id,seller_id,price_cents,currency,status,type,requires_booking,"
-                    "duration_minutes,lead_time_hours"
+                    "id,seller_id,title,price_cents,currency,status,type,requires_booking,"
+                    "duration_minutes,lead_time_hours,auto_accept_bookings"
                 ),
                 "id": f"eq.{payload.listing_id}",
             },
@@ -422,6 +585,30 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
     platform_fee_rate = get_active_platform_fee_rate_value()
     platform_fee_cents = calculate_platform_fee(price_cents, platform_fee_rate)
     total_cents = price_cents + platform_fee_cents
+    auto_accept_bookings = bool(listing.get("auto_accept_bookings"))
+    scheduled_conflicts = _find_booking_conflicts(
+        listing_id=payload.listing_id,
+        scheduled_start=scheduled_start,
+        scheduled_end=scheduled_end,
+        supabase=supabase,
+    )
+    booking_status = "confirmed" if auto_accept_bookings and not scheduled_conflicts else "requested"
+    try:
+        seller = supabase.select(
+            "seller_profiles",
+            query={
+                "select": "id,slug,display_name,user_id",
+                "id": f"eq.{payload.seller_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seller profile not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    seller_user_id = seller.get("user_id")
 
     try:
         rows = supabase.insert(
@@ -430,6 +617,7 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
                 "buyer_id": current_user.id,
                 "seller_id": payload.seller_id,
                 "listing_id": payload.listing_id,
+                "status": booking_status,
                 "scheduled_start": scheduled_start.isoformat(),
                 "scheduled_end": scheduled_end.isoformat(),
                 "total_cents": total_cents,
@@ -445,22 +633,70 @@ def create_booking(current_user: CurrentUser, payload: BookingCreate) -> Booking
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     booking = rows[0]
+    event_note = (
+        "Auto-confirmed by listing settings."
+        if booking_status == "confirmed"
+        else payload.notes
+    )
     event = _insert_booking_status_event(
         booking_id=booking["id"],
-        status_value=booking["status"],
-        actor_role="buyer",
-        note=payload.notes,
+        status_value=booking_status,
+        actor_role="system" if booking_status == "confirmed" else "buyer",
+        note=event_note,
         access_token=current_user.access_token,
     )
-    queue_transaction_notification_jobs(
-        recipient_user_id=_get_seller_user_id(seller_id=payload.seller_id),
-        transaction_kind="booking",
-        transaction_id=booking["id"],
-        event_id=event["id"],
-        status_value=booking["status"],
-        actor_role="buyer",
-        note=payload.notes,
-    )
+    if booking_status == "confirmed":
+        auto_accept_note = "This booking was auto-confirmed by the listing's booking settings."
+        queue_transaction_notification_jobs(
+            recipient_user_id=current_user.id,
+            transaction_kind="booking",
+            transaction_id=booking["id"],
+            event_id=event["id"],
+            status_value=booking_status,
+            actor_role="system",
+            note=auto_accept_note,
+        )
+        queue_transaction_notification_jobs(
+            recipient_user_id=seller_user_id,
+            transaction_kind="booking",
+            transaction_id=booking["id"],
+            event_id=event["id"],
+            status_value=booking_status,
+            actor_role="system",
+            note="A booking request auto-confirmed through this listing's settings.",
+        )
+    elif auto_accept_bookings and scheduled_conflicts:
+        queue_transaction_notification_jobs(
+            recipient_user_id=seller_user_id,
+            transaction_kind="booking",
+            transaction_id=booking["id"],
+            event_id=event["id"],
+            status_value=booking_status,
+            actor_role="buyer",
+            note="Booking request overlaps another active booking and needs manual review.",
+        )
+        _queue_booking_conflict_alert_notification(
+            seller_user_id=seller_user_id,
+            seller_id=seller["id"],
+            seller_slug=seller["slug"],
+            seller_display_name=seller["display_name"],
+            booking_id=booking["id"],
+            listing_id=listing["id"],
+            listing_title=listing.get("title") if isinstance(listing.get("title"), str) else None,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            conflicts=scheduled_conflicts,
+        )
+    else:
+        queue_transaction_notification_jobs(
+            recipient_user_id=seller_user_id,
+            transaction_kind="booking",
+            transaction_id=booking["id"],
+            event_id=event["id"],
+            status_value=booking_status,
+            actor_role="buyer",
+            note=payload.notes,
+        )
 
     return _get_booking_by_id(booking_id=booking["id"], access_token=current_user.access_token)
 
@@ -525,6 +761,21 @@ def update_booking_status(current_user: CurrentUser, booking_id: str, payload: B
     )
 
     return _get_booking_by_id(booking_id=booking_id, access_token=current_user.access_token)
+
+
+def generate_booking_response_ai_assist(current_user: CurrentUser, booking_id: str):
+    current_booking = _get_booking_row_by_id(
+        booking_id=booking_id,
+        access_token=current_user.access_token,
+    )
+    return build_transaction_response_ai_response(
+        transaction_kind="booking",
+        transaction_id=booking_id,
+        transaction_status=current_booking["status"],
+        buyer_notes=current_booking.get("notes"),
+        buyer_context=current_booking.get("buyer_browse_context"),
+        transaction_label=current_booking.get("listing_title") or current_booking.get("listing_id"),
+    )
 
 
 def _validate_booking_status_update(

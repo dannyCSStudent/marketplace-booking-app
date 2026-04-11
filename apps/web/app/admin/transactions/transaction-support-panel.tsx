@@ -12,8 +12,11 @@ import {
   type Listing,
   type NotificationDelivery,
   type OrderAdmin,
+  type Profile,
   type ReviewModerationItem,
+  type SellerTrustIntervention,
 } from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 
 type TransactionKind = "order" | "booking";
@@ -38,7 +41,8 @@ type QueuePreset =
   | "support_queue"
   | "trust_queue"
   | "failed_delivery_follow_up"
-  | "trust_driven";
+  | "trust_driven"
+  | "seller_trust_intervention";
 type FeedbackTone = "success" | "error";
 type PendingBulkAction =
   | {
@@ -91,6 +95,33 @@ type OrderHistoryEvent = NonNullable<OrderAdmin["status_history"]>[number];
 type BookingHistoryEvent = NonNullable<BookingAdmin["status_history"]>[number];
 type OrderAdminEvent = NonNullable<OrderAdmin["admin_history"]>[number];
 type BookingAdminEvent = NonNullable<BookingAdmin["admin_history"]>[number];
+type TransactionSupportPreferences = {
+  preset: QueuePreset;
+  type: TransactionFilter;
+  status: StatusFilter;
+  assignee: AssigneeFilter;
+  priority: EscalationFilter;
+  role: AdminRoleFilter;
+  delivery: DeliveryFilter;
+  trust: TrustContextFilter;
+  listing: string;
+  listingHealth: ListingHealthFilter;
+  q: string;
+  focus: string | null;
+  activity_filter: "all" | "view" | "operation";
+  activity_entry_limit: 6 | 10;
+  activity_collapsed_groups: string[];
+  activity_log: TransactionSupportActivityEntry[];
+};
+
+type TransactionSupportActivityEntry = {
+  id: string;
+  kind: "view" | "operation";
+  label: string;
+  created_at: string;
+  snapshot: Omit<TransactionSupportPreferences, "activity_log">;
+  focus_item_key?: string | null;
+};
 
 type SupportItem =
   | {
@@ -166,6 +197,149 @@ const OPEN_BOOKING_STATUSES = new Set(["requested", "confirmed", "in_progress"])
 const STALE_UNASSIGNED_HOURS = 24;
 const STALE_ASSIGNED_HOURS = 48;
 const TRUST_ESCALATION_MARKER = "Trust escalation trigger:";
+const DEFAULT_TRANSACTION_SUPPORT_PREFERENCES: TransactionSupportPreferences = {
+  preset: "needs_follow_up",
+  type: "all",
+  status: "open",
+  assignee: "all",
+  priority: "all",
+  role: "all",
+  delivery: "all",
+  trust: "all",
+  listing: "all",
+  listingHealth: "all",
+  q: "",
+  focus: null,
+  activity_filter: "all",
+  activity_entry_limit: 6,
+  activity_collapsed_groups: [],
+  activity_log: [],
+};
+
+function normalizeTransactionSupportPreferences(value: unknown): TransactionSupportPreferences {
+  if (!value || typeof value !== "object") {
+    return DEFAULT_TRANSACTION_SUPPORT_PREFERENCES;
+  }
+
+  const input = value as Record<string, unknown>;
+  const snapshot = {
+    preset:
+      input.preset === "default" ||
+      input.preset === "needs_follow_up" ||
+      input.preset === "assigned_to_me" ||
+      input.preset === "escalated_unassigned" ||
+      input.preset === "escalated_to_me" ||
+      input.preset === "stale_unassigned" ||
+      input.preset === "escalated_assigned" ||
+      input.preset === "escalated_assigned_elsewhere" ||
+      input.preset === "needs_reassignment" ||
+      input.preset === "support_queue" ||
+      input.preset === "trust_queue" ||
+      input.preset === "failed_delivery_follow_up" ||
+      input.preset === "trust_driven" ||
+      input.preset === "seller_trust_intervention"
+        ? input.preset
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.preset,
+    type:
+      input.type === "all" || input.type === "order" || input.type === "booking"
+        ? input.type
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.type,
+    status:
+      input.status === "all" || input.status === "open" || input.status === "completed"
+        ? input.status
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.status,
+    assignee:
+      input.assignee === "all" ||
+      input.assignee === "mine" ||
+      input.assignee === "unassigned" ||
+      input.assignee === "elsewhere"
+        ? input.assignee
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.assignee,
+    priority:
+      input.priority === "all" || input.priority === "escalated" || input.priority === "normal"
+        ? input.priority
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.priority,
+    role:
+      input.role === "all" || input.role === "support" || input.role === "trust" || input.role === "owner"
+        ? input.role
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.role,
+    delivery:
+      input.delivery === "all" || input.delivery === "failed" || input.delivery === "queued"
+        ? input.delivery
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.delivery,
+    trust: input.trust === "trust_driven" ? "trust_driven" : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.trust,
+    listing: typeof input.listing === "string" && input.listing.trim() ? input.listing : "all",
+    listingHealth:
+      input.listingHealth === "softening" ||
+      input.listingHealth === "recent_pricing" ||
+      input.listingHealth === "trust_flagged"
+        ? input.listingHealth
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.listingHealth,
+    q: typeof input.q === "string" ? input.q : "",
+    focus: typeof input.focus === "string" && input.focus.trim() ? input.focus : null,
+    activity_filter:
+      input.activity_filter === "all" ||
+      input.activity_filter === "view" ||
+      input.activity_filter === "operation"
+        ? input.activity_filter
+        : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.activity_filter,
+    activity_entry_limit:
+      input.activity_entry_limit === 10 ? 10 : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.activity_entry_limit,
+    activity_collapsed_groups: Array.isArray(input.activity_collapsed_groups)
+      ? input.activity_collapsed_groups.filter((value): value is string => typeof value === "string")
+      : DEFAULT_TRANSACTION_SUPPORT_PREFERENCES.activity_collapsed_groups,
+  } satisfies Omit<TransactionSupportPreferences, "activity_log">;
+
+  return {
+    ...snapshot,
+    activity_log: Array.isArray(input.activity_log)
+      ? input.activity_log
+          .map((entry) => {
+            if (!entry || typeof entry !== "object") {
+              return null;
+            }
+            const item = entry as Record<string, unknown>;
+            if (
+              typeof item.id !== "string" ||
+              typeof item.label !== "string" ||
+              typeof item.created_at !== "string" ||
+              (item.kind !== "view" && item.kind !== "operation")
+            ) {
+              return null;
+            }
+            const rawSnapshot =
+              item.snapshot && typeof item.snapshot === "object"
+                ? normalizeTransactionSupportPreferences(item.snapshot)
+                : { ...DEFAULT_TRANSACTION_SUPPORT_PREFERENCES };
+            return {
+              id: item.id,
+              kind: item.kind,
+              label: item.label,
+              created_at: item.created_at,
+              snapshot: {
+                preset: rawSnapshot.preset,
+                type: rawSnapshot.type,
+                status: rawSnapshot.status,
+                assignee: rawSnapshot.assignee,
+                priority: rawSnapshot.priority,
+                role: rawSnapshot.role,
+                delivery: rawSnapshot.delivery,
+                trust: rawSnapshot.trust,
+                listing: rawSnapshot.listing,
+                listingHealth: rawSnapshot.listingHealth,
+                q: rawSnapshot.q,
+                focus: rawSnapshot.focus,
+              },
+              focus_item_key:
+                typeof item.focus_item_key === "string" && item.focus_item_key.trim()
+                  ? item.focus_item_key
+                  : null,
+            } satisfies TransactionSupportActivityEntry;
+          })
+          .filter(Boolean) as TransactionSupportActivityEntry[]
+      : [],
+  };
+}
 
 function formatDateTime(value: string | null | undefined) {
   if (!value) {
@@ -204,6 +378,28 @@ function formatAgeLabel(value: string | null | undefined) {
   }
 
   return `${Math.floor(hours / 24)}d`;
+}
+
+function formatActivityDayLabel(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "Unknown";
+  }
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+  const timestamp = parsed.getTime();
+
+  if (timestamp >= startOfToday) {
+    return "Today";
+  }
+
+  if (timestamp >= startOfYesterday) {
+    return "Yesterday";
+  }
+
+  return parsed.toLocaleDateString();
 }
 
 function isRecentWithinDays(value: string | null | undefined, days: number) {
@@ -695,6 +891,7 @@ export function TransactionSupportPanel() {
   const [adminRoster, setAdminRoster] = useState<AdminUser[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
   const [reviewReports, setReviewReports] = useState<ReviewModerationItem[]>([]);
+  const [sellerTrustInterventions, setSellerTrustInterventions] = useState<SellerTrustIntervention[]>([]);
   const [preset, setPreset] = useState<QueuePreset>("needs_follow_up");
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<TransactionFilter>("all");
@@ -719,6 +916,11 @@ export function TransactionSupportPanel() {
   const [bulkUpdating, setBulkUpdating] = useState<string | null>(null);
   const [pendingBulkAction, setPendingBulkAction] = useState<PendingBulkAction | null>(null);
   const [pendingRouteAction, setPendingRouteAction] = useState<PendingRouteAction | null>(null);
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
+  const [activityLog, setActivityLog] = useState<TransactionSupportActivityEntry[]>([]);
+  const [activityFilter, setActivityFilter] = useState<"all" | "view" | "operation">("all");
+  const [activityEntryLimit, setActivityEntryLimit] = useState<6 | 10>(6);
+  const [collapsedActivityGroups, setCollapsedActivityGroups] = useState<string[]>([]);
 
   useEffect(() => {
     const nextPreset = searchParams.get("preset");
@@ -747,7 +949,8 @@ export function TransactionSupportPanel() {
         nextPreset === "support_queue" ||
         nextPreset === "trust_queue" ||
         nextPreset === "failed_delivery_follow_up" ||
-        nextPreset === "trust_driven"
+        nextPreset === "trust_driven" ||
+        nextPreset === "seller_trust_intervention"
         ? nextPreset
         : "needs_follow_up",
     );
@@ -796,6 +999,98 @@ export function TransactionSupportPanel() {
   }, [searchParams]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const session = await restoreAdminSession();
+        if (!session) {
+          if (!cancelled) {
+            setPreferencesHydrated(true);
+          }
+          return;
+        }
+
+        const profile = await api.get<Profile>("/profiles/me", {
+          accessToken: session.access_token,
+        }).catch(() => null);
+
+        if (cancelled) {
+          return;
+        }
+
+        const savedPreferences = normalizeTransactionSupportPreferences(
+          profile?.admin_transaction_support_preferences ?? DEFAULT_TRANSACTION_SUPPORT_PREFERENCES,
+        );
+        setActivityLog(savedPreferences.activity_log);
+        setActivityFilter(savedPreferences.activity_filter);
+        setActivityEntryLimit(savedPreferences.activity_entry_limit);
+        setCollapsedActivityGroups(savedPreferences.activity_collapsed_groups);
+
+        if (!searchParams.toString()) {
+          setPreset(savedPreferences.preset);
+          setTypeFilter(savedPreferences.type);
+          setStatusFilter(savedPreferences.status);
+          setAssigneeFilter(savedPreferences.assignee);
+          setEscalationFilter(savedPreferences.priority);
+          setRoleFilter(savedPreferences.role);
+          setDeliveryFilter(savedPreferences.delivery);
+          setTrustFilter(savedPreferences.trust);
+          setListingFilter(savedPreferences.listing);
+          setListingHealthFilter(savedPreferences.listingHealth);
+          setSearchQuery(savedPreferences.q);
+          setFocusKey(savedPreferences.focus);
+        }
+      } finally {
+        if (!cancelled) {
+          setPreferencesHydrated(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      const sellerIds = Array.from(new Set(items.map((item) => item.seller_id).filter(Boolean)));
+      if (sellerIds.length === 0) {
+        if (!cancelled) {
+          setSellerTrustInterventions([]);
+        }
+        return;
+      }
+
+      try {
+        const session = await restoreAdminSession();
+        if (!session) {
+          return;
+        }
+
+        const interventions = await api
+          .listAdminSellerTrustInterventions(50, { accessToken: session.access_token })
+          .catch(() => [] as SellerTrustIntervention[]);
+
+        if (!cancelled) {
+          setSellerTrustInterventions(interventions);
+        }
+      } catch {
+        if (!cancelled) {
+          setSellerTrustInterventions([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [items]);
+
+  useEffect(() => {
     const params = new URLSearchParams();
     if (preset !== "needs_follow_up") {
       params.set("preset", preset);
@@ -841,6 +1136,200 @@ export function TransactionSupportPanel() {
     }
   }, [assigneeFilter, deliveryFilter, escalationFilter, focusKey, listingFilter, listingHealthFilter, preset, roleFilter, router, searchParams, searchQuery, statusFilter, trustFilter, typeFilter]);
 
+  useEffect(() => {
+    if (!preferencesHydrated) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const session = await restoreAdminSession();
+          if (!session) {
+            return;
+          }
+
+          await api.patch<Profile>(
+            "/profiles/me",
+            {
+              admin_transaction_support_preferences: {
+                preset,
+                type: typeFilter,
+                status: statusFilter,
+                assignee: assigneeFilter,
+                priority: escalationFilter,
+                role: roleFilter,
+                delivery: deliveryFilter,
+                trust: trustFilter,
+                listing: listingFilter,
+                listingHealth: listingHealthFilter,
+                q: searchQuery,
+                focus: focusKey,
+                activity_filter: activityFilter,
+                activity_entry_limit: activityEntryLimit,
+                activity_collapsed_groups: collapsedActivityGroups,
+                activity_log: activityLog,
+              },
+            },
+            { accessToken: session.access_token },
+          );
+        } catch {
+          // Keep local transaction support state even if remote persistence fails.
+        }
+      })();
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    assigneeFilter,
+    deliveryFilter,
+    escalationFilter,
+    focusKey,
+    listingFilter,
+    listingHealthFilter,
+    preferencesHydrated,
+    preset,
+    roleFilter,
+    searchQuery,
+    statusFilter,
+    trustFilter,
+    typeFilter,
+    activityFilter,
+    activityEntryLimit,
+    collapsedActivityGroups,
+    activityLog,
+  ]);
+
+  function buildCurrentSnapshot(): Omit<TransactionSupportPreferences, "activity_log"> {
+    return {
+      preset,
+      type: typeFilter,
+      status: statusFilter,
+      assignee: assigneeFilter,
+      priority: escalationFilter,
+      role: roleFilter,
+      delivery: deliveryFilter,
+      trust: trustFilter,
+      listing: listingFilter,
+      listingHealth: listingHealthFilter,
+      q: searchQuery,
+      focus: focusKey,
+    };
+  }
+
+  function recordActivity(
+    kind: TransactionSupportActivityEntry["kind"],
+    label: string,
+    options?: { snapshot?: Omit<TransactionSupportPreferences, "activity_log">; focusItemKey?: string | null },
+  ) {
+    setActivityLog((current) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind,
+        label,
+        created_at: new Date().toISOString(),
+        snapshot: options?.snapshot ?? buildCurrentSnapshot(),
+        focus_item_key: options?.focusItemKey ?? null,
+      },
+      ...current,
+    ].slice(0, 10));
+  }
+
+  function applyActivitySnapshot(
+    snapshot: Omit<TransactionSupportPreferences, "activity_log">,
+    focusItemKey?: string | null,
+  ) {
+    setPreset(snapshot.preset);
+    setTypeFilter(snapshot.type);
+    setStatusFilter(snapshot.status);
+    setAssigneeFilter(snapshot.assignee);
+    setEscalationFilter(snapshot.priority);
+    setRoleFilter(snapshot.role);
+    setDeliveryFilter(snapshot.delivery);
+    setTrustFilter(snapshot.trust);
+    setListingFilter(snapshot.listing);
+    setListingHealthFilter(snapshot.listingHealth);
+    setSearchQuery(snapshot.q);
+    setFocusKey(focusItemKey ?? snapshot.focus ?? "__AUTO__");
+  }
+
+  const activityCounts = useMemo(
+    () => ({
+      all: activityLog.length,
+      view: activityLog.filter((entry) => entry.kind === "view").length,
+      operation: activityLog.filter((entry) => entry.kind === "operation").length,
+    }),
+    [activityLog],
+  );
+
+  const visibleActivityLog = useMemo(
+    () =>
+      activityLog
+        .filter((entry) => (activityFilter === "all" ? true : entry.kind === activityFilter))
+        .slice(0, activityEntryLimit),
+    [activityEntryLimit, activityFilter, activityLog],
+  );
+
+  const visibleActivityGroups = useMemo(() => {
+    const groups: Array<{ label: string; entries: TransactionSupportActivityEntry[] }> = [];
+    for (const entry of visibleActivityLog) {
+      const label = formatActivityDayLabel(entry.created_at);
+      const current = groups[groups.length - 1];
+      if (current?.label === label) {
+        current.entries.push(entry);
+      } else {
+        groups.push({ label, entries: [entry] });
+      }
+    }
+
+    return groups;
+  }, [visibleActivityLog]);
+
+  const collapsedActivityGroupSet = useMemo(
+    () => new Set(collapsedActivityGroups),
+    [collapsedActivityGroups],
+  );
+
+  const hasOlderActivityGroups = useMemo(
+    () => visibleActivityGroups.some((group) => group.label !== "Today"),
+    [visibleActivityGroups],
+  );
+  const allOlderActivityGroupsCollapsed = useMemo(
+    () =>
+      visibleActivityGroups
+        .filter((group) => group.label !== "Today")
+        .every((group) => collapsedActivityGroupSet.has(group.label)),
+    [collapsedActivityGroupSet, visibleActivityGroups],
+  );
+  const hasCollapsedVisibleActivityGroups = useMemo(
+    () => visibleActivityGroups.some((group) => collapsedActivityGroupSet.has(group.label)),
+    [collapsedActivityGroupSet, visibleActivityGroups],
+  );
+
+  function toggleActivityGroup(label: string) {
+    setCollapsedActivityGroups((current) =>
+      current.includes(label) ? current.filter((value) => value !== label) : [...current, label],
+    );
+  }
+
+  function collapseOlderActivityGroups() {
+    setCollapsedActivityGroups((current) => {
+      const next = new Set(current);
+      for (const group of visibleActivityGroups) {
+        if (group.label !== "Today") {
+          next.add(group.label);
+        }
+      }
+      return Array.from(next);
+    });
+  }
+
+  function expandAllActivityGroups() {
+    setCollapsedActivityGroups((current) =>
+      current.filter((label) => !visibleActivityGroups.some((group) => group.label === label)),
+    );
+  }
+
   function applyQueueState(next: {
     preset: QueuePreset;
     type: TransactionFilter;
@@ -864,6 +1353,29 @@ export function TransactionSupportPanel() {
     setListingFilter(next.listing?.trim() ? next.listing : "all");
     setListingHealthFilter(next.listingHealth ?? "all");
     setFocusKey("__AUTO__");
+  }
+
+  function applyQueueStateAndRecord(
+    next: Parameters<typeof applyQueueState>[0],
+    label: string,
+  ) {
+    applyQueueState(next);
+    recordActivity("view", label, {
+      snapshot: {
+        preset: next.preset,
+        type: next.type,
+        status: next.status,
+        assignee: next.assignee,
+        priority: next.priority,
+        role: next.role,
+        delivery: next.delivery,
+        trust: next.trust ?? "all",
+        listing: next.listing?.trim() ? next.listing : "all",
+        listingHealth: next.listingHealth ?? "all",
+        q: "",
+        focus: "__AUTO__",
+      },
+    });
   }
 
   function syncSupportItem(nextItem: SupportItem) {
@@ -930,6 +1442,11 @@ export function TransactionSupportPanel() {
         tone: "success",
         message: `${actionLabel} updated for ${item.kind} ${truncateId(item.id)}.`,
       });
+      recordActivity("operation", `${actionLabel} for ${item.kind} ${truncateId(item.id)}`, {
+        focusItemKey: `${item.kind}:${item.id}`,
+      });
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (updateError) {
       setFeedback({
         tone: "error",
@@ -999,6 +1516,7 @@ export function TransactionSupportPanel() {
                   : "Unable to retry failed deliveries in view.",
           });
         }
+        recordActivity("operation", "Retried failed deliveries in current view");
         setPendingBulkAction(null);
       } catch (updateError) {
         setFeedback({
@@ -1099,6 +1617,9 @@ export function TransactionSupportPanel() {
         tone: "success",
         message: `${labels[action.kind]}. Changed ${updatedItems.length}. Already matched ${action.unchangedCount}.`,
       });
+      recordActivity("operation", labels[action.kind]);
+      await invalidateMarketplaceCaches();
+      router.refresh();
       setPendingBulkAction(null);
     } catch (updateError) {
       setFeedback({
@@ -1128,9 +1649,12 @@ export function TransactionSupportPanel() {
         }
         setCurrentAdminUserId(session.user_id);
 
-        const [data, reports] = await Promise.all([
+        const [data, reports, interventions] = await Promise.all([
           api.loadAdminTransactions(session.access_token),
           api.listAdminReviewReports(session.access_token, "all"),
+          api
+            .listAdminSellerTrustInterventions(50, { accessToken: session.access_token })
+            .catch(() => [] as SellerTrustIntervention[]),
         ]);
         if (!cancelled) {
           const nextItems = [
@@ -1141,6 +1665,7 @@ export function TransactionSupportPanel() {
           setAdminRoster(data.admins);
           setDeliveries(data.deliveries);
           setReviewReports(reports);
+          setSellerTrustInterventions(interventions);
           setItems(nextItems);
           setNoteDrafts(
             Object.fromEntries(nextItems.map((item) => [item.id, item.adminNote ?? ""])),
@@ -1195,6 +1720,15 @@ export function TransactionSupportPanel() {
       };
     },
     [reviewReports],
+  );
+
+  const sellerTrustInterventionBySellerId = useMemo(
+    () => new Map(sellerTrustInterventions.map((entry) => [entry.seller.id, entry] as const)),
+    [sellerTrustInterventions],
+  );
+  const sellerTrustInterventionSellerIds = useMemo(
+    () => new Set(sellerTrustInterventions.map((entry) => entry.seller.id)),
+    [sellerTrustInterventions],
   );
 
   const isTrustDrivenItem = useCallback(
@@ -1377,6 +1911,7 @@ export function TransactionSupportPanel() {
           !isOpenItem(item) &&
           isRecentWithinDays(item.history[0]?.createdAt ?? item.createdAt, 7),
       ).length,
+      sellerTrustIntervention: items.filter((item) => sellerTrustInterventionSellerIds.has(item.seller_id)).length,
       needsReassignment: currentAdminUserId
         ? items.filter(
             (item) =>
@@ -1386,7 +1921,16 @@ export function TransactionSupportPanel() {
           ).length
         : items.filter((item) => item.adminAssigneeUserId && (isStaleAssigned(item) || item.adminIsEscalated)).length,
     }),
-    [currentAdminUserId, deliveries, getAssignedRole, hasFailedDelivery, hasQueuedDelivery, isTrustDrivenItem, items],
+    [
+      currentAdminUserId,
+      deliveries,
+      getAssignedRole,
+      hasFailedDelivery,
+      hasQueuedDelivery,
+      isTrustDrivenItem,
+      items,
+      sellerTrustInterventionSellerIds,
+    ],
   );
 
   const listingHealthCounts = useMemo(() => {
@@ -1528,6 +2072,7 @@ export function TransactionSupportPanel() {
       ).length,
       failed_delivery_follow_up: items.filter((item) => hasFailedDelivery(item)).length,
       trust_driven: items.filter((item) => isTrustDrivenItem(item)).length,
+      seller_trust_intervention: counts.sellerTrustIntervention,
       needs_reassignment: currentAdminUserId
         ? items.filter(
             (item) =>
@@ -1657,6 +2202,13 @@ export function TransactionSupportPanel() {
         return false;
       }
 
+      if (
+        preset === "seller_trust_intervention" &&
+        !sellerTrustInterventionSellerIds.has(item.seller_id)
+      ) {
+        return false;
+      }
+
       if (!normalizedQuery) {
         return true;
       }
@@ -1678,6 +2230,7 @@ export function TransactionSupportPanel() {
         listingOpsContext?.retentionTrendLabel,
         ...item.history.flatMap((event) => [event.status, event.actorRole, event.note]),
         ...item.adminHistory.flatMap((event) => [event.action, event.actorUserId, event.note]),
+        sellerTrustInterventionBySellerId.get(item.seller_id)?.intervention_reason,
       ]
         .filter(Boolean)
         .join(" ")
@@ -1685,7 +2238,29 @@ export function TransactionSupportPanel() {
 
       return haystack.includes(normalizedQuery);
     });
-  }, [assigneeFilter, currentAdminUserId, deliveryFilter, escalationFilter, getAssignedRole, getSellerTrustSummary, hasFailedDelivery, hasQueuedDelivery, isTrustDrivenItem, items, listingFilter, listingHealthFilter, listingOpsContextByItemKey, preset, roleFilter, searchQuery, statusFilter, trustFilter, typeFilter]);
+  }, [
+    assigneeFilter,
+    currentAdminUserId,
+    deliveryFilter,
+    escalationFilter,
+    getAssignedRole,
+    getSellerTrustSummary,
+    hasFailedDelivery,
+    hasQueuedDelivery,
+    isTrustDrivenItem,
+    items,
+    listingFilter,
+    listingHealthFilter,
+    listingOpsContextByItemKey,
+    preset,
+    roleFilter,
+    sellerTrustInterventionBySellerId,
+    sellerTrustInterventionSellerIds,
+    searchQuery,
+    statusFilter,
+    trustFilter,
+    typeFilter,
+  ]);
 
   useEffect(() => {
     if (focusKey === "__AUTO__") {
@@ -1995,6 +2570,17 @@ export function TransactionSupportPanel() {
       trust: "all",
     },
     {
+      label: "Seller Risk Intervention",
+      preset: "seller_trust_intervention",
+      type: "all",
+      status: "all",
+      assignee: "all",
+      priority: "all",
+      role: "all",
+      delivery: "all",
+      trust: "all",
+    },
+    {
       label: "Trust-Driven",
       preset: "trust_driven",
       type: "all",
@@ -2157,6 +2743,11 @@ export function TransactionSupportPanel() {
         tone: "success",
         message: `Retried delivery ${truncateId(delivery.id)} for ${delivery.channel}.`,
       });
+      recordActivity("operation", `Retried ${delivery.channel} delivery ${truncateId(delivery.id)}`, {
+        focusItemKey: `${delivery.transaction_kind}:${delivery.transaction_id}`,
+      });
+      await invalidateMarketplaceCaches();
+      router.refresh();
     } catch (retryError) {
       setFeedback({
         tone: "error",
@@ -2576,7 +3167,7 @@ export function TransactionSupportPanel() {
         ))}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {[
           {
             label: "Trust-Driven Open",
@@ -2660,6 +3251,23 @@ export function TransactionSupportPanel() {
                 role: "all",
                 delivery: "all",
                 trust: "trust_driven",
+              });
+            },
+          },
+          {
+            label: "Seller Risk Intervention",
+            value: counts.sellerTrustIntervention.toString(),
+            detail: "Open or escalated work tied to sellers with worsening trust",
+            onClick: () => {
+              applyQueueState({
+                preset: "seller_trust_intervention",
+                type: "all",
+                status: "all",
+                assignee: "all",
+                priority: "all",
+                role: "all",
+                delivery: "all",
+                trust: "all",
               });
             },
           },
@@ -2900,7 +3508,7 @@ export function TransactionSupportPanel() {
                 key={shortcut.preset}
                 type="button"
                 onClick={() =>
-                  applyQueueState({
+                  applyQueueStateAndRecord({
                     preset: shortcut.preset,
                     type: shortcut.type,
                     status: shortcut.status,
@@ -2908,7 +3516,7 @@ export function TransactionSupportPanel() {
                     priority: shortcut.priority,
                     role: shortcut.role,
                     delivery: shortcut.delivery,
-                  })
+                  }, `Opened ${shortcut.label} slice`)
                 }
                 className={`rounded-full border px-4 py-2 text-sm transition ${
                   active
@@ -2945,7 +3553,7 @@ export function TransactionSupportPanel() {
                 <button
                   type="button"
                   onClick={() =>
-                    applyQueueState({
+                    applyQueueStateAndRecord({
                       preset: "default",
                       type: "all",
                       status: "open",
@@ -2954,7 +3562,7 @@ export function TransactionSupportPanel() {
                       role: "all",
                       delivery: "all",
                       trust: "all",
-                    })
+                    }, "Reset to default transaction slice")
                   }
                   className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-foreground/72 transition hover:border-foreground/28"
                 >
@@ -2962,6 +3570,136 @@ export function TransactionSupportPanel() {
                 </button>
               ) : null}
             </div>
+          </div>
+        </div>
+
+        <div className="mb-4 rounded-[1.25rem] border border-border bg-background px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-foreground/46">Recent Support Activity</p>
+              <p className="mt-2 text-sm text-foreground/72">
+                Recent slice opens and support actions for this admin workspace.
+              </p>
+            </div>
+            <div className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-foreground/72">
+              Entries · {activityLog.length}
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {(
+              [
+                ["all", "All", activityCounts.all],
+                ["view", "Views", activityCounts.view],
+                ["operation", "Operations", activityCounts.operation],
+              ] as const
+            ).map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setActivityFilter(value)}
+                className={`rounded-full border px-4 py-2 text-sm transition ${
+                  activityFilter === value
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-surface text-foreground/72 hover:border-foreground/28"
+                }`}
+              >
+                {label} ({count})
+              </button>
+            ))}
+            {([6, 10] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setActivityEntryLimit(value)}
+                className={`rounded-full border px-4 py-2 text-sm transition ${
+                  activityEntryLimit === value
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-surface text-foreground/72 hover:border-foreground/28"
+                }`}
+              >
+                Show {value}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={collapseOlderActivityGroups}
+              disabled={!hasOlderActivityGroups || allOlderActivityGroupsCollapsed}
+              className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-foreground/72 transition hover:border-foreground/28 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Collapse older days
+            </button>
+            <button
+              type="button"
+              onClick={expandAllActivityGroups}
+              disabled={!hasCollapsedVisibleActivityGroups}
+              className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-foreground/72 transition hover:border-foreground/28 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Expand all days
+            </button>
+          </div>
+          <div className="mt-4 space-y-3">
+            {visibleActivityLog.length ? (
+              visibleActivityGroups.map((group) => (
+                <div key={group.label} className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs uppercase tracking-[0.18em] text-foreground/46">
+                      {group.label}
+                    </p>
+                    <div className="h-px flex-1 bg-border" />
+                    <button
+                      type="button"
+                      onClick={() => toggleActivityGroup(group.label)}
+                      className="rounded-full border border-border bg-surface px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/72 transition hover:border-foreground/28"
+                    >
+                      {collapsedActivityGroupSet.has(group.label) ? "Expand" : "Collapse"}
+                    </button>
+                  </div>
+                  {collapsedActivityGroupSet.has(group.label) ? (
+                    <div className="rounded-[1rem] border border-dashed border-border bg-surface px-4 py-4 text-sm text-foreground/62">
+                      {group.entries.length} hidden entr{group.entries.length === 1 ? "y" : "ies"}
+                    </div>
+                  ) : (
+                    group.entries.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-[1rem] border border-border bg-surface px-3 py-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                entry.kind === "view"
+                                  ? "bg-[#eef4ff] text-[#214d9b]"
+                                  : "bg-[#e8f7ef] text-[#166534]"
+                              }`}
+                            >
+                              {entry.kind}
+                            </span>
+                            <p className="text-xs text-foreground/52">
+                              {new Date(entry.created_at).toLocaleString()}
+                            </p>
+                          </div>
+                          <p className="mt-2 text-sm font-medium text-foreground">{entry.label}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => applyActivitySnapshot(entry.snapshot, entry.focus_item_key ?? null)}
+                          className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-foreground/72 transition hover:border-foreground/28"
+                        >
+                          {entry.focus_item_key ? "Focus Transaction" : "Re-open Slice"}
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="rounded-[1rem] border border-dashed border-border bg-surface px-4 py-4 text-sm text-foreground/62">
+                {activityLog.length
+                  ? "No transaction support activity matches the current filter."
+                  : "No recent transaction support activity yet."}
+              </div>
+            )}
           </div>
         </div>
 
@@ -3673,10 +4411,27 @@ export function TransactionSupportPanel() {
             >
               {(() => {
                 const trustSummary = getSellerTrustSummary(item.seller_id);
+                const sellerTrustIntervention = sellerTrustInterventionBySellerId.get(item.seller_id) ?? null;
                 const listingOpsContext = listingOpsContextByItemKey.get(`${item.kind}:${item.id}`) ?? null;
                 return (
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="space-y-3 lg:flex-1">
+                  {sellerTrustIntervention ? (
+                    <div className="flex flex-wrap gap-2">
+                      <span className="rounded-full border border-danger/30 bg-danger/8 px-3 py-1 text-xs uppercase tracking-[0.18em] text-danger">
+                        Seller Trust Intervention
+                      </span>
+                      <span className="rounded-full border border-border bg-surface px-3 py-1 text-xs uppercase tracking-[0.18em] text-foreground/56">
+                        {sellerTrustIntervention.risk_level}
+                      </span>
+                      <span className="rounded-full border border-border bg-surface px-3 py-1 text-xs uppercase tracking-[0.18em] text-foreground/56">
+                        {sellerTrustIntervention.trend_direction}
+                      </span>
+                      <span className="rounded-full border border-border bg-surface px-3 py-1 text-xs uppercase tracking-[0.18em] text-foreground/56">
+                        {sellerTrustIntervention.intervention_priority}
+                      </span>
+                    </div>
+                  ) : null}
                   {trustSummary.total > 0 ? (
                     <div className="flex flex-wrap gap-2">
                       <span className="rounded-full border border-danger/30 bg-danger/8 px-3 py-1 text-xs uppercase tracking-[0.18em] text-danger">

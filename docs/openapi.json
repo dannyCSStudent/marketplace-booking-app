@@ -474,6 +474,90 @@
         }
       }
     },
+    "/sellers/{slug}/listings/summary": {
+      "get": {
+        "tags": [
+          "sellers"
+        ],
+        "summary": "Read Seller Listing Summary By Slug",
+        "operationId": "read_seller_listing_summary_by_slug_sellers__slug__listings_summary_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SellerListingSummaryRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sellers/by-id/{seller_id}": {
+      "get": {
+        "tags": [
+          "sellers"
+        ],
+        "summary": "Read Seller By Id",
+        "operationId": "read_seller_by_id_sellers_by_id__seller_id__get",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SellerRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sellers/{slug}": {
       "get": {
         "tags": [
@@ -499,6 +583,130 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SellerRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sellers/{slug}/listings": {
+      "get": {
+        "tags": [
+          "sellers"
+        ],
+        "summary": "Read Seller Listings By Slug",
+        "operationId": "read_seller_listings_by_slug_sellers__slug__listings_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ListingType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingListResponse"
                 }
               }
             }
@@ -616,6 +824,40 @@
                 }
               ],
               "title": "Type"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offset"
             }
           }
         ],
@@ -985,6 +1227,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ListingPriceInsight"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/listings/{listing_id}/booking-suggestion": {
+      "get": {
+        "tags": [
+          "listings"
+        ],
+        "summary": "Read Listing Booking Suggestion",
+        "operationId": "read_listing_booking_suggestion_listings__listing_id__booking_suggestion_get",
+        "parameters": [
+          {
+            "name": "listing_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Listing Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingBookingSuggestionRead"
                 }
               }
             }
@@ -1723,6 +2007,64 @@
         }
       }
     },
+    "/orders/{order_id}/response-ai-assist": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "Request Order Response Ai Assist",
+        "operationId": "request_order_response_ai_assist_orders__order_id__response_ai_assist_post",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponseAiAssistResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/orders/bulk-status": {
       "post": {
         "tags": [
@@ -2192,6 +2534,64 @@
         }
       }
     },
+    "/bookings/{booking_id}/response-ai-assist": {
+      "post": {
+        "tags": [
+          "bookings"
+        ],
+        "summary": "Request Booking Response Ai Assist",
+        "operationId": "request_booking_response_ai_assist_bookings__booking_id__response_ai_assist_post",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Booking Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingResponseAiAssistResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bookings/bulk-status": {
       "post": {
         "tags": [
@@ -2572,6 +2972,270 @@
         }
       }
     },
+    "/notifications/admin/trust-alerts/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Trust Alert",
+        "operationId": "acknowledge_trust_alert_notifications_admin_trust_alerts__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Trust Alert Notifications Admin Trust Alerts  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Trust Alert Acknowledgement",
+        "operationId": "clear_trust_alert_acknowledgement_notifications_admin_trust_alerts__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Trust Alert Acknowledgement Notifications Admin Trust Alerts  Seller Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/trust-alerts/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Trust Alert Events",
+        "operationId": "read_admin_trust_alert_events_notifications_admin_trust_alerts_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrustAlertEventRead"
+                  },
+                  "title": "Response Read Admin Trust Alert Events Notifications Admin Trust Alerts Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/trust-alerts/sellers": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Trust Alert Sellers",
+        "operationId": "read_admin_trust_alert_sellers_notifications_admin_trust_alerts_sellers_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 8,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrustAlertSellerSummaryRead"
+                  },
+                  "title": "Response Read Admin Trust Alert Sellers Notifications Admin Trust Alerts Sellers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications/{delivery_id}/retry": {
       "post": {
         "tags": [
@@ -2897,6 +3561,64 @@
         }
       }
     },
+    "/reviews/{review_id}/ai-assist": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Request Review Response Ai Assist",
+        "operationId": "request_review_response_ai_assist_reviews__review_id__ai_assist_post",
+        "parameters": [
+          {
+            "name": "review_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Review Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResponseAiAssistResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/reviews/{review_id}/report": {
       "post": {
         "tags": [
@@ -3011,6 +3733,258 @@
                     "$ref": "#/components/schemas/ReviewModerationItem"
                   },
                   "title": "Response Read Review Reports Reviews Reports Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reviews/anomalies": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Read Review Anomalies",
+        "operationId": "read_review_anomalies_reviews_anomalies_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 8,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewAnomalyRead"
+                  },
+                  "title": "Response Read Review Anomalies Reviews Anomalies Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reviews/anomalies/sellers": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Read Review Anomaly Sellers",
+        "operationId": "read_review_anomaly_sellers_reviews_anomalies_sellers_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 6,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewAnomalySellerSummaryRead"
+                  },
+                  "title": "Response Read Review Anomaly Sellers Reviews Anomalies Sellers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reviews/anomalies/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Acknowledge Review Anomaly Lane",
+        "operationId": "acknowledge_review_anomaly_lane_reviews_anomalies__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Review Anomaly Lane Reviews Anomalies  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Clear Review Anomaly Lane Acknowledgement",
+        "operationId": "clear_review_anomaly_lane_acknowledgement_reviews_anomalies__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Review Anomaly Lane Acknowledgement Reviews Anomalies  Seller Id  Acknowledge Delete"
                 }
               }
             }
@@ -3299,6 +4273,71 @@
         }
       }
     },
+    "/admin/seller-trust/interventions": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Seller Trust Interventions",
+        "operationId": "read_seller_trust_interventions_admin_seller_trust_interventions_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerTrustInterventionRead"
+                  },
+                  "title": "Response Read Seller Trust Interventions Admin Seller Trust Interventions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/listings/pricing-scope-summary": {
       "get": {
         "tags": [
@@ -3335,6 +4374,69 @@
                     "$ref": "#/components/schemas/ListingPricingScopeCount"
                   },
                   "title": "Response Read Pricing Scope Counts Admin Listings Pricing Scope Summary Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/listings/pricing-scope-items": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Pricing Scope Listings",
+        "operationId": "read_pricing_scope_listings_admin_listings_pricing_scope_items_get",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ListingRead"
+                  },
+                  "title": "Response Read Pricing Scope Listings Admin Listings Pricing Scope Items Get"
                 }
               }
             }
@@ -4369,6 +5471,17 @@
             ],
             "title": "Listing Type"
           },
+          "is_local_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Local Only"
+          },
           "status_history": {
             "items": {
               "$ref": "#/components/schemas/BookingStatusEventRead"
@@ -4768,6 +5881,17 @@
             ],
             "title": "Listing Type"
           },
+          "is_local_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Local Only"
+          },
           "status_history": {
             "items": {
               "$ref": "#/components/schemas/BookingStatusEventRead"
@@ -4788,6 +5912,46 @@
           "scheduled_end"
         ],
         "title": "BookingRead"
+      },
+      "BookingResponseAiAssistResponse": {
+        "properties": {
+          "transaction_kind": {
+            "type": "string",
+            "title": "Transaction Kind"
+          },
+          "transaction_id": {
+            "type": "string",
+            "title": "Transaction Id"
+          },
+          "suggestion": {
+            "$ref": "#/components/schemas/BookingResponseAiAssistSuggestion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "transaction_kind",
+          "transaction_id",
+          "suggestion"
+        ],
+        "title": "BookingResponseAiAssistResponse"
+      },
+      "BookingResponseAiAssistSuggestion": {
+        "properties": {
+          "suggested_note": {
+            "type": "string",
+            "title": "Suggested Note"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "suggested_note",
+          "summary"
+        ],
+        "title": "BookingResponseAiAssistSuggestion"
       },
       "BookingStatusEventRead": {
         "properties": {
@@ -5184,6 +6348,39 @@
         ],
         "title": "ListingAiAssistSuggestion"
       },
+      "ListingBookingSuggestionRead": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "title": "Listing Id"
+          },
+          "suggested_day_offset": {
+            "type": "integer",
+            "title": "Suggested Day Offset"
+          },
+          "suggested_label": {
+            "type": "string",
+            "title": "Suggested Label"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          }
+        },
+        "type": "object",
+        "required": [
+          "listing_id",
+          "suggested_day_offset",
+          "suggested_label",
+          "summary",
+          "rationale"
+        ],
+        "title": "ListingBookingSuggestionRead"
+      },
       "ListingCreate": {
         "properties": {
           "seller_id": {
@@ -5351,6 +6548,11 @@
             "type": "boolean",
             "title": "Is Promoted",
             "default": false
+          },
+          "auto_accept_bookings": {
+            "type": "boolean",
+            "title": "Auto Accept Bookings",
+            "default": false
           }
         },
         "type": "object",
@@ -5486,6 +6688,28 @@
           "total": {
             "type": "integer",
             "title": "Total"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
           }
         },
         "type": "object",
@@ -5614,13 +6838,17 @@
           "seller_id": {
             "type": "string",
             "title": "Seller Id"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ListingType"
           }
         },
         "type": "object",
         "required": [
           "id",
           "title",
-          "seller_id"
+          "seller_id",
+          "type"
         ],
         "title": "ListingPromotionDetail"
       },
@@ -5918,6 +7146,11 @@
             "type": "boolean",
             "title": "Is Promoted",
             "default": false
+          },
+          "auto_accept_bookings": {
+            "type": "boolean",
+            "title": "Auto Accept Bookings",
+            "default": false
           }
         },
         "type": "object",
@@ -6173,6 +7406,17 @@
               }
             ],
             "title": "Is Promoted"
+          },
+          "auto_accept_bookings": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Accept Bookings"
           }
         },
         "type": "object",
@@ -6946,6 +8190,28 @@
               }
             ],
             "title": "Listing Title"
+          },
+          "listing_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Type"
+          },
+          "is_local_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Local Only"
           }
         },
         "type": "object",
@@ -7070,6 +8336,46 @@
           "total_cents"
         ],
         "title": "OrderRead"
+      },
+      "OrderResponseAiAssistResponse": {
+        "properties": {
+          "transaction_kind": {
+            "type": "string",
+            "title": "Transaction Kind"
+          },
+          "transaction_id": {
+            "type": "string",
+            "title": "Transaction Id"
+          },
+          "suggestion": {
+            "$ref": "#/components/schemas/OrderResponseAiAssistSuggestion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "transaction_kind",
+          "transaction_id",
+          "suggestion"
+        ],
+        "title": "OrderResponseAiAssistResponse"
+      },
+      "OrderResponseAiAssistSuggestion": {
+        "properties": {
+          "suggested_note": {
+            "type": "string",
+            "title": "Suggested Note"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "suggested_note",
+          "summary"
+        ],
+        "title": "OrderResponseAiAssistSuggestion"
       },
       "OrderStatusEventRead": {
         "properties": {
@@ -7341,6 +8647,16 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Admin Delivery Ops Preferences"
+          },
+          "admin_review_moderation_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Review Moderation Preferences"
+          },
+          "admin_transaction_support_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Transaction Support Preferences"
           }
         },
         "type": "object",
@@ -7453,6 +8769,16 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Admin Delivery Ops Preferences"
+          },
+          "admin_review_moderation_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Review Moderation Preferences"
+          },
+          "admin_transaction_support_preferences": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Admin Transaction Support Preferences"
           }
         },
         "type": "object",
@@ -7596,10 +8922,172 @@
               }
             ],
             "title": "Admin Delivery Ops Preferences"
+          },
+          "admin_review_moderation_preferences": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Review Moderation Preferences"
+          },
+          "admin_transaction_support_preferences": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Transaction Support Preferences"
           }
         },
         "type": "object",
         "title": "ProfileUpdate"
+      },
+      "ReviewAnomalyRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Display Name"
+          },
+          "active_report_count": {
+            "type": "integer",
+            "title": "Active Report Count"
+          },
+          "open_report_count": {
+            "type": "integer",
+            "title": "Open Report Count"
+          },
+          "escalated_report_count": {
+            "type": "integer",
+            "title": "Escalated Report Count"
+          },
+          "hidden_open_count": {
+            "type": "integer",
+            "title": "Hidden Open Count"
+          },
+          "recent_report_count": {
+            "type": "integer",
+            "title": "Recent Report Count"
+          },
+          "latest_report_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Report At"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "active_report_count",
+          "open_report_count",
+          "escalated_report_count",
+          "hidden_open_count",
+          "recent_report_count",
+          "latest_report_at",
+          "severity",
+          "reasons"
+        ],
+        "title": "ReviewAnomalyRead"
+      },
+      "ReviewAnomalySellerSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seller Display Name"
+          },
+          "active_report_count": {
+            "type": "integer",
+            "title": "Active Report Count"
+          },
+          "latest_report_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Report At"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "active_report_count",
+          "latest_report_at",
+          "severity",
+          "reasons"
+        ],
+        "title": "ReviewAnomalySellerSummaryRead"
       },
       "ReviewCreate": {
         "properties": {
@@ -8068,6 +9556,41 @@
         ],
         "title": "ReviewReportStatusUpdate"
       },
+      "ReviewResponseAiAssistResponse": {
+        "properties": {
+          "review_id": {
+            "type": "string",
+            "title": "Review Id"
+          },
+          "suggestion": {
+            "$ref": "#/components/schemas/ReviewResponseAiAssistSuggestion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review_id",
+          "suggestion"
+        ],
+        "title": "ReviewResponseAiAssistResponse"
+      },
+      "ReviewResponseAiAssistSuggestion": {
+        "properties": {
+          "suggested_response": {
+            "type": "string",
+            "title": "Suggested Response"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "suggested_response",
+          "summary"
+        ],
+        "title": "ReviewResponseAiAssistSuggestion"
+      },
       "ReviewSellerResponseUpdate": {
         "properties": {
           "seller_response": {
@@ -8175,6 +9698,74 @@
           "slug"
         ],
         "title": "SellerCreate"
+      },
+      "SellerListingSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "product_count": {
+            "type": "integer",
+            "title": "Product Count",
+            "default": 0
+          },
+          "service_count": {
+            "type": "integer",
+            "title": "Service Count",
+            "default": 0
+          },
+          "hybrid_count": {
+            "type": "integer",
+            "title": "Hybrid Count",
+            "default": 0
+          },
+          "active_count": {
+            "type": "integer",
+            "title": "Active Count",
+            "default": 0
+          },
+          "draft_count": {
+            "type": "integer",
+            "title": "Draft Count",
+            "default": 0
+          },
+          "promoted_count": {
+            "type": "integer",
+            "title": "Promoted Count",
+            "default": 0
+          },
+          "available_today_count": {
+            "type": "integer",
+            "title": "Available Today Count",
+            "default": 0
+          },
+          "quick_booking_count": {
+            "type": "integer",
+            "title": "Quick Booking Count",
+            "default": 0
+          },
+          "local_only_count": {
+            "type": "integer",
+            "title": "Local Only Count",
+            "default": 0
+          },
+          "price_surface_cents": {
+            "type": "integer",
+            "title": "Price Surface Cents",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "total"
+        ],
+        "title": "SellerListingSummaryRead"
       },
       "SellerLookupRead": {
         "properties": {
@@ -8318,6 +9909,16 @@
             "type": "integer",
             "title": "Review Count",
             "default": 0
+          },
+          "trust_score": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SellerTrustScoreRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -8700,6 +10301,158 @@
         ],
         "title": "SellerSubscriptionRead"
       },
+      "SellerTrustInterventionRead": {
+        "properties": {
+          "seller": {
+            "$ref": "#/components/schemas/SellerRead"
+          },
+          "risk_level": {
+            "type": "string",
+            "title": "Risk Level"
+          },
+          "trend_direction": {
+            "type": "string",
+            "title": "Trend Direction"
+          },
+          "trend_summary": {
+            "type": "string",
+            "title": "Trend Summary"
+          },
+          "intervention_reason": {
+            "type": "string",
+            "title": "Intervention Reason"
+          },
+          "intervention_priority": {
+            "type": "string",
+            "title": "Intervention Priority",
+            "default": "medium"
+          },
+          "intervention_lane": {
+            "type": "string",
+            "title": "Intervention Lane",
+            "default": "seller_trust_intervention"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller",
+          "risk_level",
+          "trend_direction",
+          "trend_summary",
+          "intervention_reason"
+        ],
+        "title": "SellerTrustInterventionRead"
+      },
+      "SellerTrustScoreRead": {
+        "properties": {
+          "score": {
+            "type": "integer",
+            "title": "Score"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "risk_level": {
+            "type": "string",
+            "title": "Risk Level",
+            "default": "watch"
+          },
+          "trend_direction": {
+            "type": "string",
+            "title": "Trend Direction",
+            "default": "steady"
+          },
+          "trend_summary": {
+            "type": "string",
+            "title": "Trend Summary",
+            "default": "Trust score is steady versus the previous window."
+          },
+          "trend_delta": {
+            "type": "integer",
+            "title": "Trend Delta",
+            "default": 0
+          },
+          "risk_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Risk Reasons"
+          },
+          "review_quality_score": {
+            "type": "integer",
+            "title": "Review Quality Score",
+            "default": 0
+          },
+          "response_rate_score": {
+            "type": "integer",
+            "title": "Response Rate Score",
+            "default": 0
+          },
+          "completion_score": {
+            "type": "integer",
+            "title": "Completion Score",
+            "default": 0
+          },
+          "delivery_reliability_score": {
+            "type": "integer",
+            "title": "Delivery Reliability Score",
+            "default": 0
+          },
+          "verified_bonus": {
+            "type": "integer",
+            "title": "Verified Bonus",
+            "default": 0
+          },
+          "review_count": {
+            "type": "integer",
+            "title": "Review Count",
+            "default": 0
+          },
+          "response_rate": {
+            "type": "number",
+            "title": "Response Rate",
+            "default": 0
+          },
+          "completion_rate": {
+            "type": "number",
+            "title": "Completion Rate",
+            "default": 0
+          },
+          "delivery_success_rate": {
+            "type": "number",
+            "title": "Delivery Success Rate",
+            "default": 0
+          },
+          "hidden_review_count": {
+            "type": "integer",
+            "title": "Hidden Review Count",
+            "default": 0
+          },
+          "completed_transactions": {
+            "type": "integer",
+            "title": "Completed Transactions",
+            "default": 0
+          },
+          "total_transactions": {
+            "type": "integer",
+            "title": "Total Transactions",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "score",
+          "label",
+          "summary"
+        ],
+        "title": "SellerTrustScoreRead"
+      },
       "SellerUpdate": {
         "properties": {
           "display_name": {
@@ -8913,6 +10666,125 @@
           "name"
         ],
         "title": "SubscriptionTierRead"
+      },
+      "TrustAlertEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "risk_level": {
+            "type": "string",
+            "title": "Risk Level"
+          },
+          "trend_direction": {
+            "type": "string",
+            "title": "Trend Direction"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "risk_level",
+          "trend_direction",
+          "created_at"
+        ],
+        "title": "TrustAlertEventRead"
+      },
+      "TrustAlertSellerSummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "latest_event_action": {
+            "type": "string",
+            "title": "Latest Event Action"
+          },
+          "latest_event_risk_level": {
+            "type": "string",
+            "title": "Latest Event Risk Level"
+          },
+          "latest_event_trend_direction": {
+            "type": "string",
+            "title": "Latest Event Trend Direction"
+          },
+          "latest_event_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Event Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "event_count",
+          "latest_event_action",
+          "latest_event_risk_level",
+          "latest_event_trend_direction",
+          "latest_event_created_at"
+        ],
+        "title": "TrustAlertSellerSummaryRead"
       },
       "ValidationError": {
         "properties": {

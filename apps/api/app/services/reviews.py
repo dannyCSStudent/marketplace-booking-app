@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 
+from app.core.config import get_settings
 from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
@@ -10,13 +11,18 @@ from app.schemas.reviews import (
     ReviewLookup,
     ReviewModerationEventRead,
     ReviewModerationItem,
+    ReviewAnomalyRead,
+    ReviewAnomalySellerSummaryRead,
     ReviewRead,
     ReviewReportCreate,
     ReviewReportRead,
     ReviewReportStatusUpdate,
+    ReviewResponseAiAssistResponse,
+    ReviewResponseAiAssistSuggestion,
     ReviewSellerResponseUpdate,
     ReviewVisibilityUpdate,
 )
+from app.services.notification_delivery_worker import process_notification_delivery_rows
 
 
 REPORT_SELECT = (
@@ -270,6 +276,77 @@ def update_review_seller_response(
     return _serialize_review(rows[0])
 
 
+def generate_review_response_ai_assist(
+    current_user: CurrentUser,
+    review_id: str,
+) -> ReviewResponseAiAssistResponse:
+    supabase = get_supabase_client()
+
+    try:
+        seller = supabase.select(
+            "seller_profiles",
+            query={
+                "select": "id",
+                "user_id": f"eq.{current_user.id}",
+            },
+            access_token=current_user.access_token,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seller profile not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    try:
+        review_row = supabase.select(
+            "reviews",
+            query={
+                "select": "id,rating,comment,seller_response,seller_responded_at",
+                "id": f"eq.{review_id}",
+                "seller_id": f"eq.{seller['id']}",
+            },
+            access_token=current_user.access_token,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    comment = str(review_row.get("comment") or "").strip()
+    rating = int(review_row.get("rating") or 0)
+    comment_excerpt = comment[:120].rstrip()
+
+    if rating >= 4:
+        opening = "Thanks for the kind review"
+        response = "We appreciate your support and are glad the experience felt strong."
+    elif rating <= 2:
+        opening = "Thanks for sharing this feedback"
+        response = "We are sorry this missed the mark and want to make it right."
+    else:
+        opening = "Thanks for the thoughtful feedback"
+        response = "We appreciate the note and will keep improving the experience."
+
+    if comment_excerpt:
+        response += f" We especially noticed: “{comment_excerpt}”."
+
+    response += " Please reach out if you want to share any more details."
+
+    summary = "Calibrated for review tone and recent response history."
+    if rating >= 4:
+        summary = "Positive reply suggested for a strong review."
+    elif rating <= 2:
+        summary = "Recovery-focused reply suggested for a low review."
+    elif comment_excerpt:
+        summary = "Balanced reply suggested around the buyer's comment."
+
+    suggestion = ReviewResponseAiAssistSuggestion(
+        suggested_response=f"{opening}. {response}",
+        summary=summary,
+    )
+    return ReviewResponseAiAssistResponse(review_id=review_id, suggestion=suggestion)
+
+
 def create_review_report(
     current_user: CurrentUser,
     review_id: str,
@@ -326,6 +403,10 @@ def create_review_report(
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    try:
+        _queue_review_anomaly_notifications(list_review_anomalies(limit=8))
+    except Exception:
+        pass
     return ReviewReportRead(
         id=row["id"],
         review_id=row["review_id"],
@@ -393,6 +474,345 @@ def list_review_reports(*, status_filter: str | None = None) -> list[ReviewModer
         )
 
     return items
+
+
+def list_review_anomalies(*, limit: int = 8) -> list[ReviewAnomalyRead]:
+    reports = list_review_reports(status_filter=None)
+    grouped: dict[str, list[ReviewModerationItem]] = {}
+    for report in reports:
+        if not report.seller_id:
+            continue
+
+        grouped.setdefault(report.seller_id, []).append(report)
+
+    now = datetime.now(timezone.utc)
+    anomalies: list[ReviewAnomalyRead] = []
+
+    for seller_id, seller_reports in grouped.items():
+        active_reports = [report for report in seller_reports if report.status != "resolved"]
+        if not active_reports:
+            continue
+
+        open_reports = [report for report in active_reports if report.status == "open"]
+        escalated_reports = [report for report in active_reports if report.is_escalated]
+        hidden_open_reports = [
+            report for report in active_reports if report.review.is_hidden and report.status != "resolved"
+        ]
+        recent_reports = [
+            report
+            for report in active_reports
+            if now - _normalize_datetime(report.created_at) <= timedelta(days=3)
+        ]
+
+        if len(active_reports) < 2 and not hidden_open_reports:
+            continue
+
+        latest_report = max(active_reports, key=lambda report: _normalize_datetime(report.created_at))
+        seller_row = active_reports[0]
+
+        reasons: list[str] = []
+        if hidden_open_reports:
+            reasons.append("Hidden reviews still open")
+        if escalated_reports:
+            reasons.append(
+                f"{len(escalated_reports)} escalated report{'s' if len(escalated_reports) != 1 else ''}"
+            )
+        if len(active_reports) >= 3:
+            reasons.append(f"{len(active_reports)} active reports")
+        if len(recent_reports) >= 3:
+            reasons.append("Recent report burst")
+        if not reasons:
+            reasons.append("Repeat seller reporting")
+
+        severity = "monitor"
+        if hidden_open_reports or len(active_reports) >= 4 or len(escalated_reports) >= 2:
+            severity = "high"
+        elif len(active_reports) >= 2 or len(escalated_reports) >= 1 or len(recent_reports) >= 3:
+            severity = "medium"
+
+        anomalies.append(
+            ReviewAnomalyRead(
+                seller_id=seller_id,
+                seller_slug=seller_row.seller_slug,
+                seller_display_name=seller_row.seller_display_name,
+                active_report_count=len(active_reports),
+                open_report_count=len(open_reports),
+                escalated_report_count=len(escalated_reports),
+                hidden_open_count=len(hidden_open_reports),
+                recent_report_count=len(recent_reports),
+                latest_report_at=latest_report.created_at,
+                severity=severity,
+                reasons=reasons,
+            )
+        )
+
+    return sorted(
+        anomalies,
+        key=lambda anomaly: (
+            0 if anomaly.severity == "high" else 1 if anomaly.severity == "medium" else 2,
+            -anomaly.active_report_count,
+            -anomaly.escalated_report_count,
+            -anomaly.hidden_open_count,
+            -anomaly.recent_report_count,
+            -_normalize_datetime(anomaly.latest_report_at).timestamp(),
+            (anomaly.seller_display_name or anomaly.seller_slug or anomaly.seller_id).lower(),
+        ),
+    )[:limit]
+
+
+def list_review_anomaly_seller_summaries(*, limit: int = 6) -> list[ReviewAnomalySellerSummaryRead]:
+    anomalies = list_review_anomalies(limit=max(1, min(limit * 2, 20)))
+    summaries = [
+        ReviewAnomalySellerSummaryRead(
+            seller_id=anomaly.seller_id,
+            seller_slug=anomaly.seller_slug,
+            seller_display_name=anomaly.seller_display_name,
+            active_report_count=anomaly.active_report_count,
+            latest_report_at=anomaly.latest_report_at,
+            severity=anomaly.severity,
+            reasons=anomaly.reasons,
+        )
+        for anomaly in anomalies
+    ]
+    return sorted(
+        summaries,
+        key=lambda summary: (
+            0 if summary.severity == "high" else 1 if summary.severity == "medium" else 2,
+            -summary.active_report_count,
+            -_normalize_datetime(summary.latest_report_at).timestamp(),
+            (summary.seller_display_name or summary.seller_slug or summary.seller_id).lower(),
+        ),
+    )[:limit]
+
+
+def acknowledge_review_anomaly(seller_id: str, *, actor_user_id: str) -> list[dict]:
+    return _update_review_anomaly_acknowledgement(
+        seller_id=seller_id,
+        acknowledged=True,
+        actor_user_id=actor_user_id,
+    )
+
+
+def clear_review_anomaly_acknowledgement(seller_id: str, *, actor_user_id: str) -> list[dict]:
+    return _update_review_anomaly_acknowledgement(
+        seller_id=seller_id,
+        acknowledged=False,
+        actor_user_id=actor_user_id,
+    )
+
+
+def _normalize_datetime(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _build_review_anomaly_signature(anomaly: ReviewAnomalyRead) -> str:
+    return "|".join(
+        [
+            str(anomaly.seller_id).strip(),
+            str(anomaly.severity).strip(),
+            str(anomaly.active_report_count).strip(),
+            str(anomaly.open_report_count).strip(),
+            str(anomaly.escalated_report_count).strip(),
+            str(anomaly.hidden_open_count).strip(),
+            str(anomaly.recent_report_count).strip(),
+            anomaly.latest_report_at.isoformat(),
+            *(reason.strip() for reason in anomaly.reasons),
+        ]
+    )
+
+
+def _update_review_anomaly_acknowledgement(
+    *,
+    seller_id: str,
+    acknowledged: bool,
+    actor_user_id: str,
+) -> list[dict]:
+    supabase = get_supabase_client()
+    anomaly = next((item for item in list_review_anomalies(limit=20) if item.seller_id == seller_id), None)
+    if anomaly is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review anomaly not found")
+
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": (
+                    "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                    "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                ),
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    matching_rows = [
+        row
+        for row in rows
+        if (row.get("payload") or {}).get("alert_type") == "review_anomaly"
+        and str((row.get("payload") or {}).get("seller_id") or "").strip() == seller_id
+    ]
+    if not matching_rows:
+        return []
+
+    updated_rows: list[dict] = []
+    for row in matching_rows:
+        payload = dict(row.get("payload") or {})
+        now = datetime.now(timezone.utc).isoformat()
+        if acknowledged:
+            payload["acknowledged_at"] = now
+            payload["acknowledged_by_user_id"] = actor_user_id
+            payload["acknowledged_signature"] = payload.get("alert_signature") or payload.get("acknowledged_signature")
+        else:
+            payload.pop("acknowledged_at", None)
+            payload.pop("acknowledged_by_user_id", None)
+            payload.pop("acknowledged_signature", None)
+
+        try:
+            updated = supabase.update(
+                "notification_deliveries",
+                {"payload": payload},
+                query={
+                    "id": f"eq.{row['id']}",
+                    "select": (
+                        "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                        "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                    ),
+                },
+                use_service_role=True,
+            )
+        except SupabaseError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+        if updated:
+            updated_rows.extend(updated)
+
+    return updated_rows
+
+
+def _queue_review_anomaly_notifications(anomalies: list[ReviewAnomalyRead]) -> None:
+    actionable_anomalies = [anomaly for anomaly in anomalies if anomaly.severity in {"high", "medium"}]
+    if not actionable_anomalies:
+        return
+
+    settings = get_settings()
+    admin_ids = [
+        admin_id
+        for admin_id in settings.admin_user_ids
+        if (settings.admin_user_roles or {}).get(admin_id, "").lower() in {"trust", "owner"}
+    ]
+    if not admin_ids:
+        admin_ids = list(settings.admin_user_ids)
+    if not admin_ids:
+        return
+
+    supabase = get_supabase_client()
+    try:
+        profile_rows = supabase.select(
+            "profiles",
+            query={
+                "select": "id,email_notifications_enabled,push_notifications_enabled",
+                "id": f"in.({','.join(admin_ids)})",
+            },
+            use_service_role=True,
+        )
+        recent_rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "recipient_user_id,event_id,payload,delivery_status,created_at",
+                "recipient_user_id": f"in.({','.join(admin_ids)})",
+                "order": "created_at.desc",
+                "limit": "200",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        return
+
+    profile_prefs = {row.get("id"): row for row in profile_rows if row.get("id")}
+    existing_events = {
+        (row.get("recipient_user_id"), row.get("event_id"))
+        for row in recent_rows
+        if row.get("recipient_user_id") and row.get("event_id")
+    }
+
+    deliveries: list[dict[str, object]] = []
+    for anomaly in actionable_anomalies:
+        seller_label = anomaly.seller_display_name or anomaly.seller_slug or anomaly.seller_id
+        event_id = f"review-anomaly:{_build_review_anomaly_signature(anomaly)}"
+        subject = f"Review anomaly for {seller_label}"
+        body = f"{seller_label} has {anomaly.active_report_count} active review reports."
+        html = (
+            f"<p>Review anomaly for <strong>{seller_label}</strong>.</p>"
+            f"<p><strong>Severity:</strong> {anomaly.severity}</p>"
+            f"<p><strong>Reasons:</strong> {'; '.join(anomaly.reasons)}</p>"
+            f"<p>{body}</p>"
+        )
+
+        for admin_id in admin_ids:
+            if (admin_id, event_id) in existing_events:
+                continue
+
+            prefs = profile_prefs.get(admin_id, {})
+            payload = {
+                "alert_type": "review_anomaly",
+                "seller_id": anomaly.seller_id,
+                "seller_slug": anomaly.seller_slug,
+                "seller_display_name": anomaly.seller_display_name,
+                "active_report_count": anomaly.active_report_count,
+                "open_report_count": anomaly.open_report_count,
+                "escalated_report_count": anomaly.escalated_report_count,
+                "hidden_open_count": anomaly.hidden_open_count,
+                "recent_report_count": anomaly.recent_report_count,
+                "latest_report_at": anomaly.latest_report_at.isoformat(),
+                "severity": anomaly.severity,
+                "reasons": anomaly.reasons,
+                "alert_signature": event_id,
+                "subject": subject,
+                "body": body,
+                "html": html,
+            }
+
+            if prefs.get("email_notifications_enabled", True):
+                deliveries.append(
+                    {
+                        "recipient_user_id": admin_id,
+                        "transaction_kind": "review",
+                        "transaction_id": anomaly.seller_id,
+                        "event_id": event_id,
+                        "channel": "email",
+                        "delivery_status": "queued",
+                        "payload": payload,
+                    }
+                )
+
+            if prefs.get("push_notifications_enabled", True):
+                deliveries.append(
+                    {
+                        "recipient_user_id": admin_id,
+                        "transaction_kind": "review",
+                        "transaction_id": anomaly.seller_id,
+                        "event_id": event_id,
+                        "channel": "push",
+                        "delivery_status": "queued",
+                        "payload": payload,
+                    }
+                )
+
+    if not deliveries:
+        return
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if inserted_rows:
+        try:
+            process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
 
 
 def update_review_report_status(
@@ -527,6 +947,10 @@ def update_review_report_status(
         except SupabaseError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    try:
+        _queue_review_anomaly_notifications(list_review_anomalies(limit=8))
+    except Exception:
+        pass
     row = rows[0]
     review_row = row.get("reviews") or {}
     seller_row = review_row.get("seller_profiles") or {}
@@ -608,4 +1032,8 @@ def update_review_visibility(
         except SupabaseError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    try:
+        _queue_review_anomaly_notifications(list_review_anomalies(limit=8))
+    except Exception:
+        pass
     return _serialize_review(rows[0])

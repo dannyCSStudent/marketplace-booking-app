@@ -17,6 +17,20 @@ The roadmap is organized into phases:
 
 Each phase builds on the previous one.
 
+## Current Status
+
+The product is past the MVP stage and now has real depth in trust/ops, monetization, and buyer/seller workflow memory.
+
+- Phase 0: complete
+- Phase 1: complete
+- Phase 2: mostly complete
+- Phase 3: mostly complete
+- Phase 4: mostly complete
+- Phase 5: in progress
+- Phase 6: not yet started in earnest
+
+The biggest remaining work is scale hardening, backend reliability, and advanced intelligence.
+
 ---
 
 ## Phase 0 — Foundation (Week 1 Start)
@@ -90,6 +104,9 @@ Deliver a full vertical slice where real transactions can happen.
 - A buyer can place an order or booking
 - A seller can manage requests
 
+### Status
+- Complete. The core commerce slice exists across web, mobile, and backend flows.
+
 ---
 
 ## Phase 2 — Trust & Operations (Week 2–3)
@@ -127,6 +144,9 @@ Make the platform feel reliable, structured, and safer.
 - Users can trust sellers based on reviews
 - Sellers can manage operations without confusion
 - Orders and bookings feel structured
+
+### Status
+- Mostly complete. Reviews, lifecycle/history, fulfillment context, seller tools, and notifications are in place.
 
 ---
 
@@ -170,6 +190,9 @@ Status: in progress. Seller workspace and admin ops now surface listing retentio
 - Buyers discover relevant listings quickly
 - The app feels intelligent and helpful
 
+### Status
+- Mostly complete. Local-first discovery, pricing intelligence, seller insights, and stronger ranking flows are live.
+
 ---
 
 ## Phase 4 — Monetization (Week 5+)
@@ -200,6 +223,9 @@ Introduce sustainable revenue streams.
 - Revenue is generated without harming UX
 - Sellers see value in paid features
 
+### Status
+- Mostly complete. Platform fees, promoted listings, subscriptions, and delivery-fee workflows are surfaced in product and admin views.
+
 ---
 
 ## Phase 5 — Scale & Infrastructure
@@ -229,6 +255,9 @@ Ensure the system can handle growth and complexity.
 - Rate limiting
 - Abuse detection
 
+### Status
+- In progress. Reliability and operational visibility are better, but performance hardening, pagination, caching, and broader abuse controls still need work.
+
 ---
 
 ## Phase 6 — Advanced Intelligence
@@ -257,6 +286,9 @@ Turn the platform into a smart commerce engine.
 - Auto-accept bookings (rules-based)
 - Inventory alerts
 - Pricing adjustments
+
+### Status
+- Not yet started in earnest. This is the next major product differentiation layer after scale work stabilizes.
 
 ---
 

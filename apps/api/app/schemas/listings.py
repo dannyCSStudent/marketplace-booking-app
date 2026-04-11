@@ -13,6 +13,8 @@ class ListingQueryParams(BaseModel):
     category: str | None = None
     type: ListingType | None = None
     promoted: bool | None = None
+    limit: int | None = None
+    offset: int | None = None
 
 class ListingCreate(BaseModel):
     seller_id: str
@@ -37,6 +39,7 @@ class ListingCreate(BaseModel):
     shipping_enabled: bool = False
     lead_time_hours: int | None = None
     is_promoted: bool = False
+    auto_accept_bookings: bool = False
 
 class ListingUpdate(BaseModel):
     category_id: str | None = None
@@ -60,6 +63,7 @@ class ListingUpdate(BaseModel):
     shipping_enabled: bool | None = None
     lead_time_hours: int | None = None
     is_promoted: bool | None = None
+    auto_accept_bookings: bool | None = None
 
 class ListingImageCreate(BaseModel):
     image_url: str
@@ -114,6 +118,7 @@ class ListingRead(BaseModel):
     is_new_listing: bool = False
     recent_transaction_count: int = 0
     is_promoted: bool = False
+    auto_accept_bookings: bool = False
 
 
 class ListingPricingScopeCount(BaseModel):
@@ -130,6 +135,7 @@ class ListingPromotionDetail(BaseModel):
     id: str
     title: str
     seller_id: str
+    type: ListingType
 
 
 
@@ -145,6 +151,23 @@ class ListingPromotionEvent(BaseModel):
 class ListingListResponse(BaseModel):
     items: list[ListingRead]
     total: int
+    limit: int | None = None
+    offset: int | None = None
+
+
+class SellerListingSummaryRead(BaseModel):
+    seller_id: str
+    total: int
+    product_count: int = 0
+    service_count: int = 0
+    hybrid_count: int = 0
+    active_count: int = 0
+    draft_count: int = 0
+    promoted_count: int = 0
+    available_today_count: int = 0
+    quick_booking_count: int = 0
+    local_only_count: int = 0
+    price_surface_cents: int = 0
 
 
 class ListingAiAssistRequest(BaseModel):
@@ -171,6 +194,14 @@ class ListingAiAssistSuggestion(BaseModel):
 class ListingAiAssistResponse(BaseModel):
     listing_id: str | None = None
     suggestion: ListingAiAssistSuggestion
+
+
+class ListingBookingSuggestionRead(BaseModel):
+    listing_id: str
+    suggested_day_offset: int
+    suggested_label: str
+    summary: str
+    rationale: str
 
 class ListingPriceInsight(BaseModel):
     listing_id: str

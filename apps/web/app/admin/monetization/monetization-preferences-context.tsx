@@ -1,8 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { createApiClient, type Profile } from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 import type {
   PromotionDashboardSegmentFilter,
@@ -404,6 +406,7 @@ function mergePreferences(remote: MonetizationPreferences, cached: MonetizationP
 }
 
 export function MonetizationPreferencesProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const [preferences, setPreferences] = useState<MonetizationPreferences>(DEFAULT_PREFERENCES);
   const [readyToPersist, setReadyToPersist] = useState(false);
   const accessTokenRef = useRef<string | null>(null);
@@ -487,6 +490,8 @@ export function MonetizationPreferencesProvider({ children }: { children: ReactN
           { accessToken: accessTokenRef.current ?? undefined },
         );
         lastRemoteSnapshotRef.current = snapshot;
+        await invalidateMarketplaceCaches();
+        router.refresh();
       } catch {
         // Keep local preferences even if the remote save fails.
       }

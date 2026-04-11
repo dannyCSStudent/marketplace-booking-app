@@ -1,8 +1,10 @@
 "use client";
 
 import { FormEvent, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 
 import { createApiClient, type DeliveryFeeSettingsRead } from "@/app/lib/api";
+import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import { restoreAdminSession } from "@/app/lib/admin-auth";
 
 type DeliveryFeeFormProps = {
@@ -13,6 +15,7 @@ type DeliveryFeeFormProps = {
 type Status = "idle" | "pending" | "success" | "error";
 
 export default function DeliveryFeeForm({ activeFees, apiBaseUrl }: DeliveryFeeFormProps) {
+  const router = useRouter();
   const [label, setLabel] = useState(activeFees.name);
   const [deliveryFeeInput, setDeliveryFeeInput] = useState(String(activeFees.delivery_fee_cents ?? 0));
   const [shippingFeeInput, setShippingFeeInput] = useState(String(activeFees.shipping_fee_cents ?? 0));
@@ -65,6 +68,8 @@ export default function DeliveryFeeForm({ activeFees, apiBaseUrl }: DeliveryFeeF
         setLatestFees(updated);
         setDeliveryFeeInput(String(updated.delivery_fee_cents ?? 0));
         setShippingFeeInput(String(updated.shipping_fee_cents ?? 0));
+        await invalidateMarketplaceCaches();
+        router.refresh();
         setStatus("success");
         setMessage("Delivery fees saved.");
       } catch (error) {
