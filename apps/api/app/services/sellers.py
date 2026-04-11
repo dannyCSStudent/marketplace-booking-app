@@ -7,10 +7,12 @@ from app.core.supabase import SupabaseError
 from app.dependencies.auth import CurrentUser
 from app.dependencies.supabase import get_supabase_client
 from app.services.notification_delivery_worker import process_notification_delivery_rows
+from app.services.notification_deliveries import queue_seller_profile_completion_notifications
 from app.schemas.reviews import ReviewRead
 from app.schemas.sellers import (
     SellerCreate,
     SellerLookupRead,
+    SellerProfileCompletionRead,
     SellerRead,
     SellerTrustInterventionRead,
     SellerTrustScoreRead,
@@ -33,6 +35,44 @@ def _parse_timestamp(value: object) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _build_profile_completion(row: dict) -> SellerProfileCompletionRead:
+    seller_display_name = str(row.get("display_name") or "Seller").strip() or "Seller"
+    seller_slug = str(row.get("slug") or "").strip()
+    missing_fields: list[str] = []
+
+    if not str(row.get("bio") or "").strip():
+        missing_fields.append("Bio")
+
+    has_location = all(str(row.get(field) or "").strip() for field in ("city", "state", "country"))
+    if not has_location:
+        missing_fields.append("Location")
+
+    if not bool(row.get("is_verified", False)):
+        missing_fields.append("Verification")
+
+    total_checks = 3
+    completed_checks = total_checks - len(missing_fields)
+    completion_percent = round((completed_checks / total_checks) * 100) if total_checks > 0 else 0
+
+    if missing_fields:
+        summary = f"Complete {', '.join(field.lower() for field in missing_fields)} to strengthen the seller profile."
+    else:
+        summary = "The seller profile has the basics in place for discovery and trust surfaces."
+
+    return SellerProfileCompletionRead(
+        seller_id=str(row.get("id") or ""),
+        seller_slug=seller_slug,
+        seller_display_name=seller_display_name,
+        total_checks=total_checks,
+        completed_checks=completed_checks,
+        missing_checks=len(missing_fields),
+        completion_percent=completion_percent,
+        missing_fields=missing_fields,
+        is_complete=not missing_fields,
+        summary=summary,
+    )
 
 
 def _score_trust_window(
@@ -550,6 +590,62 @@ def get_my_seller(current_user: CurrentUser) -> SellerRead:
 
     return SellerRead(**_attach_trust_score(row))
 
+
+def get_my_seller_profile_completion(current_user: CurrentUser) -> SellerProfileCompletionRead:
+    supabase = get_supabase_client()
+    try:
+        row = supabase.select(
+            "seller_profiles",
+            query={
+                "select": SELLER_SELECT,
+                "user_id": f"eq.{current_user.id}",
+            },
+            access_token=current_user.access_token,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seller profile not found") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return _build_profile_completion(row)
+
+
+def list_seller_profile_completions(
+    limit: int = 24,
+    state: str | None = None,
+) -> list[SellerProfileCompletionRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "seller_profiles",
+            query={
+                "select": SELLER_SELECT,
+                "order": "display_name.asc",
+                "limit": str(max(1, min(limit, 100))),
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    completions = [_build_profile_completion(row) for row in rows]
+    effective_state = (state or "all").strip().lower()
+    if effective_state == "complete":
+        completions = [completion for completion in completions if completion.is_complete]
+    elif effective_state == "incomplete":
+        completions = [completion for completion in completions if not completion.is_complete]
+
+    completions.sort(
+        key=lambda item: (
+            item.is_complete,
+            -item.missing_checks,
+            -item.completion_percent,
+            item.seller_display_name.lower(),
+        )
+    )
+    return completions[: max(1, min(limit, 100))]
+
 def create_seller(current_user: CurrentUser, payload: SellerCreate) -> SellerRead:
     supabase = get_supabase_client()
     try:
@@ -570,7 +666,9 @@ def create_seller(current_user: CurrentUser, payload: SellerCreate) -> SellerRea
     except SupabaseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    return SellerRead(**_attach_trust_score(rows[0]))
+    seller_row = rows[0]
+    queue_seller_profile_completion_notifications(seller_row, _build_profile_completion(seller_row).model_dump())
+    return SellerRead(**_attach_trust_score(seller_row))
 
 def update_my_seller(current_user: CurrentUser, payload: SellerUpdate) -> SellerRead:
     supabase = get_supabase_client()
@@ -594,7 +692,9 @@ def update_my_seller(current_user: CurrentUser, payload: SellerUpdate) -> Seller
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seller profile not found")
 
-    return SellerRead(**_attach_trust_score(rows[0]))
+    seller_row = rows[0]
+    queue_seller_profile_completion_notifications(seller_row, _build_profile_completion(seller_row).model_dump())
+    return SellerRead(**_attach_trust_score(seller_row))
 
 def get_seller_by_slug(slug: str) -> SellerRead:
     supabase = get_supabase_client()

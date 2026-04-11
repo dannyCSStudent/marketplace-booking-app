@@ -24,11 +24,18 @@ from app.schemas.notifications import (
     ReviewResponseReminderSellerSummaryRead,
     OrderExceptionEventRead,
     OrderExceptionSellerSummaryRead,
+    OrderFraudWatchBuyerSummaryRead,
+    OrderFraudWatchEventRead,
+    SellerProfileCompletionEventRead,
     SubscriptionDowngradeEventRead,
     SubscriptionDowngradeSellerSummaryRead,
     TrustAlertEventRead,
     TrustAlertSellerSummaryRead,
 )
+
+ORDER_FRAUD_WATCH_LOOKBACK_DAYS = 30
+ORDER_FRAUD_WATCH_RECENT_WINDOW_DAYS = 7
+ORDER_FRAUD_WATCH_MIN_EVENTS = 3
 
 
 def get_my_notification_deliveries(current_user: CurrentUser) -> list[NotificationDeliveryRead]:
@@ -584,6 +591,279 @@ def queue_admin_delivery_failure_notifications(
         supabase.insert("notification_deliveries", deliveries, use_service_role=True)
     except SupabaseError:
         return
+
+
+def queue_seller_profile_completion_notifications(
+    seller: dict[str, Any],
+    completion: dict[str, Any],
+) -> None:
+    if completion.get("is_complete"):
+        return
+
+    seller_id = str(seller.get("id") or "").strip()
+    seller_user_id = str(seller.get("user_id") or "").strip()
+    seller_slug = str(seller.get("slug") or "").strip()
+    seller_display_name = str(seller.get("display_name") or "Seller").strip() or "Seller"
+    if not seller_id or not seller_user_id:
+        return
+
+    missing_fields = [str(field).strip() for field in completion.get("missing_fields") or [] if str(field).strip()]
+    completion_percent = int(completion.get("completion_percent") or 0)
+    summary = str(completion.get("summary") or "").strip() or "Complete the remaining profile fields."
+    signature = f"{seller_id}:{completion_percent}:{','.join(sorted(missing_fields))}"
+    event_id = f"seller-profile-completion:{signature}"
+
+    supabase = get_supabase_client()
+    try:
+        profile_rows = supabase.select(
+            "profiles",
+            query={
+                "select": "id,email_notifications_enabled,push_notifications_enabled",
+                "id": f"eq.{seller_user_id}",
+            },
+            use_service_role=True,
+        )
+        recent_rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "recipient_user_id,event_id",
+                "recipient_user_id": f"eq.{seller_user_id}",
+                "order": "created_at.desc",
+                "limit": "50",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        return
+
+    profile = profile_rows[0] if profile_rows else {}
+    existing_events = {
+        (row.get("recipient_user_id"), row.get("event_id"))
+        for row in recent_rows
+        if row.get("recipient_user_id") and row.get("event_id")
+    }
+    if (seller_user_id, event_id) in existing_events:
+        return
+
+    deliveries: list[dict[str, object]] = []
+    subject = f"Finish your {seller_display_name} profile"
+    body = summary
+    html_lines = [
+        f"<p>Finish the profile for <strong>{seller_display_name}</strong>.</p>",
+        f"<p><strong>Completion:</strong> {completion_percent}%</p>",
+    ]
+    if missing_fields:
+        html_lines.append(f"<p><strong>Missing:</strong> {', '.join(missing_fields)}</p>")
+    html_lines.append(f"<p>{summary}</p>")
+    html = "".join(html_lines)
+    payload = {
+        "alert_type": "seller_profile_completion",
+        "seller_id": seller_id,
+        "seller_slug": seller_slug,
+        "seller_display_name": seller_display_name,
+        "completion_percent": completion_percent,
+        "missing_fields": missing_fields,
+        "summary": summary,
+        "is_complete": False,
+        "alert_signature": signature,
+        "subject": subject,
+        "body": body,
+        "html": html,
+    }
+
+    if profile.get("email_notifications_enabled", True):
+        deliveries.append(
+            {
+                "recipient_user_id": seller_user_id,
+                "transaction_kind": "seller",
+                "transaction_id": seller_id,
+                "event_id": event_id,
+                "channel": "email",
+                "delivery_status": "queued",
+                "payload": payload,
+            }
+        )
+
+    if profile.get("push_notifications_enabled", True):
+        deliveries.append(
+            {
+                "recipient_user_id": seller_user_id,
+                "transaction_kind": "seller",
+                "transaction_id": seller_id,
+                "event_id": event_id,
+                "channel": "push",
+                "delivery_status": "queued",
+                "payload": payload,
+            }
+        )
+
+    if not deliveries:
+        return
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if inserted_rows:
+        try:
+            from app.services.notification_delivery_worker import process_notification_delivery_rows
+
+            process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
+
+
+def acknowledge_admin_seller_profile_completion(
+    seller_id: str,
+    actor_user_id: str | None = None,
+) -> list[NotificationDeliveryRead]:
+    return _update_seller_profile_completion_acknowledgement(
+        seller_id=seller_id,
+        actor_user_id=actor_user_id,
+        acknowledged=True,
+    )
+
+
+def clear_admin_seller_profile_completion_acknowledgement(
+    seller_id: str,
+    actor_user_id: str | None = None,
+) -> list[NotificationDeliveryRead]:
+    return _update_seller_profile_completion_acknowledgement(
+        seller_id=seller_id,
+        actor_user_id=actor_user_id,
+        acknowledged=False,
+    )
+
+
+def _update_seller_profile_completion_acknowledgement(
+    *,
+    seller_id: str,
+    actor_user_id: str | None,
+    acknowledged: bool,
+) -> list[NotificationDeliveryRead]:
+    supabase = get_supabase_client()
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": (
+                    "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                    "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                ),
+                "payload->>alert_type": "eq.seller_profile_completion",
+                "payload->>seller_id": f"eq.{seller_id}",
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    updated_rows: list[dict] = []
+    for row in rows:
+        payload = dict(row.get("payload") or {})
+        if acknowledged:
+            payload["acknowledged_at"] = now
+            if actor_user_id:
+                payload["acknowledged_by_user_id"] = actor_user_id
+            payload["acknowledged_signature"] = payload.get("alert_signature") or payload.get("acknowledged_signature")
+        else:
+            payload.pop("acknowledged_at", None)
+            payload.pop("acknowledged_by_user_id", None)
+            payload.pop("acknowledged_signature", None)
+        try:
+            updated = supabase.update(
+                "notification_deliveries",
+                {"payload": payload},
+                query={
+                    "id": f"eq.{row['id']}",
+                    "select": (
+                        "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                        "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                    ),
+                },
+                use_service_role=True,
+            )
+        except SupabaseError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+        if updated:
+            updated_rows.extend(updated)
+
+    if updated_rows and actor_user_id:
+        _insert_seller_profile_completion_events(
+            rows=updated_rows,
+            action="acknowledged" if acknowledged else "cleared",
+            actor_user_id=actor_user_id,
+        )
+
+    return [NotificationDeliveryRead(**row) for row in updated_rows]
+
+
+def _insert_seller_profile_completion_events(
+    *,
+    rows: list[dict],
+    action: str,
+    actor_user_id: str,
+) -> None:
+    supabase = get_supabase_client()
+    events: list[dict[str, object]] = []
+
+    for row in rows:
+        payload = row.get("payload") or {}
+        seller_id = str(payload.get("seller_id") or "").strip()
+        seller_slug = str(payload.get("seller_slug") or "").strip()
+        seller_display_name = str(payload.get("seller_display_name") or "").strip()
+        alert_signature = str(payload.get("acknowledged_signature") or payload.get("alert_signature") or "").strip()
+        if not seller_id or not seller_slug or not seller_display_name or not alert_signature:
+            continue
+
+        events.append(
+            {
+                "seller_id": seller_id,
+                "seller_slug": seller_slug,
+                "seller_display_name": seller_display_name,
+                "delivery_id": str(row.get("id")),
+                "actor_user_id": actor_user_id,
+                "action": action,
+                "alert_signature": alert_signature,
+                "completion_percent": int(payload.get("completion_percent") or 0),
+                "missing_fields": list(payload.get("missing_fields") or []),
+                "summary": str(payload.get("summary") or "").strip(),
+            }
+        )
+
+    if not events:
+        return
+
+    try:
+        supabase.insert("seller_profile_completion_events", events, use_service_role=True)
+    except SupabaseError:
+        return
+
+
+def list_admin_seller_profile_completion_events(limit: int = 20) -> list[SellerProfileCompletionEventRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "seller_profile_completion_events",
+            query={
+                "select": (
+                    "id,seller_id,seller_slug,seller_display_name,delivery_id,actor_user_id,action,"
+                    "alert_signature,completion_percent,missing_fields,summary,created_at"
+                ),
+                "order": "created_at.desc",
+                "limit": str(max(1, min(limit, 100))),
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [SellerProfileCompletionEventRead(**row) for row in rows]
 
 
 def acknowledge_admin_delivery_failure(
@@ -1800,6 +2080,462 @@ def list_admin_order_exception_events(limit: int = 20) -> list[OrderExceptionEve
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return [OrderExceptionEventRead(**row) for row in rows]
+
+
+def queue_order_fraud_watch_notifications(
+    *,
+    order: dict[str, Any],
+    previous_status: str,
+    actor_role: str,
+) -> None:
+    if actor_role != "buyer" or previous_status not in ORDER_EXCEPTION_TRIGGER_STATUSES or order.get("status") != "canceled":
+        return
+
+    buyer_id = str(order.get("buyer_id") or "").strip()
+    if not buyer_id:
+        return
+
+    supabase = get_supabase_client()
+    since = (datetime.now(timezone.utc) - timedelta(days=ORDER_FRAUD_WATCH_LOOKBACK_DAYS)).isoformat()
+
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "event_id,payload,created_at",
+                "payload->>alert_type": "eq.order_exception",
+                "payload->>buyer_id": f"eq.{buyer_id}",
+                "payload->>actor_role": "eq.buyer",
+                "created_at": f"gte.{since}",
+                "order": "created_at.desc",
+                "limit": "200",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        return
+
+    unique_events: dict[str, dict[str, object]] = {}
+    for row in rows:
+        event_id = str(row.get("event_id") or "").strip()
+        created_at = _parse_timestamp(row.get("created_at"))
+        if not event_id or created_at is None:
+            continue
+
+        current = unique_events.get(event_id)
+        if current is None or created_at > current["created_at"]:
+            unique_events[event_id] = {
+                "row": row,
+                "created_at": created_at,
+            }
+
+    if len(unique_events) < ORDER_FRAUD_WATCH_MIN_EVENTS:
+        return
+
+    latest_event = max(unique_events.values(), key=lambda item: item["created_at"])
+    latest_row = latest_event["row"]
+    latest_payload = latest_row.get("payload") or {}
+    latest_order_id = str(latest_payload.get("order_id") or "").strip()
+    latest_order_status = str(latest_payload.get("current_status") or "").strip() or "canceled"
+    order_exception_count = len(unique_events)
+    recent_threshold = datetime.now(timezone.utc) - timedelta(days=ORDER_FRAUD_WATCH_RECENT_WINDOW_DAYS)
+    recent_order_exception_count = sum(
+        1
+        for item in unique_events.values()
+        if item["created_at"] >= recent_threshold
+    )
+    risk_level = _order_fraud_watch_risk_level(order_exception_count)
+    alert_reason = (
+        f"{order_exception_count} buyer-triggered order cancellation alert"
+        f"{'s' if order_exception_count != 1 else ''} in {ORDER_FRAUD_WATCH_LOOKBACK_DAYS} days."
+    )
+    alert_signature = str(latest_payload.get("alert_signature") or latest_row.get("event_id") or "").strip()
+    event_id = f"order-fraud-watch:{buyer_id}:{order_exception_count}:{alert_signature}"
+
+    try:
+        existing_rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": "recipient_user_id,event_id",
+                "event_id": f"eq.{event_id}",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        existing_rows = []
+
+    if existing_rows:
+        return
+
+    try:
+        buyer_profile = supabase.select(
+            "profiles",
+            query={
+                "select": "id,display_name",
+                "id": f"eq.{buyer_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError:
+        buyer_profile = {"display_name": ""}
+
+    buyer_display_name = str(buyer_profile.get("display_name") or "").strip() or "Buyer"
+
+    settings = get_settings()
+    admin_ids = [
+        admin_id
+        for admin_id in settings.admin_user_ids
+        if (settings.admin_user_roles or {}).get(admin_id, "").lower() in {"support", "owner"}
+    ]
+    if not admin_ids:
+        admin_ids = list(settings.admin_user_ids)
+    if not admin_ids:
+        return
+
+    recipient_user_ids = list(dict.fromkeys(admin_ids))
+    try:
+        profile_rows = supabase.select(
+            "profiles",
+            query={
+                "select": "id,email_notifications_enabled,push_notifications_enabled",
+                "id": f"in.({','.join(recipient_user_ids)})",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError:
+        profile_rows = []
+
+    profile_prefs = {
+        str(row.get("id")): row
+        for row in profile_rows
+        if row.get("id")
+    }
+
+    subject = f"Order fraud watch for {buyer_display_name}"
+    body = alert_reason
+    html = (
+        f"<p>Order fraud watch for <strong>{buyer_display_name}</strong>.</p>"
+        f"<p><strong>Order exception alerts:</strong> {order_exception_count}</p>"
+        f"<p><strong>Recent alerts:</strong> {recent_order_exception_count}</p>"
+        f"<p><strong>Risk:</strong> {risk_level}</p>"
+        f"<p>{alert_reason}</p>"
+    )
+
+    deliveries: list[dict[str, object]] = []
+    for recipient_user_id in recipient_user_ids:
+        prefs = profile_prefs.get(recipient_user_id, {})
+        payload = {
+            "alert_type": "order_fraud_watch",
+            "buyer_id": buyer_id,
+            "buyer_display_name": buyer_display_name,
+            "latest_order_id": latest_order_id,
+            "latest_order_status": latest_order_status,
+            "order_exception_count": order_exception_count,
+            "recent_order_exception_count": recent_order_exception_count,
+            "risk_level": risk_level,
+            "alert_reason": alert_reason,
+            "alert_signature": event_id,
+            "subject": subject,
+            "body": body,
+            "html": html,
+        }
+
+        if prefs.get("email_notifications_enabled", True):
+            deliveries.append(
+                {
+                    "recipient_user_id": recipient_user_id,
+                    "transaction_kind": "order",
+                    "transaction_id": latest_order_id or order.get("id") or buyer_id,
+                    "event_id": event_id,
+                    "channel": "email",
+                    "delivery_status": "queued",
+                    "payload": payload,
+                }
+            )
+
+        if prefs.get("push_notifications_enabled", True):
+            deliveries.append(
+                {
+                    "recipient_user_id": recipient_user_id,
+                    "transaction_kind": "order",
+                    "transaction_id": latest_order_id or order.get("id") or buyer_id,
+                    "event_id": event_id,
+                    "channel": "push",
+                    "delivery_status": "queued",
+                    "payload": payload,
+                }
+            )
+
+    if not deliveries:
+        return
+
+    try:
+        inserted_rows = supabase.insert("notification_deliveries", deliveries, use_service_role=True)
+    except SupabaseError:
+        return
+
+    if inserted_rows:
+        try:
+            from app.services.notification_delivery_worker import process_notification_delivery_rows
+
+            process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
+
+
+def acknowledge_admin_order_fraud_watch(
+    buyer_id: str,
+    actor_user_id: str | None = None,
+) -> list[NotificationDeliveryRead]:
+    return _update_order_fraud_watch_acknowledgement(
+        buyer_id=buyer_id,
+        actor_user_id=actor_user_id,
+        acknowledged=True,
+    )
+
+
+def clear_admin_order_fraud_watch_acknowledgement(
+    buyer_id: str,
+    actor_user_id: str | None = None,
+) -> list[NotificationDeliveryRead]:
+    return _update_order_fraud_watch_acknowledgement(
+        buyer_id=buyer_id,
+        actor_user_id=actor_user_id,
+        acknowledged=False,
+    )
+
+
+def _update_order_fraud_watch_acknowledgement(
+    *,
+    buyer_id: str,
+    actor_user_id: str | None,
+    acknowledged: bool,
+) -> list[NotificationDeliveryRead]:
+    supabase = get_supabase_client()
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": (
+                    "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                    "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                ),
+                "payload->>alert_type": "eq.order_fraud_watch",
+                "payload->>buyer_id": f"eq.{buyer_id}",
+                "order": "created_at.desc",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    updated_rows: list[dict] = []
+    for row in rows:
+        payload = dict(row.get("payload") or {})
+        if acknowledged:
+            payload["acknowledged_at"] = now
+            if actor_user_id:
+                payload["acknowledged_by_user_id"] = actor_user_id
+            payload["acknowledged_signature"] = payload.get("alert_signature") or payload.get("acknowledged_signature")
+        else:
+            payload.pop("acknowledged_at", None)
+            payload.pop("acknowledged_by_user_id", None)
+            payload.pop("acknowledged_signature", None)
+        try:
+            updated = supabase.update(
+                "notification_deliveries",
+                {"payload": payload},
+                query={
+                    "id": f"eq.{row['id']}",
+                    "select": (
+                        "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                        "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                    ),
+                },
+                use_service_role=True,
+            )
+        except SupabaseError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+        if updated:
+            updated_rows.extend(updated)
+
+    if updated_rows and actor_user_id:
+        _insert_order_fraud_watch_events(
+            rows=updated_rows,
+            action="acknowledged" if acknowledged else "cleared",
+            actor_user_id=actor_user_id,
+        )
+
+    return [NotificationDeliveryRead(**row) for row in updated_rows]
+
+
+def _insert_order_fraud_watch_events(
+    *,
+    rows: list[dict],
+    action: str,
+    actor_user_id: str,
+) -> None:
+    supabase = get_supabase_client()
+    events: list[dict[str, object]] = []
+
+    for row in rows:
+        payload = row.get("payload") or {}
+        buyer_id = str(payload.get("buyer_id") or "").strip()
+        buyer_display_name = str(payload.get("buyer_display_name") or "").strip()
+        alert_signature = str(payload.get("acknowledged_signature") or payload.get("alert_signature") or "").strip()
+        order_exception_count = int(payload.get("order_exception_count") or 0)
+        recent_order_exception_count = int(payload.get("recent_order_exception_count") or 0)
+        risk_level = str(payload.get("risk_level") or "watch").strip() or "watch"
+        latest_order_id = str(payload.get("latest_order_id") or "").strip() or None
+        latest_order_status = str(payload.get("latest_order_status") or "").strip() or None
+        if not buyer_id or not buyer_display_name or not alert_signature:
+            continue
+
+        events.append(
+            {
+                "buyer_id": buyer_id,
+                "buyer_display_name": buyer_display_name,
+                "delivery_id": str(row.get("id")),
+                "actor_user_id": actor_user_id,
+                "action": action,
+                "alert_signature": alert_signature,
+                "order_exception_count": order_exception_count,
+                "recent_order_exception_count": recent_order_exception_count,
+                "risk_level": risk_level,
+                "latest_order_id": latest_order_id,
+                "latest_order_status": latest_order_status,
+            }
+        )
+
+    if not events:
+        return
+
+    try:
+        supabase.insert("order_fraud_watch_events", events, use_service_role=True)
+    except SupabaseError:
+        return
+
+
+def list_admin_order_fraud_watch_events(limit: int = 20) -> list[OrderFraudWatchEventRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "order_fraud_watch_events",
+            query={
+                "select": (
+                    "id,buyer_id,buyer_display_name,delivery_id,actor_user_id,action,alert_signature,"
+                    "order_exception_count,recent_order_exception_count,risk_level,latest_order_id,"
+                    "latest_order_status,created_at"
+                ),
+                "order": "created_at.desc",
+                "limit": str(max(1, min(limit, 100))),
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [OrderFraudWatchEventRead(**row) for row in rows]
+
+
+def list_admin_order_fraud_watch_buyer_summaries(
+    limit: int = 6,
+    state: str | None = None,
+) -> list[OrderFraudWatchBuyerSummaryRead]:
+    supabase = get_supabase_client()
+    try:
+        rows = supabase.select(
+            "notification_deliveries",
+            query={
+                "select": (
+                    "id,recipient_user_id,transaction_kind,transaction_id,event_id,channel,"
+                    "delivery_status,payload,failure_reason,attempts,sent_at,created_at"
+                ),
+                "payload->>alert_type": "eq.order_fraud_watch",
+                "order": "created_at.desc",
+                "limit": "200",
+            },
+            use_service_role=True,
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    grouped: dict[str, dict[str, object]] = {}
+    allowed_states = {"active"} if state is None else {"active", "acknowledged"} if state == "all" else {state}
+
+    for row in rows:
+        payload = row.get("payload") or {}
+        buyer_id = str(payload.get("buyer_id") or "").strip()
+        buyer_display_name = str(payload.get("buyer_display_name") or "").strip()
+        created_at = _parse_timestamp(row.get("created_at"))
+        alert_signature = str(payload.get("alert_signature") or "").strip()
+        if not buyer_id or not buyer_display_name or created_at is None or not alert_signature:
+            continue
+
+        acknowledged_signature = str(payload.get("acknowledged_signature") or "").strip()
+        is_acknowledged = bool(acknowledged_signature) and acknowledged_signature == alert_signature
+        row_state = "acknowledged" if is_acknowledged else "active"
+        if row_state not in allowed_states:
+            continue
+
+        current = grouped.get(buyer_id)
+        if current is None:
+            grouped[buyer_id] = {
+                "buyer_id": buyer_id,
+                "buyer_display_name": buyer_display_name,
+                "alert_delivery_count": 1,
+                "latest_alert_delivery_status": str(row.get("delivery_status") or "unknown"),
+                "latest_alert_delivery_created_at": created_at,
+                "order_exception_count": int(payload.get("order_exception_count") or 0),
+                "recent_order_exception_count": int(payload.get("recent_order_exception_count") or 0),
+                "latest_order_id": str(payload.get("latest_order_id") or "").strip() or None,
+                "latest_order_status": str(payload.get("latest_order_status") or "").strip() or None,
+                "risk_level": str(payload.get("risk_level") or "watch").strip() or "watch",
+                "alert_reason": str(payload.get("alert_reason") or "").strip()
+                or f"{int(payload.get('order_exception_count') or 0)} buyer-triggered order exception alerts in {ORDER_FRAUD_WATCH_LOOKBACK_DAYS} days.",
+                "acknowledged": is_acknowledged,
+            }
+            continue
+
+        current["alert_delivery_count"] = int(current.get("alert_delivery_count", 0)) + 1
+        current_created_at = current.get("latest_alert_delivery_created_at")
+        if isinstance(current_created_at, datetime) and created_at > current_created_at:
+            current["buyer_display_name"] = buyer_display_name
+            current["latest_alert_delivery_status"] = str(row.get("delivery_status") or "unknown")
+            current["latest_alert_delivery_created_at"] = created_at
+            current["order_exception_count"] = int(payload.get("order_exception_count") or 0)
+            current["recent_order_exception_count"] = int(payload.get("recent_order_exception_count") or 0)
+            current["latest_order_id"] = str(payload.get("latest_order_id") or "").strip() or None
+            current["latest_order_status"] = str(payload.get("latest_order_status") or "").strip() or None
+            current["risk_level"] = str(payload.get("risk_level") or "watch").strip() or "watch"
+            current["alert_reason"] = str(payload.get("alert_reason") or "").strip() or current["alert_reason"]
+            current["acknowledged"] = is_acknowledged
+
+    summaries = [OrderFraudWatchBuyerSummaryRead(**summary) for summary in grouped.values()]
+    if allowed_states == {"active"}:
+        summaries = [summary for summary in summaries if not summary.acknowledged]
+    elif allowed_states == {"acknowledged"}:
+        summaries = [summary for summary in summaries if summary.acknowledged]
+    summaries.sort(
+        key=lambda summary: (
+            -summary.alert_delivery_count,
+            -summary.latest_alert_delivery_created_at.timestamp(),
+            summary.buyer_display_name.lower(),
+        )
+    )
+    return summaries[: max(1, min(limit, 20))]
+
+
+def _order_fraud_watch_risk_level(order_exception_count: int) -> str:
+    if order_exception_count >= 6:
+        return "critical"
+    if order_exception_count >= 4:
+        return "elevated"
+    return "watch"
 
 
 def acknowledge_admin_booking_conflict(

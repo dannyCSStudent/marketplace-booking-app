@@ -36,6 +36,8 @@ export type DeliveryFeeHistoryPoint = ApiSchemaMap["DeliveryFeeHistoryPoint"];
 export type SubscriptionTierRead = ApiSchemaMap["SubscriptionTierRead"];
 export type SubscriptionTierCreate = ApiSchemaMap["SubscriptionTierCreate"];
 export type SellerLookupRead = ApiSchemaMap["SellerLookupRead"];
+export type SellerProfileCompletionRead = ApiSchemaMap["SellerProfileCompletionRead"];
+export type SellerProfileCompletionEventRead = ApiSchemaMap["SellerProfileCompletionEventRead"];
 export type SellerSubscriptionRead = ApiSchemaMap["SellerSubscriptionRead"];
 export type SellerSubscriptionAssign = ApiSchemaMap["SellerSubscriptionAssign"];
 export type SellerSubscriptionEventRead = ApiSchemaMap["SellerSubscriptionEventRead"];
@@ -44,6 +46,8 @@ export type SellerTrustIntervention = ApiSchemaMap["SellerTrustInterventionRead"
 export type TrustAlertSellerSummaryRead = ApiSchemaMap["TrustAlertSellerSummaryRead"];
 export type OrderExceptionSellerSummaryRead = ApiSchemaMap["OrderExceptionSellerSummaryRead"];
 export type OrderExceptionEventRead = ApiSchemaMap["OrderExceptionEventRead"];
+export type OrderFraudWatchBuyerSummaryRead = ApiSchemaMap["OrderFraudWatchBuyerSummaryRead"];
+export type OrderFraudWatchEventRead = ApiSchemaMap["OrderFraudWatchEventRead"];
 export type BookingConflictSellerSummaryRead = ApiSchemaMap["BookingConflictSellerSummaryRead"];
 export type BookingConflictEventRead = ApiSchemaMap["BookingConflictEventRead"];
 export type DeliveryFailureSummaryRead = ApiSchemaMap["DeliveryFailureSummaryRead"];
@@ -52,6 +56,11 @@ export type InventoryAlertSummaryRead = ApiSchemaMap["InventoryAlertSummaryRead"
 export type InventoryAlertEventRead = ApiSchemaMap["InventoryAlertEventRead"];
 export type SubscriptionDowngradeSellerSummaryRead = ApiSchemaMap["SubscriptionDowngradeSellerSummaryRead"];
 export type SubscriptionDowngradeEventRead = ApiSchemaMap["SubscriptionDowngradeEventRead"];
+export type SellerInactivitySummaryRead = ApiSchemaMap["SellerInactivitySummaryRead"];
+export type SellerInactivityEventRead = ApiSchemaMap["SellerInactivityEventRead"];
+export type MonetizationWatchlistAlertRead = ApiSchemaMap["MonetizationWatchlistAlertRead"];
+export type MonetizationWatchlistSummaryRead = ApiSchemaMap["MonetizationWatchlistSummaryRead"];
+export type MonetizationWatchlistEventRead = ApiSchemaMap["MonetizationWatchlistEventRead"];
 export type CategoryRead = {
   id: string;
   name: string;
@@ -250,6 +259,7 @@ export type BuyerEngagementContext = {
 };
 export type SellerWorkspaceData = {
   seller: SellerProfile;
+  profileCompletion: SellerProfileCompletionRead | null;
   subscription: SellerSubscriptionRead | null;
   listings: Listing[];
   orders: Order[];
@@ -375,6 +385,32 @@ export const apiRoutes = {
   sellerSubscriptionEvents: "/admin/seller-subscription-events",
   sellerTrustInterventions: (limit?: number) =>
     `/admin/seller-trust/interventions${limit ? `?limit=${limit}` : ""}`,
+  monetizationWatchlistAlerts: (sinceAt?: string) => {
+    const searchParams = new URLSearchParams();
+    if (sinceAt) {
+      searchParams.set("since_at", sinceAt);
+    }
+    const suffix = searchParams.toString();
+    return `/admin/monetization/watchlist/alerts${suffix ? `?${suffix}` : ""}`;
+  },
+  monetizationWatchlistSummaries: (sinceAt?: string, limit?: number, state?: string) => {
+    const searchParams = new URLSearchParams();
+    if (sinceAt) {
+      searchParams.set("since_at", sinceAt);
+    }
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    if (state) {
+      searchParams.set("state", state);
+    }
+    const suffix = searchParams.toString();
+    return `/admin/monetization/watchlist/summaries${suffix ? `?${suffix}` : ""}`;
+  },
+  monetizationWatchlistEvents: (limit?: number) =>
+    `/admin/monetization/watchlist/events${limit ? `?limit=${limit}` : ""}`,
+  acknowledgeMonetizationWatchlistAlert: (alertId: string) =>
+    `/admin/monetization/watchlist/${alertId}/acknowledge`,
   notificationDeliverySummary: "/notifications/admin/summary",
   notificationWorkerHealth: "/notifications/admin/worker-health",
   acknowledgeTrustAlert: (sellerId: string) => `/notifications/admin/trust-alerts/${sellerId}/acknowledge`,
@@ -405,6 +441,21 @@ export const apiRoutes = {
     `/notifications/admin/order-exceptions/events${limit ? `?limit=${limit}` : ""}`,
   acknowledgeOrderException: (sellerId: string) =>
     `/notifications/admin/order-exceptions/${sellerId}/acknowledge`,
+  orderFraudWatchBuyerSummaries: (limit?: number, state?: "active" | "acknowledged" | "all") => {
+    const searchParams = new URLSearchParams();
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    if (state) {
+      searchParams.set("state", state);
+    }
+    const suffix = searchParams.toString();
+    return `/notifications/admin/order-fraud-watch/summaries${suffix ? `?${suffix}` : ""}`;
+  },
+  orderFraudWatchEvents: (limit?: number) =>
+    `/notifications/admin/order-fraud-watch/events${limit ? `?limit=${limit}` : ""}`,
+  acknowledgeOrderFraudWatch: (buyerId: string) =>
+    `/notifications/admin/order-fraud-watch/${buyerId}/acknowledge`,
   bookingConflictSellerSummaries: (limit?: number, action?: "acknowledged" | "cleared") => {
     const searchParams = new URLSearchParams();
     if (limit) {
@@ -605,6 +656,28 @@ export function createApiClient(baseUrl: string) {
     );
   }
 
+  function listAdminNotificationDeliveries(options?: RequestConfig) {
+    return get<NotificationDelivery[]>("/notifications/admin", options);
+  }
+
+  function acknowledgeAdminSellerProfileCompletion(sellerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      `/notifications/admin/seller-profile-completion/${sellerId}/acknowledge`,
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminSellerProfileCompletionAcknowledgement(
+    sellerId: string,
+    options: RequestConfig,
+  ) {
+    return del<NotificationDelivery[]>(
+      `/notifications/admin/seller-profile-completion/${sellerId}/acknowledge`,
+      options,
+    );
+  }
+
   function listAdminOrderExceptionSellerSummaries(
     limit?: number,
     action?: "acknowledged" | "cleared",
@@ -618,6 +691,33 @@ export function createApiClient(baseUrl: string) {
 
   function listAdminOrderExceptionEvents(limit?: number, options?: RequestConfig) {
     return get<OrderExceptionEventRead[]>(apiRoutes.orderExceptionEvents(limit), options);
+  }
+
+  function listAdminOrderFraudWatchBuyerSummaries(
+    limit?: number,
+    state?: "active" | "acknowledged" | "all",
+    options?: RequestConfig,
+  ) {
+    return get<OrderFraudWatchBuyerSummaryRead[]>(
+      apiRoutes.orderFraudWatchBuyerSummaries(limit, state),
+      options,
+    );
+  }
+
+  function listAdminOrderFraudWatchEvents(limit?: number, options?: RequestConfig) {
+    return get<OrderFraudWatchEventRead[]>(apiRoutes.orderFraudWatchEvents(limit), options);
+  }
+
+  function acknowledgeAdminOrderFraudWatch(buyerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      apiRoutes.acknowledgeOrderFraudWatch(buyerId),
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminOrderFraudWatchAcknowledgement(buyerId: string, options: RequestConfig) {
+    return del<NotificationDelivery[]>(apiRoutes.acknowledgeOrderFraudWatch(buyerId), options);
   }
 
   function listAdminBookingConflictSellerSummaries(
@@ -781,6 +881,54 @@ export function createApiClient(baseUrl: string) {
     );
   }
 
+  function listAdminSellerInactivitySummaries(
+    limit?: number,
+    state?: "active" | "acknowledged" | "all",
+    options?: RequestConfig,
+  ) {
+    const searchParams = new URLSearchParams();
+    if (typeof limit === "number") {
+      searchParams.set("limit", String(limit));
+    }
+    if (state) {
+      searchParams.set("state", state);
+    }
+
+    const query = searchParams.toString();
+    return get<SellerInactivitySummaryRead[]>(
+      query ? `/notifications/admin/seller-inactivity/summaries?${query}` : "/notifications/admin/seller-inactivity/summaries",
+      options,
+    );
+  }
+
+  function listAdminSellerInactivityEvents(limit?: number, options?: RequestConfig) {
+    const searchParams = new URLSearchParams();
+    if (typeof limit === "number") {
+      searchParams.set("limit", String(limit));
+    }
+
+    const query = searchParams.toString();
+    return get<SellerInactivityEventRead[]>(
+      query ? `/notifications/admin/seller-inactivity/events?${query}` : "/notifications/admin/seller-inactivity/events",
+      options,
+    );
+  }
+
+  function acknowledgeAdminSellerInactivity(sellerId: string, options: RequestConfig) {
+    return post<NotificationDelivery[]>(
+      `/notifications/admin/seller-inactivity/${sellerId}/acknowledge`,
+      undefined,
+      options,
+    );
+  }
+
+  function clearAdminSellerInactivityAcknowledgement(sellerId: string, options: RequestConfig) {
+    return del<NotificationDelivery[]>(
+      `/notifications/admin/seller-inactivity/${sellerId}/acknowledge`,
+      options,
+    );
+  }
+
   function getMyReviewLookup(
     params: { orderId?: string; bookingId?: string },
     accessToken: string,
@@ -935,6 +1083,47 @@ export function createApiClient(baseUrl: string) {
     );
   }
 
+  function listMonetizationWatchlistAlerts(sinceAt?: string, options?: RequestConfig) {
+    return get<MonetizationWatchlistAlertRead[]>(
+      apiRoutes.monetizationWatchlistAlerts(sinceAt),
+      options,
+    );
+  }
+
+  function listMonetizationWatchlistSummaries(
+    sinceAt?: string,
+    limit?: number,
+    state?: string,
+    options?: RequestConfig,
+  ) {
+    return get<MonetizationWatchlistSummaryRead[]>(
+      apiRoutes.monetizationWatchlistSummaries(sinceAt, limit, state),
+      options,
+    );
+  }
+
+  function listMonetizationWatchlistEvents(limit?: number, options?: RequestConfig) {
+    return get<MonetizationWatchlistEventRead[]>(
+      apiRoutes.monetizationWatchlistEvents(limit),
+      options,
+    );
+  }
+
+  function acknowledgeMonetizationWatchlistAlert(alertId: string, options: RequestConfig) {
+    return post<MonetizationWatchlistEventRead[]>(
+      apiRoutes.acknowledgeMonetizationWatchlistAlert(alertId),
+      undefined,
+      options,
+    );
+  }
+
+  function clearMonetizationWatchlistAlert(alertId: string, options: RequestConfig) {
+    return del<MonetizationWatchlistEventRead[]>(
+      apiRoutes.acknowledgeMonetizationWatchlistAlert(alertId),
+      options,
+    );
+  }
+
   function listReviewAnomalies(limit?: number, options?: RequestConfig) {
     return get<ReviewAnomalyRead[]>(apiRoutes.reviewAnomalies(limit), options);
   }
@@ -1066,6 +1255,37 @@ export function createApiClient(baseUrl: string) {
     return get<ReviewModerationItem[]>(`/reviews/reports?status=${status}`, { accessToken });
   }
 
+  function listAdminSellerProfileCompletions(
+    accessToken: string,
+    params: { limit?: number; state?: string } = {},
+  ) {
+    const searchParams = new URLSearchParams();
+    if (typeof params.limit === "number") {
+      searchParams.set("limit", String(params.limit));
+    }
+    if (typeof params.state === "string" && params.state.trim()) {
+      searchParams.set("state", params.state.trim());
+    }
+    return get<SellerProfileCompletionRead[]>(
+      `/admin/seller-profile-completion${searchParams.toString() ? `?${searchParams.toString()}` : ""}`,
+      { accessToken },
+    );
+  }
+
+  function listAdminSellerProfileCompletionEvents(
+    accessToken: string,
+    params: { limit?: number } = {},
+  ) {
+    const searchParams = new URLSearchParams();
+    if (typeof params.limit === "number") {
+      searchParams.set("limit", String(params.limit));
+    }
+    return get<SellerProfileCompletionEventRead[]>(
+      `/notifications/admin/seller-profile-completion/events${searchParams.toString() ? `?${searchParams.toString()}` : ""}`,
+      { accessToken },
+    );
+  }
+
   function updateReviewVisibility(
     reviewId: string,
     body: ReviewVisibilityUpdateInput,
@@ -1122,7 +1342,8 @@ export function createApiClient(baseUrl: string) {
       return null;
     }
 
-    const [listings, orders, bookings, reviews, subscription] = await Promise.all([
+    const [profileCompletion, listings, orders, bookings, reviews, subscription] = await Promise.all([
+      get<SellerProfileCompletionRead>("/sellers/me/completion", { accessToken }).catch(() => null),
       get<Listing[]>("/listings/me", { accessToken }),
       get<Order[]>("/orders/seller", { accessToken }),
       get<Booking[]>("/bookings/seller", { accessToken }),
@@ -1132,6 +1353,7 @@ export function createApiClient(baseUrl: string) {
 
     return {
       seller,
+      profileCompletion,
       subscription,
       listings,
       orders,
@@ -1256,10 +1478,17 @@ export function createApiClient(baseUrl: string) {
     clearAdminTrustAlertAcknowledgement,
     listAdminTrustAlertEvents,
     listAdminTrustAlertSellerSummaries,
+    listAdminNotificationDeliveries,
+    acknowledgeAdminSellerProfileCompletion,
+    clearAdminSellerProfileCompletionAcknowledgement,
     listAdminOrderExceptionSellerSummaries,
     listAdminOrderExceptionEvents,
     acknowledgeAdminOrderException,
     clearAdminOrderExceptionAcknowledgement,
+    listAdminOrderFraudWatchBuyerSummaries,
+    listAdminOrderFraudWatchEvents,
+    acknowledgeAdminOrderFraudWatch,
+    clearAdminOrderFraudWatchAcknowledgement,
     listAdminSubscriptionDowngradeSellerSummaries,
     listAdminSubscriptionDowngradeEvents,
     acknowledgeAdminSubscriptionDowngrade,
@@ -1272,6 +1501,10 @@ export function createApiClient(baseUrl: string) {
     listAdminInventoryAlertEvents,
     acknowledgeAdminInventoryAlert,
     clearAdminInventoryAlertAcknowledgement,
+    listAdminSellerInactivitySummaries,
+    listAdminSellerInactivityEvents,
+    acknowledgeAdminSellerInactivity,
+    clearAdminSellerInactivityAcknowledgement,
     listAdminBookingConflictSellerSummaries,
     listAdminBookingConflictEvents,
     acknowledgeAdminBookingConflict,
@@ -1305,6 +1538,8 @@ export function createApiClient(baseUrl: string) {
     createReview,
     createReviewReport,
     listAdminReviewReports,
+    listAdminSellerProfileCompletions,
+    listAdminSellerProfileCompletionEvents,
     updateReviewSellerResponse,
     requestReviewResponseAiAssist,
     requestOrderResponseAiAssist,
@@ -1320,6 +1555,11 @@ export function createApiClient(baseUrl: string) {
     listDeliveryFeeHistory,
     listAdminSellers,
     listAdminSellerTrustInterventions,
+    listMonetizationWatchlistAlerts,
+    listMonetizationWatchlistSummaries,
+    listMonetizationWatchlistEvents,
+    acknowledgeMonetizationWatchlistAlert,
+    clearMonetizationWatchlistAlert,
     listReviewAnomalies,
     listReviewAnomalySellerSummaries,
     acknowledgeReviewAnomaly,

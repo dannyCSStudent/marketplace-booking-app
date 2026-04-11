@@ -35,6 +35,7 @@ import type {
   ReviewResponseAiAssistSuggestion,
   SellerCreateInput,
   SellerProfile,
+  SellerProfileCompletionRead,
   SellerSubscriptionRead,
   SellerWorkspaceData,
 } from "@/app/lib/api";
@@ -42,6 +43,7 @@ import type { NotificationDeliveryBulkRetryResult } from "@repo/api-client";
 
 type WorkspaceState = {
   seller: SellerProfile;
+  profileCompletion: SellerProfileCompletionRead | null;
   subscription: SellerSubscriptionRead | null;
   listings: Listing[];
   orders: Order[];
@@ -89,6 +91,30 @@ type ReviewResponseReminderActivityEntry = {
   reviewRating: number;
   reviewComment: string;
   reminderCount: number;
+  latestCreatedAt: string;
+};
+
+type SellerProfileCompletionActivityEntry = {
+  id: string;
+  createdAt: string;
+  sellerId: string;
+  sellerSlug: string;
+  sellerDisplayName: string;
+  completionPercent: number;
+  missingFields: string[];
+  summary: string;
+};
+
+type SellerInactivityActivityEntry = {
+  id: string;
+  createdAt: string;
+  deliveryId: string;
+  sellerId: string;
+  sellerSlug: string;
+  sellerDisplayName: string;
+  idleDays: number;
+  lastActiveKind: string;
+  lastActiveAt: string | null;
   latestCreatedAt: string;
 };
 
@@ -239,6 +265,11 @@ const SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY =
   "seller_review_response_reminder_activity";
 const SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_COLLAPSED_KEY =
   "seller_review_response_reminder_activity_collapsed";
+const SELLER_PROFILE_COMPLETION_ACTIVITY_KEY = "seller_profile_completion_activity";
+const SELLER_PROFILE_COMPLETION_ACTIVITY_COLLAPSED_KEY =
+  "seller_profile_completion_activity_collapsed";
+const SELLER_INACTIVITY_ACTIVITY_KEY = "seller_inactivity_activity";
+const SELLER_INACTIVITY_ACTIVITY_COLLAPSED_KEY = "seller_inactivity_activity_collapsed";
 const SELLER_BOOKING_CONFLICT_ACTIVITY_KEY = "seller_booking_conflict_activity";
 const SELLER_BOOKING_CONFLICT_ACTIVITY_COLLAPSED_KEY =
   "seller_booking_conflict_activity_collapsed";
@@ -1026,6 +1057,18 @@ function getSellerReviewPressureToneClass(riskLevel: string | null) {
   return "border-border bg-background/45 text-foreground";
 }
 
+function getSellerInactivityToneClass(severity: string | null) {
+  if (severity === "high") {
+    return "border-rose-200 bg-rose-50/50 text-rose-700";
+  }
+
+  if (severity === "medium") {
+    return "border-amber-200 bg-amber-50/50 text-amber-800";
+  }
+
+  return "border-sky-200 bg-sky-50/50 text-sky-700";
+}
+
 function getListingSupportPressureLaneMode(input: {
   failedDeliveryCount: number;
   queuedDeliveryCount: number;
@@ -1237,7 +1280,9 @@ type DeliveryAlertFilter =
     | "all"
     | "inventory"
     | "trust"
+    | "profile_completion"
     | "review_response_reminder"
+    | "seller_inactivity"
     | "booking"
     | "order_exception"
     | "subscription_downgrade"
@@ -1262,6 +1307,7 @@ type DeliveryAlertFilter =
     | "delivery-drag"
     | "delivery-pressure"
     | "trust-watch"
+    | "seller-inactivity"
     | "recovery-lane"
     | "recovered-recently";
 
@@ -1317,6 +1363,28 @@ type DeliveryAlertFilter =
     ReviewResponseReminderActivityEntry[]
   >([]);
   const [collapsedReviewResponseReminderActivityGroups, setCollapsedReviewResponseReminderActivityGroups] =
+    useState<{
+      Today: boolean;
+      Earlier: boolean;
+    }>({
+      Today: false,
+      Earlier: false,
+    });
+  const [sellerProfileCompletionActivity, setSellerProfileCompletionActivity] = useState<
+    SellerProfileCompletionActivityEntry[]
+  >([]);
+  const [collapsedSellerProfileCompletionActivityGroups, setCollapsedSellerProfileCompletionActivityGroups] =
+    useState<{
+      Today: boolean;
+      Earlier: boolean;
+    }>({
+      Today: false,
+      Earlier: false,
+    });
+  const [sellerInactivityActivity, setSellerInactivityActivity] = useState<
+    SellerInactivityActivityEntry[]
+  >([]);
+  const [collapsedSellerInactivityActivityGroups, setCollapsedSellerInactivityActivityGroups] =
     useState<{
       Today: boolean;
       Earlier: boolean;
@@ -1506,6 +1574,8 @@ type DeliveryAlertFilter =
     window.localStorage.removeItem(SELLER_ACCESS_TOKEN_KEY);
     window.localStorage.removeItem(SELLER_REFRESH_TOKEN_KEY);
     window.localStorage.removeItem(SELLER_NOTIFICATIONS_SEEN_AT_KEY);
+    window.sessionStorage.removeItem(SELLER_PROFILE_COMPLETION_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_PROFILE_COMPLETION_ACTIVITY_COLLAPSED_KEY);
     window.sessionStorage.removeItem(SELLER_BOOKING_CONFLICT_ACTIVITY_KEY);
     window.sessionStorage.removeItem(SELLER_BOOKING_CONFLICT_ACTIVITY_COLLAPSED_KEY);
     window.sessionStorage.removeItem(SELLER_REVIEW_RESPONSE_REMINDER_ACTIVITY_KEY);
@@ -1869,6 +1939,74 @@ type DeliveryAlertFilter =
     }
 
     try {
+      const stored = window.sessionStorage.getItem(SELLER_PROFILE_COMPLETION_ACTIVITY_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as SellerProfileCompletionActivityEntry[];
+      if (Array.isArray(parsed)) {
+        setSellerProfileCompletionActivity(parsed.slice(0, 6));
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_PROFILE_COMPLETION_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedCollapsed = window.sessionStorage.getItem(
+        SELLER_PROFILE_COMPLETION_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedCollapsed) {
+        const parsed = JSON.parse(storedCollapsed) as { Today?: boolean; Earlier?: boolean };
+        setCollapsedSellerProfileCompletionActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_PROFILE_COMPLETION_ACTIVITY_COLLAPSED_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const stored = window.sessionStorage.getItem(SELLER_INACTIVITY_ACTIVITY_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as SellerInactivityActivityEntry[];
+        if (Array.isArray(parsed)) {
+          setSellerInactivityActivity(parsed.slice(0, 6));
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_INACTIVITY_ACTIVITY_KEY);
+    }
+
+    try {
+      const storedCollapsed = window.sessionStorage.getItem(
+        SELLER_INACTIVITY_ACTIVITY_COLLAPSED_KEY,
+      );
+      if (storedCollapsed) {
+        const parsed = JSON.parse(storedCollapsed) as { Today?: boolean; Earlier?: boolean };
+        setCollapsedSellerInactivityActivityGroups({
+          Today: Boolean(parsed.Today),
+          Earlier: Boolean(parsed.Earlier),
+        });
+      }
+    } catch {
+      window.sessionStorage.removeItem(SELLER_INACTIVITY_ACTIVITY_COLLAPSED_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
       const stored = window.sessionStorage.getItem(SELLER_BOOKING_CONFLICT_ACTIVITY_KEY);
       if (!stored) {
         return;
@@ -2140,6 +2278,7 @@ type DeliveryAlertFilter =
       storedDeliveryAlertFilter === "inventory" ||
       storedDeliveryAlertFilter === "trust" ||
       storedDeliveryAlertFilter === "order_exception" ||
+      storedDeliveryAlertFilter === "seller_inactivity" ||
       storedDeliveryAlertFilter === "subscription_downgrade" ||
       storedDeliveryAlertFilter === "other"
     ) {
@@ -2151,6 +2290,7 @@ type DeliveryAlertFilter =
         storedFilter === "inventory" ||
         storedFilter === "trust" ||
         storedFilter === "order_exception" ||
+        storedFilter === "seller_inactivity" ||
         storedFilter === "subscription_downgrade" ||
         storedFilter === "other"
       ) {
@@ -2273,6 +2413,66 @@ type DeliveryAlertFilter =
       // ignore
     }
   }, [collapsedReviewResponseReminderActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_PROFILE_COMPLETION_ACTIVITY_KEY,
+        JSON.stringify(sellerProfileCompletionActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [sellerProfileCompletionActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_PROFILE_COMPLETION_ACTIVITY_COLLAPSED_KEY,
+        JSON.stringify(collapsedSellerProfileCompletionActivityGroups),
+      );
+    } catch {
+      // ignore
+    }
+  }, [collapsedSellerProfileCompletionActivityGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_INACTIVITY_ACTIVITY_KEY,
+        JSON.stringify(sellerInactivityActivity.slice(0, 6)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [sellerInactivityActivity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(
+        SELLER_INACTIVITY_ACTIVITY_COLLAPSED_KEY,
+        JSON.stringify(collapsedSellerInactivityActivityGroups),
+      );
+    } catch {
+      // ignore
+    }
+  }, [collapsedSellerInactivityActivityGroups]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -4199,8 +4399,20 @@ type DeliveryAlertFilter =
             return false;
           }
           if (
+            deliveryAlertFilter === "profile_completion" &&
+            deliveryAlertType !== "seller_profile_completion"
+          ) {
+            return false;
+          }
+          if (
             deliveryAlertFilter === "review_response_reminder" &&
             deliveryAlertType !== "review_response_reminder"
+          ) {
+            return false;
+          }
+          if (
+            deliveryAlertFilter === "seller_inactivity" &&
+            deliveryAlertType !== "seller_inactivity"
           ) {
             return false;
           }
@@ -4229,7 +4441,9 @@ type DeliveryAlertFilter =
             deliveryAlertFilter === "other" &&
             (deliveryAlertType === "inventory_alert" ||
               deliveryAlertType === "seller_trust_intervention" ||
+              deliveryAlertType === "seller_profile_completion" ||
               deliveryAlertType === "review_response_reminder" ||
+              deliveryAlertType === "seller_inactivity" ||
               deliveryAlertType === "booking_conflict" ||
               deliveryAlertType === "order_exception" ||
               deliveryAlertType === "subscription_downgrade" ||
@@ -4265,10 +4479,24 @@ type DeliveryAlertFilter =
       ).length,
     [notificationDeliveries],
   );
+  const profileCompletionAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "seller_profile_completion",
+      ).length,
+    [notificationDeliveries],
+  );
   const reviewResponseReminderDeliveryCount = useMemo(
     () =>
       notificationDeliveries.filter(
         (delivery) => delivery.payload?.alert_type === "review_response_reminder",
+      ).length,
+    [notificationDeliveries],
+  );
+  const sellerInactivityAlertDeliveryCount = useMemo(
+    () =>
+      notificationDeliveries.filter(
+        (delivery) => delivery.payload?.alert_type === "seller_inactivity",
       ).length,
     [notificationDeliveries],
   );
@@ -4292,6 +4520,13 @@ type DeliveryAlertFilter =
       null,
     [notificationDeliveries],
   );
+  const latestSellerInactivityDelivery = useMemo(
+    () =>
+      notificationDeliveries.find(
+        (delivery) => delivery.payload?.alert_type === "seller_inactivity",
+      ) ?? null,
+    [notificationDeliveries],
+  );
   const subscriptionDowngradeAlertDeliveryCount = useMemo(
     () =>
       notificationDeliveries.filter(
@@ -4313,6 +4548,43 @@ type DeliveryAlertFilter =
       ) ?? null,
     [notificationDeliveries],
   );
+  const latestProfileCompletionDelivery = useMemo(
+    () =>
+      notificationDeliveries.find(
+        (delivery) => delivery.payload?.alert_type === "seller_profile_completion",
+      ) ?? null,
+    [notificationDeliveries],
+  );
+  const filteredSellerProfileCompletionActivity = useMemo(
+    () => sellerProfileCompletionActivity,
+    [sellerProfileCompletionActivity],
+  );
+  const groupedSellerProfileCompletionActivity = useMemo(
+    () =>
+      filteredSellerProfileCompletionActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as SellerProfileCompletionActivityEntry[],
+          Earlier: [] as SellerProfileCompletionActivityEntry[],
+        },
+      ),
+    [filteredSellerProfileCompletionActivity],
+  );
+  const latestSellerProfileCompletionActivity = sellerProfileCompletionActivity[0] ?? null;
+  const hasEarlierSellerProfileCompletionActivity =
+    groupedSellerProfileCompletionActivity.Earlier.length > 0;
+  const canCollapseEarlierSellerProfileCompletionActivity =
+    hasEarlierSellerProfileCompletionActivity &&
+    !collapsedSellerProfileCompletionActivityGroups.Earlier;
+  const canExpandAllSellerProfileCompletionActivity =
+    (groupedSellerProfileCompletionActivity.Today.length > 0 &&
+      collapsedSellerProfileCompletionActivityGroups.Today) ||
+    (groupedSellerProfileCompletionActivity.Earlier.length > 0 &&
+      collapsedSellerProfileCompletionActivityGroups.Earlier);
   const otherAlertDeliveryCount = useMemo(
     () =>
       notificationDeliveries.filter((delivery) => {
@@ -4321,7 +4593,9 @@ type DeliveryAlertFilter =
           Boolean(alertType) &&
           alertType !== "inventory_alert" &&
           alertType !== "seller_trust_intervention" &&
+          alertType !== "seller_profile_completion" &&
           alertType !== "review_response_reminder" &&
+          alertType !== "seller_inactivity" &&
           alertType !== "booking_conflict" &&
           alertType !== "order_exception" &&
           alertType !== "subscription_downgrade" &&
@@ -4948,6 +5222,34 @@ type DeliveryAlertFilter =
       collapsedReviewResponseReminderActivityGroups.Today) ||
     (groupedReviewResponseReminderActivity.Earlier.length > 0 &&
       collapsedReviewResponseReminderActivityGroups.Earlier);
+  const filteredSellerInactivityActivity = useMemo(
+    () => sellerInactivityActivity,
+    [sellerInactivityActivity],
+  );
+  const groupedSellerInactivityActivity = useMemo(
+    () =>
+      filteredSellerInactivityActivity.reduce(
+        (acc, entry) => {
+          const group = getWatchlistActivityDayLabel(entry.createdAt);
+          acc[group].push(entry);
+          return acc;
+        },
+        {
+          Today: [] as SellerInactivityActivityEntry[],
+          Earlier: [] as SellerInactivityActivityEntry[],
+        },
+      ),
+    [filteredSellerInactivityActivity],
+  );
+  const latestSellerInactivityActivity = sellerInactivityActivity[0] ?? null;
+  const hasEarlierSellerInactivityActivity = groupedSellerInactivityActivity.Earlier.length > 0;
+  const canCollapseEarlierSellerInactivityActivity =
+    hasEarlierSellerInactivityActivity && !collapsedSellerInactivityActivityGroups.Earlier;
+  const canExpandAllSellerInactivityActivity =
+    (groupedSellerInactivityActivity.Today.length > 0 &&
+      collapsedSellerInactivityActivityGroups.Today) ||
+    (groupedSellerInactivityActivity.Earlier.length > 0 &&
+      collapsedSellerInactivityActivityGroups.Earlier);
   const listingDeliveryPressureById = useMemo(() => {
     if (!workspace) {
       return {};
@@ -6034,6 +6336,10 @@ type DeliveryAlertFilter =
       return `${delivery.transaction_kind} · ${delivery.transaction_id}`;
     }
 
+    if (delivery.payload?.alert_type === "seller_profile_completion") {
+      return `profile · ${workspace.seller.display_name}`;
+    }
+
     if (delivery.transaction_kind === "seller") {
       return `subscription · ${formatSubscriptionPlanLabel(workspace.subscription)}`;
     }
@@ -6064,8 +6370,14 @@ type DeliveryAlertFilter =
     if (alertType === "seller_trust_intervention") {
       return "Trust alert";
     }
+    if (alertType === "seller_profile_completion") {
+      return "Profile completion";
+    }
     if (alertType === "review_response_reminder") {
       return "Review response reminder";
+    }
+    if (alertType === "seller_inactivity") {
+      return "Seller inactivity";
     }
     if (alertType === "booking_conflict") {
       return "Booking conflict";
@@ -6088,6 +6400,161 @@ type DeliveryAlertFilter =
 
   function focusDeliveryTransaction(delivery: NotificationDelivery) {
     setActivityFocus(`${delivery.transaction_kind}:${delivery.transaction_id}`);
+  }
+
+  function openProfileCompletionReview() {
+    if (workspace?.profileCompletion) {
+      const nextEntry: SellerProfileCompletionActivityEntry = {
+        id: `${workspace.seller.id}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        sellerId: workspace.seller.id,
+        sellerSlug: workspace.seller.slug,
+        sellerDisplayName: workspace.seller.display_name,
+        completionPercent: workspace.profileCompletion.completed_checks
+          ? Math.round(
+              (workspace.profileCompletion.completed_checks / workspace.profileCompletion.total_checks) *
+                100,
+            )
+          : 0,
+        missingFields: [...workspace.profileCompletion.missing_fields],
+        summary: workspace.profileCompletion.summary,
+      };
+
+      setSellerProfileCompletionActivity((current) => [
+        nextEntry,
+        ...current.filter((entry) => entry.sellerId !== nextEntry.sellerId),
+      ].slice(0, 6));
+    }
+    setDeliveryAlertFilter("profile_completion");
+    setDeliveryRecencyFilter("all");
+    document.getElementById("seller-profile-completion-card")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  function clearSellerProfileCompletionActivity() {
+    setSellerProfileCompletionActivity([]);
+    setCollapsedSellerProfileCompletionActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(SELLER_PROFILE_COMPLETION_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_PROFILE_COMPLETION_ACTIVITY_COLLAPSED_KEY);
+  }
+
+  function openSellerInactivityAlerts() {
+    setDeliveryAlertFilter("seller_inactivity");
+    setDeliveryRecencyFilter("all");
+    setWorkspacePreset("seller-inactivity");
+    document.getElementById("seller-delivery-jobs")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  function toggleSellerProfileCompletionActivityGroup(group: "Today" | "Earlier") {
+    setCollapsedSellerProfileCompletionActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
+  }
+
+  function replaySellerProfileCompletionActivity(entry: SellerProfileCompletionActivityEntry) {
+    setSellerProfileCompletionActivity((current) => [
+      {
+        ...entry,
+        createdAt: new Date().toISOString(),
+      },
+      ...current.filter((currentEntry) => currentEntry.sellerId !== entry.sellerId),
+    ].slice(0, 6));
+    setDeliveryAlertFilter("profile_completion");
+    setDeliveryRecencyFilter("all");
+    document.getElementById("seller-profile-completion-card")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  function recordSellerInactivityActivity(delivery: NotificationDelivery) {
+    const sellerId = String(delivery.payload?.seller_id ?? delivery.transaction_id ?? "").trim();
+    if (!sellerId) {
+      return;
+    }
+
+    setSellerInactivityActivity((current) => {
+      const nextEntry: SellerInactivityActivityEntry = {
+        id: `${delivery.id}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        deliveryId: delivery.id,
+        sellerId,
+        sellerSlug: String(delivery.payload?.seller_slug ?? "").trim(),
+        sellerDisplayName: String(
+          delivery.payload?.seller_display_name ?? workspace?.seller.display_name ?? "Seller",
+        ).trim(),
+        idleDays: Number(delivery.payload?.idle_days ?? 0),
+        lastActiveKind: String(delivery.payload?.last_active_kind ?? "seller profile update"),
+        lastActiveAt: typeof delivery.payload?.last_active_at === "string" ? delivery.payload.last_active_at : null,
+        latestCreatedAt: delivery.created_at,
+      };
+
+      return [
+        nextEntry,
+        ...current.filter((entry) => entry.id !== nextEntry.id),
+      ].slice(0, 6);
+    });
+  }
+
+  function openSellerInactivityReview(delivery: NotificationDelivery) {
+    recordSellerInactivityActivity(delivery);
+    openSellerInactivityAlerts();
+  }
+
+  function clearSellerInactivityActivity() {
+    setSellerInactivityActivity([]);
+    setCollapsedSellerInactivityActivityGroups({
+      Today: false,
+      Earlier: false,
+    });
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(SELLER_INACTIVITY_ACTIVITY_KEY);
+    window.sessionStorage.removeItem(SELLER_INACTIVITY_ACTIVITY_COLLAPSED_KEY);
+  }
+
+  function replaySellerInactivityActivity(entry: SellerInactivityActivityEntry) {
+    const delivery = notificationDeliveries.find(
+      (candidate) =>
+        candidate.payload?.alert_type === "seller_inactivity" &&
+        String(candidate.payload?.seller_id ?? candidate.transaction_id ?? "") === entry.sellerId &&
+        candidate.id === entry.deliveryId,
+    );
+
+    if (delivery) {
+      recordSellerInactivityActivity(delivery);
+    }
+
+    openSellerInactivityAlerts();
+  }
+
+  function toggleSellerInactivityActivityGroup(group: "Today" | "Earlier") {
+    setCollapsedSellerInactivityActivityGroups((current) => ({
+      ...current,
+      [group]: !current[group],
+    }));
+  }
+
+  function collapseEarlierSellerInactivityActivity() {
+    setCollapsedSellerInactivityActivityGroups((current) => ({
+      ...current,
+      Earlier: true,
+    }));
   }
 
   function focusSellerSubscriptionPlan() {
@@ -6861,6 +7328,21 @@ type DeliveryAlertFilter =
       activityRecovery: "all",
       deliveryStatus: "all",
       deliveryRecency: "7d",
+      listingAdjustment: "all",
+      listingTrend: "all",
+    },
+    "seller-inactivity": {
+      preset: "seller-inactivity",
+      activityType: "all",
+      activityStatus: "all",
+      activityDiscovery: "all",
+      activityRecency: "all",
+      activityContext: "all",
+      activityPressure: "all",
+      activitySort: "default",
+      activityRecovery: "all",
+      deliveryStatus: "all",
+      deliveryRecency: "all",
       listingAdjustment: "all",
       listingTrend: "all",
     },
@@ -7905,6 +8387,237 @@ type DeliveryAlertFilter =
               <MiniStat label="Bookings" value={String(workspace.bookings.length)} />
               <MiniStat label="Reviews" value={String(workspace.reviews.length)} />
             </div>
+            {latestProfileCompletionDelivery ? (
+              <div
+                id="seller-profile-completion-alert"
+                className="rounded-3xl border border-emerald-200 bg-emerald-50/40 px-4 py-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Profile Completion Alert
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      {latestProfileCompletionDelivery.payload?.summary ??
+                        "Finish the remaining seller profile fields."}
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      {latestProfileCompletionDelivery.payload?.missing_fields?.length
+                        ? `${latestProfileCompletionDelivery.payload.missing_fields.length} field${
+                            latestProfileCompletionDelivery.payload.missing_fields.length === 1 ? "" : "s"
+                          } still need attention`
+                        : "Seller profile still needs attention."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                      onClick={openProfileCompletionReview}
+                      type="button"
+                    >
+                      Review profile
+                    </button>
+                    <button
+                      className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                      onClick={() => setDeliveryAlertFilter("profile_completion")}
+                      type="button"
+                    >
+                      Show in queue
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {workspace.profileCompletion ? (
+              <div id="seller-profile-completion-card" className="rounded-3xl border border-border bg-white px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Profile completion
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      {workspace.profileCompletion.is_complete
+                        ? `${workspace.seller.display_name} is fully profiled`
+                        : `${workspace.seller.display_name} still has profile gaps`}
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                      workspace.profileCompletion.is_complete
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-amber-200 bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {workspace.profileCompletion.completed_checks}/{workspace.profileCompletion.total_checks} complete
+                  </span>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {workspace.profileCompletion.missing_fields.length > 0 ? (
+                    workspace.profileCompletion.missing_fields.map((field) => (
+                      <span
+                        key={field}
+                        className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700"
+                      >
+                        {field}: missing
+                      </span>
+                    ))
+                  ) : (
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
+                      Complete profile
+                    </span>
+                  )}
+                </div>
+                <p className="mt-3 text-sm leading-6 text-foreground/66">
+                  {workspace.profileCompletion.summary}
+                </p>
+                {sellerProfileCompletionActivity.length > 0 ? (
+                  <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/60 px-4 py-4 text-sm text-sky-950">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold uppercase tracking-[0.16em]">
+                          Recent profile completion activity
+                        </p>
+                        <p className="mt-1 text-base font-semibold">
+                          {sellerProfileCompletionActivity.length} recent action
+                          {sellerProfileCompletionActivity.length === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {latestSellerProfileCompletionActivity ? (
+                          <button
+                            className="rounded-full border border-sky-300 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-900 transition hover:border-sky-500 hover:text-sky-950"
+                            onClick={() =>
+                              replaySellerProfileCompletionActivity(latestSellerProfileCompletionActivity)
+                            }
+                            type="button"
+                          >
+                            Open latest review
+                          </button>
+                        ) : null}
+                        <button
+                          className="rounded-full border border-sky-300 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-900 transition hover:border-sky-500 hover:text-sky-950"
+                          onClick={clearSellerProfileCompletionActivity}
+                          type="button"
+                        >
+                          Clear history
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                          !collapsedSellerProfileCompletionActivityGroups.Today
+                            ? "border-sky-700 bg-sky-700 text-white"
+                            : "border-sky-200 bg-white text-sky-900"
+                        }`}
+                        onClick={() => toggleSellerProfileCompletionActivityGroup("Today")}
+                        type="button"
+                      >
+                        {collapsedSellerProfileCompletionActivityGroups.Today ? "Expand today" : "Collapse today"}
+                      </button>
+                      <button
+                        className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                          !collapsedSellerProfileCompletionActivityGroups.Earlier
+                            ? "border-sky-700 bg-sky-700 text-white"
+                            : "border-sky-200 bg-white text-sky-900"
+                        }`}
+                        onClick={() => toggleSellerProfileCompletionActivityGroup("Earlier")}
+                        type="button"
+                      >
+                        {collapsedSellerProfileCompletionActivityGroups.Earlier
+                          ? "Expand earlier"
+                          : "Collapse earlier"}
+                      </button>
+                    </div>
+                    {canCollapseEarlierSellerProfileCompletionActivity ||
+                    canExpandAllSellerProfileCompletionActivity ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {canCollapseEarlierSellerProfileCompletionActivity ? (
+                          <button
+                            className="rounded-full border border-sky-200 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-900 transition hover:border-sky-500 hover:text-sky-950"
+                            onClick={() => toggleSellerProfileCompletionActivityGroup("Earlier")}
+                            type="button"
+                          >
+                            Collapse earlier
+                          </button>
+                        ) : null}
+                        {canExpandAllSellerProfileCompletionActivity ? (
+                          <button
+                            className="rounded-full border border-sky-200 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-900 transition hover:border-sky-500 hover:text-sky-950"
+                            onClick={() =>
+                              setCollapsedSellerProfileCompletionActivityGroups({
+                                Today: false,
+                                Earlier: false,
+                              })
+                            }
+                            type="button"
+                          >
+                            Expand all
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="mt-4 space-y-3">
+                      {(["Today", "Earlier"] as const).map((group) =>
+                        groupedSellerProfileCompletionActivity[group].length > 0 ? (
+                          <div key={group}>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <p className="text-[11px] uppercase tracking-[0.18em] text-sky-900/56">
+                                {group}
+                              </p>
+                              <button
+                                className="rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-900 transition hover:border-sky-500 hover:text-sky-950"
+                                onClick={() => toggleSellerProfileCompletionActivityGroup(group)}
+                                type="button"
+                              >
+                                {collapsedSellerProfileCompletionActivityGroups[group]
+                                  ? "Expand"
+                                  : "Collapse"}
+                              </button>
+                            </div>
+                            {collapsedSellerProfileCompletionActivityGroups[group] ? null : (
+                              <div className="mt-3 space-y-3">
+                                {groupedSellerProfileCompletionActivity[group].map((entry) => (
+                                  <div
+                                    key={entry.id}
+                                    className="rounded-2xl border border-sky-200 bg-white px-4 py-3"
+                                  >
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <p className="text-sm font-semibold text-foreground">
+                                          {entry.sellerDisplayName}
+                                        </p>
+                                        <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                          {entry.completionPercent}% complete
+                                          {entry.missingFields.length > 0
+                                            ? ` · ${entry.missingFields.join(" · ")}`
+                                            : ""}
+                                        </p>
+                                        <p className="mt-1 text-sm text-foreground/68">{entry.summary}</p>
+                                        <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/48">
+                                          {new Date(entry.createdAt).toLocaleString()}
+                                        </p>
+                                      </div>
+                                      <button
+                                        className="rounded-full border border-sky-300 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-900 transition hover:border-sky-500 hover:text-sky-950"
+                                        onClick={() => replaySellerProfileCompletionActivity(entry)}
+                                        type="button"
+                                      >
+                                        Re-open
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ) : null,
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div id="seller-subscription-plan" className="rounded-3xl border border-border bg-white px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -8283,10 +8996,17 @@ type DeliveryAlertFilter =
                   accent="olive"
                   onClick={openPressureEasingSummaryLane}
                 />
+                <MiniStat
+                  label="Seller Inactivity"
+                  value={String(sellerInactivityAlertDeliveryCount)}
+                  accent="sky"
+                  onClick={openSellerInactivityAlerts}
+                />
               </div>
               <div className="mt-3 flex flex-wrap gap-3 text-xs text-foreground/56">
                 <p>Delivery Drag: listings where failed sends are outpacing recent recovery.</p>
                 <p>Recovery Lane: listings where recent successful sends are ahead of failures.</p>
+                <p>Seller Inactivity: sellers who have gone quiet past the alert threshold.</p>
               </div>
               <div className="mt-3 flex flex-col gap-2">
                 {topSupportWatchListing ? (
@@ -8891,6 +9611,7 @@ type DeliveryAlertFilter =
                   ["delivery-drag", `Delivery Drag · ${deliveryDragListingsCount}`],
                   ["delivery-pressure", `Delivery Pressure · ${deliveryPressureListingsCount}`],
                   ["trust-watch", `Trust Watch · ${trustWatchListingsCount}`],
+                  ["seller-inactivity", `Seller Inactivity · ${sellerInactivityAlertDeliveryCount}`],
                   ["recovery-lane", `Recovery Lane · ${recoveryLaneListingsCount}`],
                   ["recovered-recently", `Recovered Recently · ${pressureEasingListingsCount}`],
                   ["focused-work", `Focused Work · ${focusedItemCount}`],
@@ -8907,6 +9628,7 @@ type DeliveryAlertFilter =
                         | "delivery-drag"
                         | "delivery-pressure"
                         | "trust-watch"
+                        | "seller-inactivity"
                         | "recovery-lane"
                         | "recovered-recently"
                         | "focused-work",
@@ -8921,6 +9643,7 @@ type DeliveryAlertFilter =
                           | "delivery-drag"
                           | "delivery-pressure"
                           | "trust-watch"
+                          | "seller-inactivity"
                           | "recovery-lane"
                           | "recovered-recently"
                           | "focused-work",
@@ -9070,6 +9793,209 @@ type DeliveryAlertFilter =
                     ))}
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {latestSellerInactivityDelivery ? (
+              <div
+                id="seller-inactivity-alerts"
+                className={`rounded-3xl border px-4 py-4 ${getSellerInactivityToneClass(
+                  String(latestSellerInactivityDelivery.payload?.severity ?? "monitor"),
+                )}`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                      Seller Inactivity
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      {String(latestSellerInactivityDelivery.payload?.seller_display_name ?? workspace?.seller.display_name ?? "Seller")} ·{" "}
+                      {String(latestSellerInactivityDelivery.payload?.idle_days ?? 0)} days idle
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      {String(
+                        latestSellerInactivityDelivery.payload?.alert_reason ??
+                          "Review seller activity before the lane gets colder.",
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                      {sellerInactivityAlertDeliveryCount} alert
+                      {sellerInactivityAlertDeliveryCount === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                      onClick={() => openSellerInactivityReview(latestSellerInactivityDelivery)}
+                      type="button"
+                    >
+                      Open latest alert
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                    Last active ·{" "}
+                    {String(
+                      latestSellerInactivityDelivery.payload?.last_active_kind ?? "seller profile update",
+                    ).replaceAll("_", " ")}
+                  </span>
+                  <span className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
+                    {latestSellerInactivityDelivery.payload?.last_active_at
+                      ? new Date(String(latestSellerInactivityDelivery.payload.last_active_at)).toLocaleDateString()
+                      : "No recent timestamp"}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {sellerInactivityActivity.length > 0 ? (
+              <div className="rounded-3xl border border-sky-200 bg-sky-50/28 px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/46">
+                      Seller Inactivity Activity
+                    </p>
+                    <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                      Recent inactivity reviews · {sellerInactivityActivity.length} action
+                      {sellerInactivityActivity.length === 1 ? "" : "s"}
+                    </p>
+                    <p className="mt-1 text-sm text-foreground/64">
+                      Re-open the seller inactivity alerts you already inspected in this session.
+                    </p>
+                    {collapsedSellerInactivityActivityGroups.Earlier ? (
+                      <p className="mt-2 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                        Earlier collapsed · {groupedSellerInactivityActivity.Earlier.length} hidden action
+                        {groupedSellerInactivityActivity.Earlier.length === 1 ? "" : "s"}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
+                    {filteredSellerInactivityActivity.length} recent action
+                    {filteredSellerInactivityActivity.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                    onClick={clearSellerInactivityActivity}
+                    type="button"
+                  >
+                    Clear history
+                  </button>
+                  {latestSellerInactivityActivity ? (
+                    <button
+                      className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
+                      onClick={() => replaySellerInactivityActivity(latestSellerInactivityActivity)}
+                      type="button"
+                    >
+                      Open latest alert
+                    </button>
+                  ) : null}
+                  <button
+                    className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent disabled:opacity-45"
+                    disabled={
+                      !canCollapseEarlierSellerInactivityActivity &&
+                      !canExpandAllSellerInactivityActivity
+                    }
+                    onClick={() => {
+                      if (canExpandAllSellerInactivityActivity) {
+                        setCollapsedSellerInactivityActivityGroups({
+                          Today: false,
+                          Earlier: false,
+                        });
+                        return;
+                      }
+
+                      collapseEarlierSellerInactivityActivity();
+                    }}
+                    type="button"
+                  >
+                    {canExpandAllSellerInactivityActivity ? "Expand all" : "Collapse earlier"}
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-col gap-3">
+                  {groupedSellerInactivityActivity.Today.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Today</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleSellerInactivityActivityGroup("Today")}
+                          type="button"
+                        >
+                          {collapsedSellerInactivityActivityGroups.Today ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedSellerInactivityActivityGroups.Today ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedSellerInactivityActivity.Today.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    {entry.sellerDisplayName}
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    {entry.idleDays} days idle · {entry.lastActiveKind.replaceAll("_", " ")} ·{" "}
+                                    {entry.lastActiveAt ? new Date(entry.lastActiveAt).toLocaleString() : "No timestamp"}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replaySellerInactivityActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                  {groupedSellerInactivityActivity.Earlier.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/46">Earlier</p>
+                        <button
+                          className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                          onClick={() => toggleSellerInactivityActivityGroup("Earlier")}
+                          type="button"
+                        >
+                          {collapsedSellerInactivityActivityGroups.Earlier ? "Expand" : "Collapse"}
+                        </button>
+                      </div>
+                      {collapsedSellerInactivityActivityGroups.Earlier ? null : (
+                        <div className="mt-3 space-y-3">
+                          {groupedSellerInactivityActivity.Earlier.map((entry) => (
+                            <div key={entry.id} className="rounded-[1.1rem] border border-border bg-white px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-foreground">
+                                    {entry.sellerDisplayName}
+                                  </p>
+                                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-foreground/52">
+                                    {entry.idleDays} days idle · {entry.lastActiveKind.replaceAll("_", " ")} ·{" "}
+                                    {entry.lastActiveAt ? new Date(entry.lastActiveAt).toLocaleString() : "No timestamp"}
+                                  </p>
+                                </div>
+                                <button
+                                  className="rounded-full border border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-accent hover:text-accent"
+                                  onClick={() => replaySellerInactivityActivity(entry)}
+                                  type="button"
+                                >
+                                  Re-open
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : null}
 
@@ -10157,6 +11083,7 @@ type DeliveryAlertFilter =
             ) : null}
 
             <div
+              id="seller-delivery-jobs"
               className={`rounded-3xl border bg-white px-4 py-4 ${
                 queuedDeliveryCount > 0 || failedDeliveryCount > 0
                   ? "border-amber-200 bg-amber-50/30"
@@ -10173,7 +11100,9 @@ type DeliveryAlertFilter =
                   </p>
                   <p className="mt-1 text-sm text-foreground/64">
                     Alerts · {inventoryAlertDeliveryCount} inventory · {trustAlertDeliveryCount} trust ·{" "}
+                    {profileCompletionAlertDeliveryCount} profile completion ·{" "}
                     {reviewResponseReminderDeliveryCount} review response ·{" "}
+                    {sellerInactivityAlertDeliveryCount} seller inactivity ·{" "}
                     {bookingConflictAlertDeliveryCount} booking · {orderExceptionAlertDeliveryCount} order exception ·{" "}
                     {subscriptionDowngradeAlertDeliveryCount} subscription downgrade ·{" "}
                     {deliveryFailureAlertDeliveryCount} delivery failure · {otherAlertDeliveryCount} other
@@ -10240,9 +11169,14 @@ type DeliveryAlertFilter =
                   ["inventory", `Inventory · ${inventoryAlertDeliveryCount}`],
                   ["trust", `Trust · ${trustAlertDeliveryCount}`],
                   [
+                    "profile_completion",
+                    `Profile completion · ${profileCompletionAlertDeliveryCount}`,
+                  ],
+                  [
                     "review_response_reminder",
                     `Review response · ${reviewResponseReminderDeliveryCount}`,
                   ],
+                  ["seller_inactivity", `Seller inactivity · ${sellerInactivityAlertDeliveryCount}`],
                   ["booking", `Booking · ${bookingConflictAlertDeliveryCount}`],
                   ["order_exception", `Order Exception · ${orderExceptionAlertDeliveryCount}`],
                   [
@@ -10295,8 +11229,12 @@ type DeliveryAlertFilter =
                                 ? "border-amber-200 bg-amber-50 text-amber-800"
                                 : delivery.payload?.alert_type === "seller_trust_intervention"
                                   ? "border-rose-200 bg-rose-50 text-rose-700"
+                                  : delivery.payload?.alert_type === "seller_profile_completion"
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                                 : delivery.payload?.alert_type === "review_response_reminder"
                                   ? "border-amber-200 bg-amber-50 text-amber-800"
+                                  : delivery.payload?.alert_type === "seller_inactivity"
+                                    ? "border-sky-200 bg-sky-50 text-sky-700"
                                 : delivery.payload?.alert_type === "order_exception"
                                   ? "border-orange-200 bg-orange-50 text-orange-800"
                                   : delivery.payload?.alert_type === "subscription_downgrade"

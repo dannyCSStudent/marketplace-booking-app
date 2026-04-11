@@ -383,6 +383,55 @@
         }
       }
     },
+    "/sellers/me/completion": {
+      "get": {
+        "tags": [
+          "sellers"
+        ],
+        "summary": "Read My Seller Profile Completion",
+        "operationId": "read_my_seller_profile_completion_sellers_me_completion_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SellerProfileCompletionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sellers/me/subscription": {
       "get": {
         "tags": [
@@ -4046,6 +4095,191 @@
         }
       }
     },
+    "/notifications/admin/seller-profile-completion/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Seller Profile Completion Alert",
+        "operationId": "acknowledge_seller_profile_completion_alert_notifications_admin_seller_profile_completion__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Seller Profile Completion Alert Notifications Admin Seller Profile Completion  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Seller Profile Completion Acknowledgement",
+        "operationId": "clear_seller_profile_completion_acknowledgement_notifications_admin_seller_profile_completion__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Seller Profile Completion Acknowledgement Notifications Admin Seller Profile Completion  Seller Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/seller-profile-completion/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Seller Profile Completion Events",
+        "operationId": "read_admin_seller_profile_completion_events_notifications_admin_seller_profile_completion_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerProfileCompletionEventRead"
+                  },
+                  "title": "Response Read Admin Seller Profile Completion Events Notifications Admin Seller Profile Completion Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications/admin/trust-alerts/{seller_id}/acknowledge": {
       "post": {
         "tags": [
@@ -4557,6 +4791,270 @@
                     "$ref": "#/components/schemas/OrderExceptionEventRead"
                   },
                   "title": "Response Read Admin Order Exception Events Notifications Admin Order Exceptions Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/seller-inactivity/summaries": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Seller Inactivity Summaries",
+        "operationId": "read_admin_seller_inactivity_summaries_notifications_admin_seller_inactivity_summaries_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 8,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerInactivitySummaryRead"
+                  },
+                  "title": "Response Read Admin Seller Inactivity Summaries Notifications Admin Seller Inactivity Summaries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/seller-inactivity/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Seller Inactivity Events",
+        "operationId": "read_admin_seller_inactivity_events_notifications_admin_seller_inactivity_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerInactivityEventRead"
+                  },
+                  "title": "Response Read Admin Seller Inactivity Events Notifications Admin Seller Inactivity Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/seller-inactivity/{seller_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Seller Inactivity",
+        "operationId": "acknowledge_seller_inactivity_notifications_admin_seller_inactivity__seller_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Seller Inactivity Notifications Admin Seller Inactivity  Seller Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Seller Inactivity Acknowledgement Route",
+        "operationId": "clear_seller_inactivity_acknowledgement_route_notifications_admin_seller_inactivity__seller_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "seller_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seller Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Seller Inactivity Acknowledgement Route Notifications Admin Seller Inactivity  Seller Id  Acknowledge Delete"
                 }
               }
             }
@@ -5940,6 +6438,87 @@
         }
       }
     },
+    "/admin/seller-profile-completion": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Seller Profile Completions",
+        "operationId": "read_seller_profile_completions_admin_seller_profile_completion_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 24,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SellerProfileCompletionRead"
+                  },
+                  "title": "Response Read Seller Profile Completions Admin Seller Profile Completion Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/listings/pricing-scope-summary": {
       "get": {
         "tags": [
@@ -6704,6 +7283,361 @@
                     "$ref": "#/components/schemas/SellerSubscriptionEventRead"
                   },
                   "title": "Response Read Seller Subscription Events Admin Seller Subscription Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/monetization/watchlist/alerts": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Monetization Watchlist Alerts",
+        "operationId": "read_monetization_watchlist_alerts_admin_monetization_watchlist_alerts_get",
+        "parameters": [
+          {
+            "name": "since_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since At"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonetizationWatchlistAlertRead"
+                  },
+                  "title": "Response Read Monetization Watchlist Alerts Admin Monetization Watchlist Alerts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/monetization/watchlist/summaries": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Monetization Watchlist Summaries",
+        "operationId": "read_monetization_watchlist_summaries_admin_monetization_watchlist_summaries_get",
+        "parameters": [
+          {
+            "name": "since_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since At"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 12,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonetizationWatchlistSummaryRead"
+                  },
+                  "title": "Response Read Monetization Watchlist Summaries Admin Monetization Watchlist Summaries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/monetization/watchlist/events": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read Monetization Watchlist Events",
+        "operationId": "read_monetization_watchlist_events_admin_monetization_watchlist_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonetizationWatchlistEventRead"
+                  },
+                  "title": "Response Read Monetization Watchlist Events Admin Monetization Watchlist Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/monetization/watchlist/{alert_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Acknowledge Monetization Watchlist Alert Route",
+        "operationId": "acknowledge_monetization_watchlist_alert_route_admin_monetization_watchlist__alert_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alert Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonetizationWatchlistEventRead"
+                  },
+                  "title": "Response Acknowledge Monetization Watchlist Alert Route Admin Monetization Watchlist  Alert Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Clear Monetization Watchlist Alert Acknowledgement Route",
+        "operationId": "clear_monetization_watchlist_alert_acknowledgement_route_admin_monetization_watchlist__alert_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alert Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonetizationWatchlistEventRead"
+                  },
+                  "title": "Response Clear Monetization Watchlist Alert Acknowledgement Route Admin Monetization Watchlist  Alert Id  Acknowledge Delete"
                 }
               }
             }
@@ -9467,6 +10401,234 @@
         "type": "object",
         "title": "ListingUpdate"
       },
+      "MonetizationWatchlistAlertRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "signature": {
+            "type": "string",
+            "title": "Signature"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "monitor"
+            ],
+            "title": "Severity",
+            "default": "monitor"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "amber",
+              "rose",
+              "sky"
+            ],
+            "title": "Tone",
+            "default": "sky"
+          },
+          "action_label": {
+            "type": "string",
+            "title": "Action Label"
+          },
+          "replay_key": {
+            "type": "string",
+            "enum": [
+              "subscription_destructive",
+              "subscription_downgrade",
+              "promotion_removals",
+              "promoted_listings"
+            ],
+            "title": "Replay Key"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "signature",
+          "title",
+          "detail",
+          "action_label",
+          "replay_key"
+        ],
+        "title": "MonetizationWatchlistAlertRead"
+      },
+      "MonetizationWatchlistEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "alert_id": {
+            "type": "string",
+            "title": "Alert Id"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_title": {
+            "type": "string",
+            "title": "Alert Title"
+          },
+          "alert_severity": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "monitor"
+            ],
+            "title": "Alert Severity",
+            "default": "monitor"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "alert_id",
+          "alert_signature",
+          "actor_user_id",
+          "action",
+          "alert_title",
+          "created_at"
+        ],
+        "title": "MonetizationWatchlistEventRead"
+      },
+      "MonetizationWatchlistSummaryRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "signature": {
+            "type": "string",
+            "title": "Signature"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "monitor"
+            ],
+            "title": "Severity",
+            "default": "monitor"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "amber",
+              "rose",
+              "sky"
+            ],
+            "title": "Tone",
+            "default": "sky"
+          },
+          "action_label": {
+            "type": "string",
+            "title": "Action Label"
+          },
+          "replay_key": {
+            "type": "string",
+            "enum": [
+              "subscription_destructive",
+              "subscription_downgrade",
+              "promotion_removals",
+              "promoted_listings"
+            ],
+            "title": "Replay Key"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged",
+            "default": false
+          },
+          "latest_action": {
+            "type": "string",
+            "title": "Latest Action",
+            "default": "active"
+          },
+          "latest_action_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Action At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "signature",
+          "title",
+          "detail",
+          "action_label",
+          "replay_key"
+        ],
+        "title": "MonetizationWatchlistSummaryRead"
+      },
       "NotificationDeliveryBulkActionFailure": {
         "properties": {
           "id": {
@@ -12011,6 +13173,174 @@
         ],
         "title": "SellerCreate"
       },
+      "SellerInactivityEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "last_active_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Active At"
+          },
+          "last_active_kind": {
+            "type": "string",
+            "title": "Last Active Kind"
+          },
+          "idle_days": {
+            "type": "integer",
+            "title": "Idle Days",
+            "default": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "last_active_kind",
+          "created_at"
+        ],
+        "title": "SellerInactivityEventRead"
+      },
+      "SellerInactivitySummaryRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity",
+            "default": "monitor"
+          },
+          "tone": {
+            "type": "string",
+            "title": "Tone",
+            "default": "sky"
+          },
+          "action_label": {
+            "type": "string",
+            "title": "Action Label",
+            "default": "Review seller activity"
+          },
+          "alert_reason": {
+            "type": "string",
+            "title": "Alert Reason"
+          },
+          "last_active_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Active At"
+          },
+          "last_active_kind": {
+            "type": "string",
+            "title": "Last Active Kind",
+            "default": "seller profile update"
+          },
+          "idle_days": {
+            "type": "integer",
+            "title": "Idle Days",
+            "default": 0
+          },
+          "alert_delivery_count": {
+            "type": "integer",
+            "title": "Alert Delivery Count",
+            "default": 0
+          },
+          "latest_alert_delivery_status": {
+            "type": "string",
+            "title": "Latest Alert Delivery Status",
+            "default": "unknown"
+          },
+          "latest_alert_delivery_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Alert Delivery Created At"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "alert_reason",
+          "latest_alert_delivery_created_at"
+        ],
+        "title": "SellerInactivitySummaryRead"
+      },
       "SellerListingSummaryRead": {
         "properties": {
           "seller_id": {
@@ -12139,6 +13469,144 @@
           "slug"
         ],
         "title": "SellerLookupRead"
+      },
+      "SellerProfileCompletionEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "completion_percent": {
+            "type": "integer",
+            "title": "Completion Percent"
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Fields"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "seller_id",
+          "seller_slug",
+          "seller_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "completion_percent",
+          "missing_fields",
+          "summary",
+          "created_at"
+        ],
+        "title": "SellerProfileCompletionEventRead"
+      },
+      "SellerProfileCompletionRead": {
+        "properties": {
+          "seller_id": {
+            "type": "string",
+            "title": "Seller Id"
+          },
+          "seller_slug": {
+            "type": "string",
+            "title": "Seller Slug"
+          },
+          "seller_display_name": {
+            "type": "string",
+            "title": "Seller Display Name"
+          },
+          "total_checks": {
+            "type": "integer",
+            "title": "Total Checks",
+            "default": 0
+          },
+          "completed_checks": {
+            "type": "integer",
+            "title": "Completed Checks",
+            "default": 0
+          },
+          "missing_checks": {
+            "type": "integer",
+            "title": "Missing Checks",
+            "default": 0
+          },
+          "completion_percent": {
+            "type": "integer",
+            "title": "Completion Percent",
+            "default": 0
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Fields"
+          },
+          "is_complete": {
+            "type": "boolean",
+            "title": "Is Complete",
+            "default": false
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "seller_id",
+          "seller_slug",
+          "seller_display_name"
+        ],
+        "title": "SellerProfileCompletionRead"
       },
       "SellerRead": {
         "properties": {

@@ -9,14 +9,18 @@ from app.services.notification_deliveries import (
     acknowledge_admin_booking_conflict,
     acknowledge_admin_delivery_failure,
     acknowledge_admin_inventory_alert,
+    acknowledge_admin_seller_profile_completion,
     acknowledge_admin_trust_alert,
     acknowledge_admin_order_exception,
+    acknowledge_admin_order_fraud_watch,
     acknowledge_admin_subscription_downgrade,
     clear_admin_booking_conflict_acknowledgement,
     clear_admin_delivery_failure_acknowledgement,
     clear_admin_inventory_alert_acknowledgement,
+    clear_admin_seller_profile_completion_acknowledgement,
     clear_admin_trust_alert_acknowledgement,
     clear_admin_order_exception_acknowledgement,
+    clear_admin_order_fraud_watch_acknowledgement,
     clear_admin_subscription_downgrade_acknowledgement,
     get_admin_notification_delivery_summary,
     get_admin_notification_worker_health,
@@ -28,9 +32,14 @@ from app.services.notification_deliveries import (
     list_admin_booking_conflict_seller_summaries,
     list_admin_order_exception_events,
     list_admin_order_exception_seller_summaries,
+    list_admin_order_fraud_watch_buyer_summaries,
+    list_admin_order_fraud_watch_events,
+    list_admin_seller_profile_completion_events,
     list_admin_subscription_downgrade_events,
     list_admin_subscription_downgrade_seller_summaries,
     list_admin_trust_alert_seller_summaries,
+    queue_seller_profile_completion_notifications,
+    queue_order_fraud_watch_notifications,
     retry_admin_notification_deliveries,
     retry_my_notification_delivery,
 )
@@ -636,6 +645,328 @@ class NotificationDeliveryRetryTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].action, "acknowledged")
 
+    def test_order_fraud_watch_notifications_queue_after_buyer_cancel_burst(self):
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[
+                [
+                    {
+                        "event_id": "order-exception:order-1:confirmed:canceled:buyer",
+                        "payload": {
+                            "alert_type": "order_exception",
+                            "buyer_id": "buyer-1",
+                            "actor_role": "buyer",
+                            "order_id": "order-1",
+                            "current_status": "canceled",
+                            "alert_signature": "order-exception:order-1:confirmed:canceled:buyer",
+                        },
+                        "created_at": "2026-04-08T12:00:00+00:00",
+                    },
+                    {
+                        "event_id": "order-exception:order-2:confirmed:canceled:buyer",
+                        "payload": {
+                            "alert_type": "order_exception",
+                            "buyer_id": "buyer-1",
+                            "actor_role": "buyer",
+                            "order_id": "order-2",
+                            "current_status": "canceled",
+                            "alert_signature": "order-exception:order-2:confirmed:canceled:buyer",
+                        },
+                        "created_at": "2026-04-07T12:00:00+00:00",
+                    },
+                    {
+                        "event_id": "order-exception:order-3:preparing:canceled:buyer",
+                        "payload": {
+                            "alert_type": "order_exception",
+                            "buyer_id": "buyer-1",
+                            "actor_role": "buyer",
+                            "order_id": "order-3",
+                            "current_status": "canceled",
+                            "alert_signature": "order-exception:order-3:preparing:canceled:buyer",
+                        },
+                        "created_at": "2026-04-06T12:00:00+00:00",
+                    },
+                ],
+                [],
+                {
+                    "id": "buyer-1",
+                    "display_name": "Buyer One",
+                },
+                [
+                    {
+                        "id": "admin-support-id",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": False,
+                    }
+                ],
+            ],
+            update_result=[],
+        )
+
+        with (
+            patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase),
+            patch(
+                "app.services.notification_delivery_worker.process_notification_delivery_rows",
+                return_value={"processed": 2},
+            ),
+            patch("app.services.notification_deliveries.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value = type(
+                "Settings",
+                (),
+                {
+                    "admin_user_ids": ["admin-support-id"],
+                    "admin_user_roles": {"admin-support-id": "support"},
+                },
+            )()
+            queue_order_fraud_watch_notifications(
+                order={
+                    "id": "order-4",
+                    "buyer_id": "buyer-1",
+                    "seller_id": "seller-1",
+                    "status": "canceled",
+                },
+                previous_status="confirmed",
+                actor_role="buyer",
+            )
+
+        self.assertEqual(fake_supabase.insert_calls, 1)
+        self.assertEqual(fake_supabase.insert_tables[0], "notification_deliveries")
+        self.assertEqual(fake_supabase.insert_payloads[0][0]["payload"]["alert_type"], "order_fraud_watch")
+        self.assertEqual(fake_supabase.insert_payloads[0][0]["payload"]["buyer_display_name"], "Buyer One")
+
+    def test_admin_can_acknowledge_order_fraud_watch_alerts(self):
+        delivery = {
+            "id": "delivery-1",
+            "recipient_user_id": "admin-support-id",
+            "transaction_kind": "order",
+            "transaction_id": "order-4",
+            "event_id": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+            "channel": "email",
+            "delivery_status": "sent",
+            "payload": {
+                "alert_type": "order_fraud_watch",
+                "buyer_id": "buyer-1",
+                "buyer_display_name": "Buyer One",
+                "latest_order_id": "order-3",
+                "latest_order_status": "canceled",
+                "order_exception_count": 3,
+                "recent_order_exception_count": 3,
+                "risk_level": "watch",
+                "alert_reason": "3 buyer-triggered order cancellation alerts in 30 days.",
+                "alert_signature": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+            },
+            "failure_reason": None,
+            "attempts": 1,
+            "sent_at": "2026-04-08T11:00:00+00:00",
+            "created_at": "2026-04-08T11:00:00+00:00",
+        }
+        updated_delivery = {
+            **delivery,
+            "payload": {
+                **delivery["payload"],
+                "acknowledged_at": "2026-04-08T12:00:00+00:00",
+                "acknowledged_by_user_id": "admin-user-id",
+                "acknowledged_signature": delivery["payload"]["alert_signature"],
+            },
+        }
+
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[[delivery]],
+            update_result=[updated_delivery],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = acknowledge_admin_order_fraud_watch("buyer-1", actor_user_id="admin-user-id")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].payload["acknowledged_by_user_id"], "admin-user-id")
+        self.assertEqual(fake_supabase.insert_calls, 1)
+        self.assertEqual(fake_supabase.insert_payloads[0][0]["action"], "acknowledged")
+
+    def test_admin_can_clear_order_fraud_watch_acknowledgement(self):
+        delivery = {
+            "id": "delivery-1",
+            "recipient_user_id": "admin-support-id",
+            "transaction_kind": "order",
+            "transaction_id": "order-4",
+            "event_id": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+            "channel": "email",
+            "delivery_status": "sent",
+            "payload": {
+                "alert_type": "order_fraud_watch",
+                "buyer_id": "buyer-1",
+                "buyer_display_name": "Buyer One",
+                "latest_order_id": "order-3",
+                "latest_order_status": "canceled",
+                "order_exception_count": 3,
+                "recent_order_exception_count": 3,
+                "risk_level": "watch",
+                "alert_reason": "3 buyer-triggered order cancellation alerts in 30 days.",
+                "alert_signature": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+                "acknowledged_at": "2026-04-08T12:00:00+00:00",
+                "acknowledged_by_user_id": "admin-user-id",
+                "acknowledged_signature": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+            },
+            "failure_reason": None,
+            "attempts": 1,
+            "sent_at": "2026-04-08T11:00:00+00:00",
+            "created_at": "2026-04-08T11:00:00+00:00",
+        }
+        updated_delivery = {
+            **delivery,
+            "payload": {
+                "alert_type": "order_fraud_watch",
+                "buyer_id": "buyer-1",
+                "buyer_display_name": "Buyer One",
+                "latest_order_id": "order-3",
+                "latest_order_status": "canceled",
+                "order_exception_count": 3,
+                "recent_order_exception_count": 3,
+                "risk_level": "watch",
+                "alert_reason": "3 buyer-triggered order cancellation alerts in 30 days.",
+                "alert_signature": delivery["payload"]["alert_signature"],
+            },
+        }
+
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[[delivery]],
+            update_result=[updated_delivery],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = clear_admin_order_fraud_watch_acknowledgement("buyer-1", actor_user_id="admin-user-id")
+
+        self.assertEqual(len(result), 1)
+        self.assertNotIn("acknowledged_at", result[0].payload)
+        self.assertEqual(fake_supabase.insert_calls, 1)
+        self.assertEqual(fake_supabase.insert_payloads[0][0]["action"], "cleared")
+
+    def test_admin_can_group_order_fraud_watch_summaries(self):
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[
+                [
+                    {
+                        "id": "delivery-1",
+                        "recipient_user_id": "admin-support-id",
+                        "transaction_kind": "order",
+                        "transaction_id": "order-4",
+                        "event_id": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+                        "channel": "email",
+                        "delivery_status": "sent",
+                        "payload": {
+                            "alert_type": "order_fraud_watch",
+                            "buyer_id": "buyer-1",
+                            "buyer_display_name": "Buyer One",
+                            "latest_order_id": "order-3",
+                            "latest_order_status": "canceled",
+                            "order_exception_count": 3,
+                            "recent_order_exception_count": 2,
+                            "risk_level": "watch",
+                            "alert_reason": "3 buyer-triggered order cancellation alerts in 30 days.",
+                            "alert_signature": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+                        },
+                        "failure_reason": None,
+                        "attempts": 1,
+                        "sent_at": "2026-04-08T11:00:00+00:00",
+                        "created_at": "2026-04-08T11:00:00+00:00",
+                    },
+                    {
+                        "id": "delivery-2",
+                        "recipient_user_id": "admin-owner-id",
+                        "transaction_kind": "order",
+                        "transaction_id": "order-4",
+                        "event_id": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+                        "channel": "push",
+                        "delivery_status": "sent",
+                        "payload": {
+                            "alert_type": "order_fraud_watch",
+                            "buyer_id": "buyer-1",
+                            "buyer_display_name": "Buyer One",
+                            "latest_order_id": "order-3",
+                            "latest_order_status": "canceled",
+                            "order_exception_count": 3,
+                            "recent_order_exception_count": 2,
+                            "risk_level": "watch",
+                            "alert_reason": "3 buyer-triggered order cancellation alerts in 30 days.",
+                            "alert_signature": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+                        },
+                        "failure_reason": None,
+                        "attempts": 1,
+                        "sent_at": "2026-04-08T10:50:00+00:00",
+                        "created_at": "2026-04-08T10:50:00+00:00",
+                    },
+                    {
+                        "id": "delivery-3",
+                        "recipient_user_id": "admin-support-id",
+                        "transaction_kind": "order",
+                        "transaction_id": "order-5",
+                        "event_id": "order-fraud-watch:buyer-2:4:order-exception:order-5:confirmed:canceled:buyer",
+                        "channel": "email",
+                        "delivery_status": "sent",
+                        "payload": {
+                            "alert_type": "order_fraud_watch",
+                            "buyer_id": "buyer-2",
+                            "buyer_display_name": "Buyer Two",
+                            "latest_order_id": "order-5",
+                            "latest_order_status": "canceled",
+                            "order_exception_count": 4,
+                            "recent_order_exception_count": 4,
+                            "risk_level": "elevated",
+                            "alert_reason": "4 buyer-triggered order cancellation alerts in 30 days.",
+                            "alert_signature": "order-fraud-watch:buyer-2:4:order-exception:order-5:confirmed:canceled:buyer",
+                            "acknowledged_at": "2026-04-08T09:30:00+00:00",
+                            "acknowledged_signature": "order-fraud-watch:buyer-2:4:order-exception:order-5:confirmed:canceled:buyer",
+                        },
+                        "failure_reason": None,
+                        "attempts": 1,
+                        "sent_at": "2026-04-08T09:30:00+00:00",
+                        "created_at": "2026-04-08T09:30:00+00:00",
+                    },
+                ],
+            ],
+            update_result=[],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = list_admin_order_fraud_watch_buyer_summaries(limit=8, state="all")
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].buyer_id, "buyer-1")
+        self.assertEqual(result[0].alert_delivery_count, 2)
+        self.assertFalse(result[0].acknowledged)
+        self.assertEqual(result[1].buyer_id, "buyer-2")
+        self.assertTrue(result[1].acknowledged)
+
+    def test_admin_can_list_order_fraud_watch_events(self):
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[
+                [
+                    {
+                        "id": "event-1",
+                        "buyer_id": "buyer-1",
+                        "buyer_display_name": "Buyer One",
+                        "delivery_id": "delivery-1",
+                        "actor_user_id": "admin-user-id",
+                        "action": "acknowledged",
+                        "alert_signature": "order-fraud-watch:buyer-1:3:order-exception:order-3:preparing:canceled:buyer",
+                        "order_exception_count": 3,
+                        "recent_order_exception_count": 2,
+                        "risk_level": "watch",
+                        "latest_order_id": "order-3",
+                        "latest_order_status": "canceled",
+                        "created_at": "2026-04-08T12:00:00+00:00",
+                    }
+                ]
+            ],
+            update_result=[],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = list_admin_order_fraud_watch_events(limit=10)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].action, "acknowledged")
+
     def test_admin_can_acknowledge_booking_conflict_deliveries(self):
         delivery = {
             "id": "delivery-1",
@@ -1061,6 +1392,83 @@ class NotificationDeliveryRetryTests(unittest.TestCase):
         self.assertEqual(fake_supabase.insert_calls, 1)
         self.assertEqual(fake_supabase.insert_payloads[0][0]["action"], "acknowledged")
 
+    def test_admin_can_acknowledge_seller_profile_completion_alerts(self):
+        delivery = {
+            "id": "delivery-1",
+            "recipient_user_id": "admin-user-id",
+            "transaction_kind": "seller",
+            "transaction_id": "seller-1",
+            "event_id": "seller-profile-completion:seller-1:67:Verification",
+            "channel": "email",
+            "delivery_status": "sent",
+            "payload": {
+                "alert_type": "seller_profile_completion",
+                "seller_id": "seller-1",
+                "seller_slug": "seller-one",
+                "seller_display_name": "Seller One",
+                "completion_percent": 67,
+                "missing_fields": ["Verification"],
+                "summary": "Complete verification to strengthen the seller profile.",
+                "alert_signature": "seller-1:67:Verification",
+            },
+            "failure_reason": None,
+            "attempts": 1,
+            "sent_at": "2026-04-08T11:00:00+00:00",
+            "created_at": "2026-04-08T11:00:00+00:00",
+        }
+        updated_delivery = {
+            **delivery,
+            "payload": {
+                **delivery["payload"],
+                "acknowledged_at": "2026-04-08T12:00:00+00:00",
+                "acknowledged_by_user_id": "admin-user-id",
+                "acknowledged_signature": delivery["payload"]["alert_signature"],
+            },
+        }
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[[delivery]],
+            update_result=[updated_delivery],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = acknowledge_admin_seller_profile_completion("seller-1", actor_user_id="admin-user-id")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].payload["acknowledged_by_user_id"], "admin-user-id")
+        self.assertEqual(fake_supabase.insert_calls, 1)
+        self.assertEqual(fake_supabase.insert_tables[0], "seller_profile_completion_events")
+        self.assertEqual(fake_supabase.insert_payloads[0][0]["action"], "acknowledged")
+
+    def test_admin_can_list_seller_profile_completion_events(self):
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[
+                [
+                    {
+                        "id": "event-1",
+                        "seller_id": "seller-1",
+                        "seller_slug": "seller-one",
+                        "seller_display_name": "Seller One",
+                        "delivery_id": "delivery-1",
+                        "actor_user_id": "admin-user-id",
+                        "action": "acknowledged",
+                        "alert_signature": "seller-1:67:Verification",
+                        "completion_percent": 67,
+                        "missing_fields": ["Verification"],
+                        "summary": "Complete verification to strengthen the seller profile.",
+                        "created_at": "2026-04-08T12:00:00+00:00",
+                    }
+                ]
+            ],
+            update_result=[],
+        )
+
+        with patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase):
+            result = list_admin_seller_profile_completion_events(limit=10)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].seller_id, "seller-1")
+        self.assertEqual(result[0].action, "acknowledged")
+
     def test_admin_can_clear_inventory_alert_acknowledgement(self):
         delivery = {
             "id": "delivery-1",
@@ -1227,6 +1635,57 @@ class NotificationDeliveryRetryTests(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].action, "acknowledged")
+
+    def test_queues_seller_profile_completion_notifications_for_incomplete_profiles(self):
+        seller = {
+            "id": "seller-1",
+            "user_id": "seller-user-1",
+            "display_name": "Northside Bakes",
+            "slug": "northside-bakes",
+        }
+        completion = {
+            "seller_id": "seller-1",
+            "seller_slug": "northside-bakes",
+            "seller_display_name": "Northside Bakes",
+            "total_checks": 3,
+            "completed_checks": 2,
+            "missing_checks": 1,
+            "completion_percent": 67,
+            "missing_fields": ["Verification"],
+            "is_complete": False,
+            "summary": "Complete verification to strengthen the seller profile.",
+        }
+        fake_supabase = _FakeNotificationSupabase(
+            select_side_effect=[
+                [
+                    {
+                        "id": "seller-user-1",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": True,
+                    }
+                ],
+                [],
+            ],
+            update_result=[],
+        )
+
+        with (
+            patch("app.services.notification_deliveries.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.notification_delivery_worker.process_notification_delivery_rows") as mocked_dispatch,
+        ):
+            queue_seller_profile_completion_notifications(seller, completion)
+
+        self.assertEqual(fake_supabase.insert_calls, 1)
+        self.assertEqual(len(fake_supabase.insert_payloads[0]), 2)
+        self.assertEqual(
+            {row["channel"] for row in fake_supabase.insert_payloads[0]},
+            {"email", "push"},
+        )
+        self.assertEqual(
+            fake_supabase.insert_payloads[0][0]["payload"]["alert_type"],
+            "seller_profile_completion",
+        )
+        mocked_dispatch.assert_called_once_with(fake_supabase.insert_payloads[0])
 
     def test_admin_can_acknowledge_subscription_downgrade_alerts(self):
         fake_supabase = _FakeNotificationSupabase(
@@ -1432,19 +1891,24 @@ class _FakeNotificationSupabase(_FakeSupabase):
         super().__init__(select_side_effect=select_side_effect, update_result=update_result)
         self.insert_calls = 0
         self.insert_payloads = []
+        self.insert_tables = []
 
     def insert(self, table, payload, **kwargs):
         if table not in {
             "order_exception_events",
+            "order_fraud_watch_events",
             "booking_conflict_events",
             "delivery_failure_events",
             "inventory_alert_events",
             "subscription_downgrade_events",
             "review_response_reminder_events",
             "trust_alert_events",
+            "seller_profile_completion_events",
+            "notification_deliveries",
         }:
             raise AssertionError(f"Unexpected insert table: {table}")
         self.insert_calls += 1
+        self.insert_tables.append(table)
         self.insert_payloads.append(payload)
         return payload
 

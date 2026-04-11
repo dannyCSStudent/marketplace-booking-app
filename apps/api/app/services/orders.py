@@ -26,6 +26,7 @@ from app.services.platform_fees import (
     get_active_platform_fee_rate_value,
 )
 from app.services.notification_delivery_worker import process_notification_delivery_rows
+from app.services.notification_deliveries import queue_order_fraud_watch_notifications
 from app.services.response_ai import build_transaction_response_ai_response
 from app.services.workflows import ORDER_TRANSITIONS_BY_ACTOR, validate_transition
 from app.services.notifications import queue_transaction_notification_jobs
@@ -232,6 +233,29 @@ def _get_seller_profile_summary(*, seller_id: str) -> dict[str, str] | None:
     }
 
 
+def _get_buyer_profile_summary(*, buyer_id: str) -> dict[str, str] | None:
+    supabase = get_supabase_client()
+    try:
+        buyer_profile = supabase.select(
+            "profiles",
+            query={
+                "select": "id,display_name",
+                "id": f"eq.{buyer_id}",
+            },
+            use_service_role=True,
+            expect_single=True,
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 406:
+            return None
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return {
+        "id": str(buyer_profile.get("id") or ""),
+        "display_name": str(buyer_profile.get("display_name") or ""),
+    }
+
+
 def _queue_order_exception_notification(
     *,
     order: dict,
@@ -244,6 +268,11 @@ def _queue_order_exception_notification(
     seller = _get_seller_profile_summary(seller_id=order["seller_id"])
     if not seller:
         return
+    buyer = _get_buyer_profile_summary(buyer_id=order["buyer_id"])
+    buyer_display_name = buyer.get("display_name") if buyer else ""
+    buyer_display_name = buyer_display_name.strip() if isinstance(buyer_display_name, str) else ""
+    if not buyer_display_name:
+        buyer_display_name = "Buyer"
 
     settings = get_settings()
     admin_ids = [
@@ -329,10 +358,12 @@ def _queue_order_exception_notification(
 
         prefs = profile_prefs.get(recipient_user_id, {})
         payload = {
-            "alert_type": "order_exception",
-            "seller_id": seller["id"],
-            "seller_slug": seller["slug"],
-            "seller_display_name": seller["display_name"],
+        "alert_type": "order_exception",
+        "buyer_id": order["buyer_id"],
+        "buyer_display_name": buyer_display_name,
+        "seller_id": seller["id"],
+        "seller_slug": seller["slug"],
+        "seller_display_name": seller["display_name"],
             "order_id": order["id"],
             "listing_id": order.get("order_items", [{}])[0].get("listing_id"),
             "listing_title": listing_title,
@@ -383,6 +414,15 @@ def _queue_order_exception_notification(
     if inserted_rows:
         try:
             process_notification_delivery_rows(inserted_rows)
+        except Exception:
+            return
+
+        try:
+            queue_order_fraud_watch_notifications(
+                order=order,
+                previous_status=previous_status,
+                actor_role=actor_role,
+            )
         except Exception:
             return
 

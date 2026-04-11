@@ -6,9 +6,13 @@ import { applyPromotionDashboardFilter, applySubscriptionHistoryFilter } from "@
 import { useMonetizationActivity } from "@/app/admin/monetization/monetization-activity-context";
 import { scrollToMonetizationSection } from "@/app/admin/monetization/monetization-navigation";
 import { useMonetizationPreferences } from "@/app/admin/monetization/monetization-preferences-context";
-import { usePromotionAnalytics } from "@/app/admin/monetization/promotion-analytics-context";
-import { buildSubscriptionEventDestructiveMeta } from "@/app/admin/monetization/subscription-analytics-helpers";
-import { useSubscriptionAnalytics } from "@/app/admin/monetization/subscription-analytics-context";
+import { restoreAdminSession } from "@/app/lib/admin-auth";
+import {
+  ApiError,
+  createApiClient,
+  type MonetizationWatchlistEventRead,
+  type MonetizationWatchlistSummaryRead,
+} from "@/app/lib/api";
 
 type WatchlistAlert = {
   id: string;
@@ -18,15 +22,17 @@ type WatchlistAlert = {
   severity: "high" | "medium" | "monitor";
   tone: "amber" | "rose" | "sky";
   actionLabel: string;
+  acknowledged: boolean;
   onAction: () => void;
 };
+
+const CLIENT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export default function MonetizationWatchlist() {
   const didMarkViewedRef = useRef(false);
   const {
     preferences: {
       toolState: {
-        dismissedWatchlistAlertSignatures,
         lastWatchlistViewedAt,
         watchlistSeverityFilter,
         watchlistCollapsed,
@@ -43,234 +49,245 @@ export default function MonetizationWatchlist() {
     watchlistSeverityFilter,
   );
   const { recordActivity } = useMonetizationActivity();
-  const { events: promotionEvents, summary: promotionSummary } = usePromotionAnalytics();
-  const { events: subscriptionEvents, tiers } = useSubscriptionAnalytics();
+  const api = useMemo(() => createApiClient(CLIENT_API_BASE_URL), []);
+  const [backendSummaries, setBackendSummaries] = useState<MonetizationWatchlistSummaryRead[]>([]);
+  const [backendEvents, setBackendEvents] = useState<MonetizationWatchlistEventRead[]>([]);
+  const [backendStatus, setBackendStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [stateFilter, setStateFilter] = useState<"active" | "acknowledged" | "all">("active");
   const severityRank: Record<WatchlistAlert["severity"], number> = {
     high: 0,
     medium: 1,
     monitor: 2,
   };
 
-  const alerts = useMemo<WatchlistAlert[]>(() => {
-    const now = Date.now();
-    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-    const priorSevenDaysAgo = sevenDaysAgo - 7 * 24 * 60 * 60 * 1000;
-    const lastViewedAt = lastWatchlistViewedAt ? new Date(lastWatchlistViewedAt).getTime() : null;
-    const hasVisitBaseline = Boolean(lastViewedAt && Number.isFinite(lastViewedAt));
-    const tiersById = Object.fromEntries(tiers.map((tier) => [tier.id ?? "", tier]));
-    const sinceLastViewedSubscriptionEvents = subscriptionEvents.filter((event) => {
-      if (!hasVisitBaseline || !lastViewedAt) {
-        return false;
+  function recordWatchlistAction(
+    summary: string,
+    replayKey:
+      | "subscription_destructive"
+      | "subscription_downgrade"
+      | "promotion_removals"
+      | "promoted_listings"
+      | null = null,
+  ) {
+    const createdAt = new Date().toISOString();
+    setToolState((current) => ({
+      ...current,
+      watchlistLastActionSummary: summary,
+      watchlistLastActionAt: createdAt,
+      watchlistLastActionReplayKey: replayKey,
+    }));
+  }
+
+  const refreshWatchlist = async () => {
+    const session = await restoreAdminSession();
+    if (!session) {
+      throw new ApiError(401, "Sign in as an admin to update monetization signals.");
+    }
+
+    const [summaryRows, eventRows] = await Promise.all([
+      api.listMonetizationWatchlistSummaries(lastWatchlistViewedAt ?? undefined, 12, stateFilter, {
+        accessToken: session.access_token,
+      }),
+      api.listMonetizationWatchlistEvents(24, { accessToken: session.access_token }),
+    ]);
+    setBackendSummaries(summaryRows);
+    setBackendEvents(eventRows);
+  };
+
+  const acknowledgeWatchlistAlert = async (alert: WatchlistAlert) => {
+    setBackendStatus("loading");
+    setBackendError(null);
+    try {
+      const session = await restoreAdminSession();
+      if (!session) {
+        throw new ApiError(401, "Sign in as an admin to update monetization signals.");
       }
-      return new Date(event.created_at ?? "").getTime() >= lastViewedAt;
-    });
-    const sinceLastViewedPromotionEvents = promotionEvents.filter((event) => {
-      if (!hasVisitBaseline || !lastViewedAt) {
-        return false;
+
+      await api.acknowledgeMonetizationWatchlistAlert(alert.id, {
+        accessToken: session.access_token,
+      });
+      await refreshWatchlist();
+      setBackendStatus("idle");
+      recordActivity({
+        kind: "workflow",
+        label: `Watchlist acknowledged: ${alert.title}`,
+        summary: `Acknowledged the ${alert.title.toLowerCase()} alert.`,
+      });
+      recordWatchlistAction(`Acknowledged ${alert.title}`, null);
+    } catch (caught) {
+      setBackendStatus("error");
+      setBackendError(caught instanceof ApiError ? caught.message : "Unable to acknowledge monetization alert.");
+    }
+  };
+
+  const clearWatchlistAlertAcknowledgement = async (alert: WatchlistAlert) => {
+    setBackendStatus("loading");
+    setBackendError(null);
+    try {
+      const session = await restoreAdminSession();
+      if (!session) {
+        throw new ApiError(401, "Sign in as an admin to update monetization signals.");
       }
-      return new Date(event.created_at ?? "").getTime() >= lastViewedAt;
-    });
 
-    const recentSubscriptionEvents = subscriptionEvents.filter(
-      (event) => new Date(event.created_at ?? "").getTime() >= sevenDaysAgo,
-    );
-    const priorSubscriptionEvents = subscriptionEvents.filter((event) => {
-      const createdAt = new Date(event.created_at ?? "").getTime();
-      return createdAt >= priorSevenDaysAgo && createdAt < sevenDaysAgo;
-    });
-    const destructiveRecent = recentSubscriptionEvents.filter(
-      (event) => buildSubscriptionEventDestructiveMeta(event, tiersById).isDestructive,
-    );
-    const destructivePrior = priorSubscriptionEvents.filter(
-      (event) => buildSubscriptionEventDestructiveMeta(event, tiersById).isDestructive,
-    );
-    const downgradesRecent = recentSubscriptionEvents.filter((event) => event.action === "downgrade");
-    const destructiveSinceLastViewed = sinceLastViewedSubscriptionEvents.filter(
-      (event) => buildSubscriptionEventDestructiveMeta(event, tiersById).isDestructive,
-    );
-    const downgradesSinceLastViewed = sinceLastViewedSubscriptionEvents.filter(
-      (event) => event.action === "downgrade",
-    );
+      await api.clearMonetizationWatchlistAlert(alert.id, {
+        accessToken: session.access_token,
+      });
+      await refreshWatchlist();
+      setBackendStatus("idle");
+      recordActivity({
+        kind: "workflow",
+        label: `Watchlist re-opened: ${alert.title}`,
+        summary: `Re-opened the ${alert.title.toLowerCase()} alert from the monetization watchlist.`,
+      });
+      recordWatchlistAction(`Re-opened ${alert.title}`, null);
+    } catch (caught) {
+      setBackendStatus("error");
+      setBackendError(caught instanceof ApiError ? caught.message : "Unable to clear monetization alert acknowledgement.");
+    }
+  };
 
-    const recentPromotionEvents = promotionEvents.filter(
-      (event) => new Date(event.created_at ?? "").getTime() >= sevenDaysAgo,
-    );
-    const promotionAdds = recentPromotionEvents.filter((event) => event.promoted).length;
-    const promotionRemovals = recentPromotionEvents.filter((event) => !event.promoted).length;
-    const promotionAddsSinceLastViewed = sinceLastViewedPromotionEvents.filter(
-      (event) => event.promoted,
-    ).length;
-    const promotionRemovalsSinceLastViewed = sinceLastViewedPromotionEvents.filter(
-      (event) => !event.promoted,
-    ).length;
-    const totalPromoted = promotionSummary.reduce((sum, bucket) => sum + bucket.count, 0);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
 
-    const nextAlerts: WatchlistAlert[] = [];
+    const stored = window.sessionStorage.getItem("admin.monetization.watchlist-state-filter");
+    if (stored === "active" || stored === "acknowledged" || stored === "all") {
+      setStateFilter(stored);
+    }
+  }, []);
 
-    if (
-      (hasVisitBaseline && destructiveSinceLastViewed.length > 0) ||
-      (destructiveRecent.length >= 3 && destructiveRecent.length > destructivePrior.length)
-    ) {
-      nextAlerts.push({
-        id: "subscription-destructive-spike",
-        signature: hasVisitBaseline
-          ? `since-visit:${destructiveSinceLastViewed.length}`
-          : `rolling:${destructiveRecent.length}:${destructivePrior.length}`,
-        title: hasVisitBaseline
-          ? "New destructive subscription changes landed since your last visit"
-          : "Destructive subscription changes are rising",
-        detail: hasVisitBaseline
-          ? `${destructiveSinceLastViewed.length} destructive subscription changes were recorded since you last viewed the monetization dashboard.`
-          : `${destructiveRecent.length} destructive subscription changes landed in the last 7 days, up from ${destructivePrior.length} in the prior week.`,
-        severity: "high",
-        tone: "rose",
-        actionLabel: "Review subscription history",
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.setItem("admin.monetization.watchlist-state-filter", stateFilter);
+  }, [stateFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadWatchlistAlerts = async () => {
+      setBackendStatus("loading");
+      setBackendError(null);
+      try {
+        await refreshWatchlist();
+        if (!cancelled) {
+          setBackendStatus("idle");
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          setBackendStatus("error");
+          setBackendError(caught instanceof ApiError ? caught.message : "Unable to load monetization watchlist.");
+        }
+      }
+    };
+
+    void loadWatchlistAlerts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, lastWatchlistViewedAt, stateFilter]);
+
+  const alerts = useMemo<WatchlistAlert[]>(
+    () =>
+      backendSummaries.map((alert) => ({
+        id: alert.id,
+        signature: alert.signature,
+        title: alert.title,
+        detail: alert.detail,
+        severity: alert.severity,
+        tone: alert.tone,
+        actionLabel: alert.action_label,
+        acknowledged: alert.acknowledged,
         onAction: () => {
-          recordActivity({
-            kind: "saved_view",
-            label: "Watchlist: destructive subscription spike",
-            summary: "Opened the destructive subscription history slice from the watchlist.",
-            replay: {
+          if (alert.replay_key === "subscription_destructive") {
+            recordActivity({
               kind: "saved_view",
-              subscriptionDetail: {
-                direction: "all",
-                reason: "all",
-                destructiveOnly: true,
-                windowDays: 7,
+              label: "Watchlist: destructive subscription spike",
+              summary: "Opened the destructive subscription history slice from the watchlist.",
+              replay: {
+                kind: "saved_view",
+                subscriptionDetail: {
+                  direction: "all",
+                  reason: "all",
+                  destructiveOnly: true,
+                  windowDays: 7,
+                },
               },
-            },
-          });
-          applySubscriptionHistoryFilter({
-            direction: "all",
-            reason: "all",
-            destructiveOnly: true,
-            windowDays: 7,
-          });
-          recordWatchlistAction("Opened destructive subscription history", "subscription_destructive");
-        },
-      });
-    }
-
-    if ((hasVisitBaseline && downgradesSinceLastViewed.length > 0) || downgradesRecent.length >= 2) {
-      nextAlerts.push({
-        id: "subscription-downgrade-pressure",
-        signature: hasVisitBaseline
-          ? `since-visit:${downgradesSinceLastViewed.length}`
-          : `rolling:${downgradesRecent.length}`,
-        title: "Downgrade pressure needs review",
-        detail: hasVisitBaseline
-          ? `${downgradesSinceLastViewed.length} seller downgrades have happened since your last visit.`
-          : `${downgradesRecent.length} seller downgrades were recorded in the last 7 days. Check whether pricing or perk loss is driving the change.`,
-        severity: "medium",
-        tone: "amber",
-        actionLabel: "Open downgrade slice",
-        onAction: () => {
-          recordActivity({
-            kind: "saved_view",
-            label: "Watchlist: downgrade pressure",
-            summary: "Opened the downgrade-focused subscription history slice from the watchlist.",
-            replay: {
+            });
+            applySubscriptionHistoryFilter({
+              direction: "all",
+              reason: "all",
+              destructiveOnly: true,
+              windowDays: 7,
+            });
+          } else if (alert.replay_key === "subscription_downgrade") {
+            recordActivity({
               kind: "saved_view",
-              subscriptionDetail: {
-                direction: "downgrade",
-                reason: "all",
-                destructiveOnly: false,
-                windowDays: 7,
+              label: "Watchlist: downgrade pressure",
+              summary: "Opened the downgrade-focused subscription history slice from the watchlist.",
+              replay: {
+                kind: "saved_view",
+                subscriptionDetail: {
+                  direction: "downgrade",
+                  reason: "all",
+                  destructiveOnly: false,
+                  windowDays: 7,
+                },
               },
-            },
-          });
-          applySubscriptionHistoryFilter({
-            direction: "downgrade",
-            reason: "all",
-            destructiveOnly: false,
-            windowDays: 7,
-          });
-          recordWatchlistAction("Opened downgrade review", "subscription_downgrade");
-        },
-      });
-    }
-
-    if (
-      (hasVisitBaseline && promotionRemovalsSinceLastViewed > promotionAddsSinceLastViewed) ||
-      (promotionRemovals > promotionAdds && promotionRemovals >= 3)
-    ) {
-      nextAlerts.push({
-        id: "promotion-removal-pressure",
-        signature: hasVisitBaseline
-          ? `since-visit:${promotionRemovalsSinceLastViewed}:${promotionAddsSinceLastViewed}`
-          : `rolling:${promotionRemovals}:${promotionAdds}`,
-        title: hasVisitBaseline
-          ? "Promotion removals outpaced adds since your last visit"
-          : "Promotion removals outpaced adds",
-        detail: hasVisitBaseline
-          ? `${promotionRemovalsSinceLastViewed} removals versus ${promotionAddsSinceLastViewed} adds were recorded since your last visit.`
-          : `${promotionRemovals} removals versus ${promotionAdds} adds were recorded in the last 7 days.`,
-        severity: "medium",
-        tone: "amber",
-        actionLabel: "Inspect promotion removals",
-        onAction: () => {
-          recordActivity({
-            kind: "saved_view",
-            label: "Watchlist: promotion removal pressure",
-            summary: "Opened the promotion removals slice from the watchlist.",
-            replay: {
+            });
+            applySubscriptionHistoryFilter({
+              direction: "downgrade",
+              reason: "all",
+              destructiveOnly: false,
+              windowDays: 7,
+            });
+          } else if (alert.replay_key === "promotion_removals") {
+            recordActivity({
               kind: "saved_view",
-              promotionDetail: {
-                windowDays: 7,
-                statusFilter: "removed",
-                typeFilter: "all",
-                segmentFilter: "all",
+              label: "Watchlist: promotion removal pressure",
+              summary: "Opened the promotion removals slice from the watchlist.",
+              replay: {
+                kind: "saved_view",
+                promotionDetail: {
+                  windowDays: 7,
+                  statusFilter: "removed",
+                  typeFilter: "all",
+                  segmentFilter: "all",
+                },
               },
-            },
-          });
-          applyPromotionDashboardFilter({
-            windowDays: 7,
-            statusFilter: "removed",
-            typeFilter: "all",
-            segmentFilter: "all",
-          });
-          recordWatchlistAction("Opened promotion removals", "promotion_removals");
+            });
+            applyPromotionDashboardFilter({
+              windowDays: 7,
+              statusFilter: "removed",
+              typeFilter: "all",
+              segmentFilter: "all",
+            });
+          } else if (alert.replay_key === "promoted_listings") {
+            recordActivity({
+              kind: "workflow",
+              label: "Watchlist: thin promoted inventory",
+              summary: "Jumped from the watchlist into the promoted listings panel.",
+            });
+            scrollToMonetizationSection("promoted-listings-panel");
+          }
+          recordWatchlistAction(`Opened ${alert.title.toLowerCase()}`, alert.replay_key);
         },
-      });
-    }
-
-    if (
-      totalPromoted < 3 &&
-      ((hasVisitBaseline && promotionRemovalsSinceLastViewed > 0) || promotionRemovals > 0)
-    ) {
-      nextAlerts.push({
-        id: "promotion-inventory-thin",
-        signature: hasVisitBaseline
-          ? `since-visit:${totalPromoted}:${promotionRemovalsSinceLastViewed}`
-          : `rolling:${totalPromoted}:${promotionRemovals}`,
-        title: "Promoted inventory is getting thin",
-        detail: `Only ${totalPromoted} promoted listings are active right now after recent removals.`,
-        severity: "monitor",
-        tone: "sky",
-        actionLabel: "Open promoted listings",
-        onAction: () => {
-          recordActivity({
-            kind: "workflow",
-            label: "Watchlist: thin promoted inventory",
-            summary: "Jumped from the watchlist into the promoted listings panel.",
-          });
-          scrollToMonetizationSection("promoted-listings-panel");
-          recordWatchlistAction("Opened promoted listings", "promoted_listings");
-        },
-      });
-    }
-
-    return nextAlerts;
-  }, [lastWatchlistViewedAt, promotionEvents, promotionSummary, subscriptionEvents, tiers]);
+      })),
+    [backendSummaries, recordActivity],
+  );
 
   const visibleAlerts = useMemo(
     () =>
       alerts
-        .filter((alert) => dismissedWatchlistAlertSignatures[alert.id] !== alert.signature)
         .filter((alert) => severityFilter === "all" || alert.severity === severityFilter)
         .filter((alert) => !newOnly || isVisitBasedAlert(alert))
         .sort((left, right) => severityRank[left.severity] - severityRank[right.severity]),
-    [alerts, dismissedWatchlistAlertSignatures, newOnly, severityFilter, severityRank],
+    [alerts, newOnly, severityFilter, severityRank],
   );
 
   const alertCounts = useMemo(() => {
@@ -281,14 +298,11 @@ export default function MonetizationWatchlist() {
       monitor: 0,
     };
     for (const alert of alerts) {
-      if (dismissedWatchlistAlertSignatures[alert.id] === alert.signature) {
-        continue;
-      }
       counts.all += 1;
       counts[alert.severity] += 1;
     }
     return counts;
-  }, [alerts, dismissedWatchlistAlertSignatures]);
+  }, [alerts]);
 
   const newSinceVisitCounts = useMemo(() => {
     const counts = {
@@ -298,9 +312,6 @@ export default function MonetizationWatchlist() {
       monitor: 0,
     };
     for (const alert of alerts) {
-      if (dismissedWatchlistAlertSignatures[alert.id] === alert.signature) {
-        continue;
-      }
       if (!alert.signature.startsWith("since-visit:")) {
         continue;
       }
@@ -308,7 +319,16 @@ export default function MonetizationWatchlist() {
       counts[alert.severity] += 1;
     }
     return counts;
-  }, [alerts, dismissedWatchlistAlertSignatures]);
+  }, [alerts]);
+
+  const stateCounts = useMemo(
+    () => ({
+      active: alerts.filter((alert) => !alert.acknowledged).length,
+      acknowledged: alerts.filter((alert) => alert.acknowledged).length,
+      all: alerts.length,
+    }),
+    [alerts],
+  );
 
   const openSeveritySlice = (nextFilter: WatchlistAlert["severity"] | "all") => {
     setSeverityFilter(nextFilter);
@@ -320,24 +340,6 @@ export default function MonetizationWatchlist() {
   };
 
   const isVisitBasedAlert = (alert: WatchlistAlert) => alert.signature.startsWith("since-visit:");
-  const recordWatchlistAction = (
-    summary: string,
-    replayKey:
-      | "subscription_destructive"
-      | "subscription_downgrade"
-      | "promotion_removals"
-      | "promoted_listings"
-      | null = null,
-  ) => {
-    const createdAt = new Date().toISOString();
-    setToolState((current) => ({
-      ...current,
-      watchlistLastActionSummary: summary,
-      watchlistLastActionAt: createdAt,
-      watchlistLastActionReplayKey: replayKey,
-    }));
-  };
-
   const reopenLastWatchlistAction = () => {
     switch (watchlistLastActionReplayKey) {
       case "subscription_destructive":
@@ -489,7 +491,7 @@ export default function MonetizationWatchlist() {
     });
   }, [setToolState]);
 
-  if (alerts.length === 0) {
+  if (alerts.length === 0 && backendStatus !== "error") {
     return null;
   }
 
@@ -508,6 +510,9 @@ export default function MonetizationWatchlist() {
               ? "Alerts compare current monetization movement against your last dashboard visit when possible."
               : "Threshold-based alerts built from recent subscription and promotion movement."}
           </p>
+          {backendStatus === "error" && backendError ? (
+            <p className="mt-2 text-sm text-rose-700">{backendError}</p>
+          ) : null}
           {watchlistLastActionSummary ? (
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <span className="rounded-full border border-border/70 bg-background px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-foreground/60">
@@ -539,20 +544,24 @@ export default function MonetizationWatchlist() {
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          {visibleAlerts.length !== alerts.length ? (
+          {(["active", "acknowledged", "all"] as const).map((bucket) => (
             <button
+              key={bucket}
               type="button"
-              className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
-              onClick={() =>
-                setToolState((current) => ({
-                  ...current,
-                  dismissedWatchlistAlertSignatures: {},
-                }))
-              }
+              className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] transition ${
+                stateFilter === bucket
+                  ? "border-foreground bg-foreground text-white"
+                : "border-border text-foreground hover:border-foreground hover:text-foreground/90"
+              }`}
+              onClick={() => setStateFilter(bucket)}
             >
-              Show dismissed
+              {bucket === "active"
+                ? `Active (${stateCounts.active})`
+                : bucket === "acknowledged"
+                  ? `Acknowledged (${stateCounts.acknowledged})`
+                  : `All (${stateCounts.all})`}
             </button>
-          ) : null}
+          ))}
           <button
             type="button"
             className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90"
@@ -770,7 +779,11 @@ export default function MonetizationWatchlist() {
                             ? "Medium"
                             : "Monitor"}
                       </span>
-                      {isVisitBasedAlert(alert) ? (
+                      {alert.acknowledged ? (
+                        <span className="rounded-full border border-border/20 bg-white/80 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-foreground/56">
+                          Acknowledged
+                        </span>
+                      ) : isVisitBasedAlert(alert) ? (
                         <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700">
                           New Since Visit
                         </span>
@@ -786,23 +799,13 @@ export default function MonetizationWatchlist() {
                   <button
                     type="button"
                     className="rounded-full border border-current/20 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/72 transition hover:text-foreground"
-                    onClick={() => {
-                      setToolState((current) => ({
-                        ...current,
-                        dismissedWatchlistAlertSignatures: {
-                          ...current.dismissedWatchlistAlertSignatures,
-                          [alert.id]: alert.signature,
-                        },
-                      }));
-                    recordActivity({
-                      kind: "workflow",
-                      label: `Watchlist dismissed: ${alert.title}`,
-                      summary: `Dismissed the ${alert.title.toLowerCase()} alert.`,
-                    });
-                    recordWatchlistAction(`Dismissed ${alert.title}`, null);
-                  }}
-                >
-                    Dismiss
+                    onClick={() =>
+                      alert.acknowledged
+                        ? void clearWatchlistAlertAcknowledgement(alert)
+                        : void acknowledgeWatchlistAlert(alert)
+                    }
+                  >
+                    {alert.acknowledged ? "Re-open" : "Acknowledge"}
                   </button>
                 </div>
                 <div className="mt-4">
@@ -817,9 +820,44 @@ export default function MonetizationWatchlist() {
               </div>
             ))}
           </div>
+          {backendEvents.length > 0 ? (
+            <div className="mt-5 rounded-[1.6rem] border border-border/60 bg-background px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-foreground/52">
+                    Recent alert activity
+                  </p>
+                  <p className="mt-1 text-sm text-foreground/60">
+                    Acknowledgements and re-opens recorded from this monetization session.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3">
+                {backendEvents.slice(0, 6).map((event) => (
+                  <div key={event.id} className="rounded-[1.2rem] border border-border/60 bg-white px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-border/60 bg-background px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-foreground/56">
+                        {event.action}
+                      </span>
+                      <p className="text-sm font-semibold text-foreground">{event.alert_title}</p>
+                    </div>
+                    <p className="mt-1 text-xs text-foreground/56">
+                      {event.alert_severity} · {new Date(event.created_at).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {visibleAlerts.length === 0 ? (
             <p className="mt-5 rounded-[1.4rem] border border-border/60 bg-background px-4 py-4 text-sm text-foreground/66">
-              All current watchlist items are dismissed.
+              {backendStatus === "error"
+                ? "Unable to load monetization watchlist alerts right now."
+                : stateFilter === "active"
+                  ? "No active monetization watchlist alerts match the current filters."
+                  : stateFilter === "acknowledged"
+                    ? "No acknowledged monetization watchlist alerts match the current filters."
+                    : "No monetization watchlist alerts match the current filters."}
             </p>
           ) : null}
         </>

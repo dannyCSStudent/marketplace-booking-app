@@ -438,6 +438,44 @@ export type ListingUpdate = {
     auto_accept_bookings?: boolean | null;
   };
 
+export type MonetizationWatchlistAlertRead = {
+    id: string;
+    signature: string;
+    title: string;
+    detail: string;
+    severity?: "high" | "medium" | "monitor";
+    tone?: "amber" | "rose" | "sky";
+    action_label: string;
+    replay_key: "subscription_destructive" | "subscription_downgrade" | "promotion_removals" | "promoted_listings";
+    created_at?: string | null;
+  };
+
+export type MonetizationWatchlistEventRead = {
+    id: string;
+    alert_id: string;
+    alert_signature: string;
+    actor_user_id: string;
+    action: string;
+    alert_title: string;
+    alert_severity?: "high" | "medium" | "monitor";
+    created_at: string;
+  };
+
+export type MonetizationWatchlistSummaryRead = {
+    id: string;
+    signature: string;
+    title: string;
+    detail: string;
+    severity?: "high" | "medium" | "monitor";
+    tone?: "amber" | "rose" | "sky";
+    action_label: string;
+    replay_key: "subscription_destructive" | "subscription_downgrade" | "promotion_removals" | "promoted_listings";
+    acknowledged?: boolean;
+    latest_action?: string;
+    latest_action_at?: string | null;
+    created_at?: string | null;
+  };
+
 export type NotificationDeliveryBulkActionFailure = {
     id: string;
     detail: string;
@@ -901,6 +939,38 @@ export type SellerCreate = {
     accepts_custom_orders?: boolean;
   };
 
+export type SellerInactivityEventRead = {
+    id: string;
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    last_active_at?: string | null;
+    last_active_kind: string;
+    idle_days?: number;
+    created_at: string;
+  };
+
+export type SellerInactivitySummaryRead = {
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    severity?: string;
+    tone?: string;
+    action_label?: string;
+    alert_reason: string;
+    last_active_at?: string | null;
+    last_active_kind?: string;
+    idle_days?: number;
+    alert_delivery_count?: number;
+    latest_alert_delivery_status?: string;
+    latest_alert_delivery_created_at: string;
+    acknowledged?: boolean;
+  };
+
 export type SellerListingSummaryRead = {
     seller_id: string;
     total: number;
@@ -924,6 +994,34 @@ export type SellerLookupRead = {
     city?: string | null;
     state?: string | null;
     country?: string | null;
+  };
+
+export type SellerProfileCompletionEventRead = {
+    id: string;
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    completion_percent: number;
+    missing_fields: string[];
+    summary: string;
+    created_at: string;
+  };
+
+export type SellerProfileCompletionRead = {
+    seller_id: string;
+    seller_slug: string;
+    seller_display_name: string;
+    total_checks?: number;
+    completed_checks?: number;
+    missing_checks?: number;
+    completion_percent?: number;
+    missing_fields?: string[];
+    is_complete?: boolean;
+    summary?: string;
   };
 
 export type SellerRead = {
@@ -1164,6 +1262,9 @@ export type ApiSchemaMap = {
   ListingRead: ListingRead;
   ListingType: ListingType;
   ListingUpdate: ListingUpdate;
+  MonetizationWatchlistAlertRead: MonetizationWatchlistAlertRead;
+  MonetizationWatchlistEventRead: MonetizationWatchlistEventRead;
+  MonetizationWatchlistSummaryRead: MonetizationWatchlistSummaryRead;
   NotificationDeliveryBulkActionFailure: NotificationDeliveryBulkActionFailure;
   NotificationDeliveryBulkRetryRequest: NotificationDeliveryBulkRetryRequest;
   NotificationDeliveryBulkRetryResult: NotificationDeliveryBulkRetryResult;
@@ -1210,8 +1311,12 @@ export type ApiSchemaMap = {
   ReviewSellerResponseUpdate: ReviewSellerResponseUpdate;
   ReviewVisibilityUpdate: ReviewVisibilityUpdate;
   SellerCreate: SellerCreate;
+  SellerInactivityEventRead: SellerInactivityEventRead;
+  SellerInactivitySummaryRead: SellerInactivitySummaryRead;
   SellerListingSummaryRead: SellerListingSummaryRead;
   SellerLookupRead: SellerLookupRead;
+  SellerProfileCompletionEventRead: SellerProfileCompletionEventRead;
+  SellerProfileCompletionRead: SellerProfileCompletionRead;
   SellerRead: SellerRead;
   SellerSubscriptionAssign: SellerSubscriptionAssign;
   SellerSubscriptionEventRead: SellerSubscriptionEventRead;
@@ -1264,9 +1369,37 @@ export type ApiOperations = {
       response: ListingRead;
     };
   };
+  "/admin/monetization/watchlist/alerts": {
+    get: {
+      response: MonetizationWatchlistAlertRead[];
+    };
+  };
+  "/admin/monetization/watchlist/events": {
+    get: {
+      response: MonetizationWatchlistEventRead[];
+    };
+  };
+  "/admin/monetization/watchlist/summaries": {
+    get: {
+      response: MonetizationWatchlistSummaryRead[];
+    };
+  };
+  "/admin/monetization/watchlist/{alert_id}/acknowledge": {
+    delete: {
+      response: MonetizationWatchlistEventRead[];
+    };
+    post: {
+      response: MonetizationWatchlistEventRead[];
+    };
+  };
   "/admin/platform-fees/history": {
     get: {
       response: PlatformFeeHistoryPoint[];
+    };
+  };
+  "/admin/seller-profile-completion": {
+    get: {
+      response: SellerProfileCompletionRead[];
     };
   };
   "/admin/seller-subscription-events": {
@@ -1542,6 +1675,37 @@ export type ApiOperations = {
       response: NotificationDeliveryRead[];
     };
   };
+  "/notifications/admin/seller-inactivity/events": {
+    get: {
+      response: SellerInactivityEventRead[];
+    };
+  };
+  "/notifications/admin/seller-inactivity/summaries": {
+    get: {
+      response: SellerInactivitySummaryRead[];
+    };
+  };
+  "/notifications/admin/seller-inactivity/{seller_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/admin/seller-profile-completion/events": {
+    get: {
+      response: SellerProfileCompletionEventRead[];
+    };
+  };
+  "/notifications/admin/seller-profile-completion/{seller_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
   "/notifications/admin/subscription-downgrades/events": {
     get: {
       response: SubscriptionDowngradeEventRead[];
@@ -1759,6 +1923,11 @@ export type ApiOperations = {
     patch: {
       requestBody: SellerUpdate;
       response: SellerRead;
+    };
+  };
+  "/sellers/me/completion": {
+    get: {
+      response: SellerProfileCompletionRead;
     };
   };
   "/sellers/me/subscription": {

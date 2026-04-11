@@ -119,6 +119,10 @@ class OrderStatusValidationTests(unittest.TestCase):
                     "display_name": "Tamales by Lupe",
                     "user_id": "seller-user-id",
                 },
+                {
+                    "id": "buyer-user-id",
+                    "display_name": "Buyer One",
+                },
                 [
                     {
                         "id": "seller-user-id",
@@ -175,6 +179,124 @@ class OrderStatusValidationTests(unittest.TestCase):
         self.assertEqual(
             {delivery["recipient_user_id"] for delivery in fake_supabase.insert_payloads[1]},
             {"seller-user-id", "admin-support-id", "admin-owner-id"},
+        )
+
+    def test_buyer_cancellation_after_acceptance_queues_order_fraud_watch_alert(self):
+        current_user = BUYER_USER
+        current_order = {
+            "id": "order-1",
+            "buyer_id": "buyer-user-id",
+            "seller_id": "seller-profile-id",
+            "status": "confirmed",
+            "fulfillment": "pickup",
+            "subtotal_cents": 2500,
+            "total_cents": 2500,
+            "currency": "USD",
+            "delivery_fee_cents": 0,
+            "platform_fee_cents": 0,
+            "platform_fee_rate": "0",
+            "notes": "Need by Friday",
+            "buyer_browse_context": "catalog:featured",
+            "seller_response_note": None,
+            "order_items": [
+                {
+                    "id": "item-1",
+                    "listing_id": "listing-1",
+                    "quantity": 1,
+                    "unit_price_cents": 2500,
+                    "total_price_cents": 2500,
+                    "listings": {
+                        "title": "Tamales Box",
+                        "type": "product",
+                        "is_local_only": True,
+                    },
+                }
+            ],
+            "order_status_events": [
+                {
+                    "id": "event-1",
+                    "status": "confirmed",
+                    "actor_role": "buyer",
+                    "note": "Need by Friday",
+                    "created_at": "2026-04-07T15:00:00+00:00",
+                }
+            ],
+        }
+        updated_order = {
+            **current_order,
+            "status": "canceled",
+            "order_status_events": [
+                *current_order["order_status_events"],
+                {
+                    "id": "event-2",
+                    "status": "canceled",
+                    "actor_role": "buyer",
+                    "note": "Changed my mind.",
+                    "created_at": "2026-04-07T16:00:00+00:00",
+                },
+            ],
+        }
+        fake_supabase = _ValidationSupabase(
+            select_results=[
+                current_order,
+                {
+                    "id": "seller-profile-id",
+                    "slug": "tamales-by-lupe",
+                    "display_name": "Tamales by Lupe",
+                    "user_id": "seller-user-id",
+                },
+                {
+                    "id": "buyer-user-id",
+                    "display_name": "Buyer One",
+                },
+                [
+                    {
+                        "id": "admin-support-id",
+                        "email_notifications_enabled": True,
+                        "push_notifications_enabled": True,
+                    }
+                ],
+                [],
+                updated_order,
+            ],
+            insert_results=[[{"id": "event-2"}], [{"id": "delivery-1"}, {"id": "delivery-2"}]],
+            update_results=[[updated_order]],
+        )
+
+        settings = type(
+            "Settings",
+            (),
+            {
+                "admin_user_ids": ["admin-support-id"],
+                "admin_user_roles": {
+                    "admin-support-id": "support",
+                },
+            },
+        )()
+
+        with (
+            patch("app.services.orders.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.orders.get_settings", return_value=settings),
+            patch("app.services.orders._resolve_order_actor", return_value="buyer"),
+            patch("app.services.orders.queue_transaction_notification_jobs") as mock_queue,
+            patch("app.services.orders.queue_order_fraud_watch_notifications") as mock_fraud_queue,
+            patch("app.services.orders.process_notification_delivery_rows"),
+        ):
+            result = update_order_status(
+                current_user,
+                "order-1",
+                OrderStatusUpdate(status="canceled", seller_response_note="Changed my mind."),
+            )
+
+        self.assertEqual(result.status, "canceled")
+        self.assertEqual(fake_supabase.insert_calls, 2)
+        self.assertEqual(fake_supabase.update_calls, 1)
+        self.assertEqual(mock_queue.call_count, 1)
+        self.assertEqual(mock_fraud_queue.call_count, 1)
+        self.assertEqual(fake_supabase.insert_payloads[1][0]["payload"]["alert_type"], "order_exception")
+        self.assertEqual(
+            {delivery["recipient_user_id"] for delivery in fake_supabase.insert_payloads[1]},
+            {"admin-support-id"},
         )
 
 

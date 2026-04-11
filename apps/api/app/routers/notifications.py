@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.dependencies.admin import require_admin_user
 from app.dependencies.auth import get_current_user
+from app.schemas.seller_inactivity import SellerInactivityEventRead, SellerInactivitySummaryRead
 from app.schemas.notifications import (
     NotificationDeliveryBulkRetryRequest,
     NotificationDeliveryBulkRetryResult,
@@ -18,6 +19,9 @@ from app.schemas.notifications import (
     ReviewResponseReminderSellerSummaryRead,
     OrderExceptionEventRead,
     OrderExceptionSellerSummaryRead,
+    OrderFraudWatchBuyerSummaryRead,
+    OrderFraudWatchEventRead,
+    SellerProfileCompletionEventRead,
     SubscriptionDowngradeEventRead,
     SubscriptionDowngradeSellerSummaryRead,
     TrustAlertEventRead,
@@ -25,12 +29,14 @@ from app.schemas.notifications import (
 )
 from app.services.notification_deliveries import (
     acknowledge_admin_order_exception,
+    acknowledge_admin_order_fraud_watch,
     acknowledge_admin_booking_conflict,
     acknowledge_admin_delivery_failure,
     acknowledge_admin_trust_alert,
     acknowledge_admin_review_response_reminder,
     clear_admin_trust_alert_acknowledgement,
     clear_admin_order_exception_acknowledgement,
+    clear_admin_order_fraud_watch_acknowledgement,
     clear_admin_booking_conflict_acknowledgement,
     clear_admin_delivery_failure_acknowledgement,
     acknowledge_admin_inventory_alert,
@@ -38,6 +44,8 @@ from app.services.notification_deliveries import (
     clear_admin_review_response_reminder_acknowledgement,
     acknowledge_admin_subscription_downgrade,
     clear_admin_subscription_downgrade_acknowledgement,
+    acknowledge_admin_seller_profile_completion,
+    clear_admin_seller_profile_completion_acknowledgement,
     get_admin_notification_deliveries,
     get_admin_notification_delivery_summary,
     get_admin_notification_worker_health,
@@ -48,11 +56,14 @@ from app.services.notification_deliveries import (
     list_admin_inventory_alert_summaries,
     list_admin_review_response_reminder_events,
     list_admin_review_response_reminder_seller_summaries,
+    list_admin_seller_profile_completion_events,
     list_admin_booking_conflict_events,
     list_admin_booking_conflict_seller_summaries,
     list_admin_subscription_downgrade_events,
     list_admin_subscription_downgrade_seller_summaries,
     list_admin_order_exception_events,
+    list_admin_order_fraud_watch_buyer_summaries,
+    list_admin_order_fraud_watch_events,
     list_admin_trust_alert_events,
     list_admin_trust_alert_seller_summaries,
     list_admin_order_exception_seller_summaries,
@@ -60,6 +71,12 @@ from app.services.notification_deliveries import (
     retry_admin_notification_delivery,
     retry_my_notification_deliveries,
     retry_my_notification_delivery,
+)
+from app.services.seller_inactivity import (
+    acknowledge_seller_inactivity_alert,
+    clear_seller_inactivity_acknowledgement,
+    list_seller_inactivity_events,
+    list_seller_inactivity_summaries,
 )
 
 router = APIRouter()
@@ -251,6 +268,30 @@ def clear_subscription_downgrade_acknowledgement(
     return clear_admin_subscription_downgrade_acknowledgement(seller_id, actor_user_id=current_user.id)
 
 
+@router.post("/admin/seller-profile-completion/{seller_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def acknowledge_seller_profile_completion_alert(
+    seller_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return acknowledge_admin_seller_profile_completion(seller_id, actor_user_id=current_user.id)
+
+
+@router.delete("/admin/seller-profile-completion/{seller_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def clear_seller_profile_completion_acknowledgement(
+    seller_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return clear_admin_seller_profile_completion_acknowledgement(seller_id, actor_user_id=current_user.id)
+
+
+@router.get("/admin/seller-profile-completion/events", response_model=list[SellerProfileCompletionEventRead])
+def read_admin_seller_profile_completion_events(
+    limit: int = 20,
+    current_user=Depends(require_admin_user),
+) -> list[SellerProfileCompletionEventRead]:
+    return list_admin_seller_profile_completion_events(limit=limit)
+
+
 @router.post("/admin/trust-alerts/{seller_id}/acknowledge", response_model=list[NotificationDeliveryRead])
 def acknowledge_trust_alert(
     seller_id: str,
@@ -315,6 +356,72 @@ def read_admin_order_exception_events(
     current_user=Depends(require_admin_user),
 ) -> list[OrderExceptionEventRead]:
     return list_admin_order_exception_events(limit=limit)
+
+
+@router.get("/admin/order-fraud-watch/summaries", response_model=list[OrderFraudWatchBuyerSummaryRead])
+def read_admin_order_fraud_watch_summaries(
+    limit: int = 6,
+    state: str | None = None,
+    current_user=Depends(require_admin_user),
+) -> list[OrderFraudWatchBuyerSummaryRead]:
+    return list_admin_order_fraud_watch_buyer_summaries(limit=limit, state=state)
+
+
+@router.get("/admin/order-fraud-watch/events", response_model=list[OrderFraudWatchEventRead])
+def read_admin_order_fraud_watch_events(
+    limit: int = 20,
+    current_user=Depends(require_admin_user),
+) -> list[OrderFraudWatchEventRead]:
+    return list_admin_order_fraud_watch_events(limit=limit)
+
+
+@router.post("/admin/order-fraud-watch/{buyer_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def acknowledge_order_fraud_watch(
+    buyer_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return acknowledge_admin_order_fraud_watch(buyer_id, actor_user_id=current_user.id)
+
+
+@router.delete("/admin/order-fraud-watch/{buyer_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def clear_order_fraud_watch_acknowledgement(
+    buyer_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return clear_admin_order_fraud_watch_acknowledgement(buyer_id, actor_user_id=current_user.id)
+
+
+@router.get("/admin/seller-inactivity/summaries", response_model=list[SellerInactivitySummaryRead])
+def read_admin_seller_inactivity_summaries(
+    limit: int = 8,
+    state: str | None = None,
+    current_user=Depends(require_admin_user),
+) -> list[SellerInactivitySummaryRead]:
+    return list_seller_inactivity_summaries(limit=limit, state=state)
+
+
+@router.get("/admin/seller-inactivity/events", response_model=list[SellerInactivityEventRead])
+def read_admin_seller_inactivity_events(
+    limit: int = 20,
+    current_user=Depends(require_admin_user),
+) -> list[SellerInactivityEventRead]:
+    return list_seller_inactivity_events(limit=limit)
+
+
+@router.post("/admin/seller-inactivity/{seller_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def acknowledge_seller_inactivity(
+    seller_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return acknowledge_seller_inactivity_alert(seller_id, actor_user_id=current_user.id)
+
+
+@router.delete("/admin/seller-inactivity/{seller_id}/acknowledge", response_model=list[NotificationDeliveryRead])
+def clear_seller_inactivity_acknowledgement_route(
+    seller_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[NotificationDeliveryRead]:
+    return clear_seller_inactivity_acknowledgement(seller_id, actor_user_id=current_user.id)
 
 
 @router.get("/admin/booking-conflicts/sellers", response_model=list[BookingConflictSellerSummaryRead])

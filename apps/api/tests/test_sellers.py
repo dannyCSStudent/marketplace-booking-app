@@ -6,7 +6,14 @@ from fastapi.testclient import TestClient
 from app.dependencies.admin import require_admin_user
 from app.main import app
 from app.schemas.listings import ListingListResponse, ListingRead, SellerListingSummaryRead
-from app.services.sellers import get_seller_by_slug, list_seller_trust_interventions, search_sellers
+from app.schemas.sellers import SellerUpdate
+from app.services.sellers import (
+    get_my_seller_profile_completion,
+    get_seller_by_slug,
+    list_seller_trust_interventions,
+    update_my_seller,
+    search_sellers,
+)
 
 
 class SellerSearchTests(unittest.TestCase):
@@ -451,6 +458,92 @@ class SellerRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()[0]["seller"]["slug"], "south-dallas-tamales")
         self.assertEqual(response.json()[0]["intervention_lane"], "seller_trust_intervention")
+
+    def test_builds_my_seller_profile_completion_from_profile_fields(self):
+        class _Supabase:
+            def select(self, table, **kwargs):
+                if table != "seller_profiles":
+                    raise AssertionError(f"Unexpected select table: {table}")
+
+                return {
+                    "id": "seller-complete",
+                    "user_id": "user-complete",
+                    "display_name": "Northside Bakes",
+                    "slug": "northside-bakes",
+                    "bio": "Fresh baked goods.",
+                    "is_verified": False,
+                    "accepts_custom_orders": True,
+                    "average_rating": 4.9,
+                    "review_count": 11,
+                    "city": "Austin",
+                    "state": "TX",
+                    "country": "USA",
+                }
+
+        fake_supabase = _Supabase()
+        current_user = type("CurrentUser", (), {"id": "user-complete", "access_token": "token-1"})()
+
+        with patch("app.services.sellers.get_supabase_client", return_value=fake_supabase):
+            completion = get_my_seller_profile_completion(current_user)
+
+        self.assertEqual(completion.seller_id, "seller-complete")
+        self.assertEqual(completion.seller_slug, "northside-bakes")
+        self.assertEqual(completion.total_checks, 3)
+        self.assertEqual(completion.completed_checks, 2)
+        self.assertEqual(completion.missing_checks, 1)
+        self.assertEqual(completion.completion_percent, 67)
+        self.assertEqual(completion.missing_fields, ["Verification"])
+        self.assertFalse(completion.is_complete)
+        self.assertIn("verification", completion.summary.lower())
+
+    def test_update_my_seller_queues_profile_completion_notifications_when_incomplete(self):
+        class _Supabase:
+            def __init__(self):
+                self.update_calls = []
+
+            def select(self, table, **kwargs):
+                if table not in {"reviews", "orders", "bookings", "notification_deliveries"}:
+                    raise AssertionError(f"Unexpected select table: {table}")
+
+                return []
+
+            def update(self, table, payload, **kwargs):
+                if table != "seller_profiles":
+                    raise AssertionError(f"Unexpected update table: {table}")
+
+                self.update_calls.append((payload, kwargs))
+                return [
+                    {
+                        "id": "seller-update",
+                        "user_id": "user-update",
+                        "display_name": "Northside Bakes",
+                        "slug": "northside-bakes",
+                        "bio": "Fresh baked goods.",
+                        "is_verified": False,
+                        "accepts_custom_orders": True,
+                        "average_rating": 4.9,
+                        "review_count": 11,
+                        "city": "Austin",
+                        "state": "TX",
+                        "country": "USA",
+                    }
+                ]
+
+        fake_supabase = _Supabase()
+        current_user = type("CurrentUser", (), {"id": "user-update", "access_token": "token-1"})()
+
+        with (
+            patch("app.services.sellers.get_supabase_client", return_value=fake_supabase),
+            patch("app.services.sellers.queue_seller_profile_completion_notifications") as mocked_queue,
+        ):
+            seller = update_my_seller(current_user, SellerUpdate(bio="Fresh baked goods."))
+
+        self.assertEqual(seller.id, "seller-update")
+        mocked_queue.assert_called_once()
+        queued_seller, queued_completion = mocked_queue.call_args.args
+        self.assertEqual(queued_seller["id"], "seller-update")
+        self.assertFalse(queued_completion["is_complete"])
+        self.assertIn("Verification", queued_completion["missing_fields"])
 
     def test_reads_paged_seller_listings_by_slug(self):
         client = TestClient(app)

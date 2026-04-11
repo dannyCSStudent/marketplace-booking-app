@@ -8,11 +8,12 @@ from app.schemas.listings import (
     SellerListingSummaryRead,
 )
 from app.schemas.reviews import ReviewRead
-from app.schemas.sellers import SellerCreate, SellerRead, SellerUpdate
+from app.schemas.sellers import SellerCreate, SellerProfileCompletionRead, SellerRead, SellerUpdate
 from app.schemas.subscriptions import SellerSubscriptionRead
 from app.services.sellers import (
     create_seller,
     get_seller_by_id,
+    get_my_seller_profile_completion,
     get_my_seller,
     get_seller_by_slug,
     get_seller_reviews_by_slug,
@@ -40,6 +41,13 @@ def patch_my_seller(
     current_user=Depends(get_current_user),
 ) -> SellerRead:
     return update_my_seller(current_user, payload)
+
+
+@router.get("/me/completion", response_model=SellerProfileCompletionRead)
+def read_my_seller_profile_completion(
+    current_user=Depends(get_current_user),
+) -> SellerProfileCompletionRead:
+    return get_my_seller_profile_completion(current_user)
 
 
 @router.get("/me/subscription", response_model=SellerSubscriptionRead)

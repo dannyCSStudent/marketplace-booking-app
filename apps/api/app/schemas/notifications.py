@@ -139,6 +139,37 @@ class OrderExceptionEventRead(BaseModel):
     created_at: datetime
 
 
+class OrderFraudWatchBuyerSummaryRead(BaseModel):
+    buyer_id: str
+    buyer_display_name: str
+    alert_delivery_count: int
+    latest_alert_delivery_status: str
+    latest_alert_delivery_created_at: datetime
+    order_exception_count: int
+    recent_order_exception_count: int
+    risk_level: str
+    alert_reason: str
+    latest_order_id: str | None = None
+    latest_order_status: str | None = None
+    acknowledged: bool
+
+
+class OrderFraudWatchEventRead(BaseModel):
+    id: str
+    buyer_id: str
+    buyer_display_name: str
+    delivery_id: str | None = None
+    actor_user_id: str
+    action: str
+    alert_signature: str
+    order_exception_count: int
+    recent_order_exception_count: int
+    risk_level: str
+    latest_order_id: str | None = None
+    latest_order_status: str | None = None
+    created_at: datetime
+
+
 class BookingConflictSellerSummaryRead(BaseModel):
     seller_id: str
     seller_slug: str
@@ -256,4 +287,19 @@ class SubscriptionDowngradeEventRead(BaseModel):
     to_tier_name: str | None = None
     reason_code: str | None = None
     note: str | None = None
+    created_at: datetime
+
+
+class SellerProfileCompletionEventRead(BaseModel):
+    id: str
+    seller_id: str
+    seller_slug: str
+    seller_display_name: str
+    delivery_id: str | None = None
+    actor_user_id: str
+    action: str
+    alert_signature: str
+    completion_percent: int
+    missing_fields: list[str]
+    summary: str
     created_at: datetime

@@ -13,6 +13,7 @@ class OpenAPIContractTests(unittest.TestCase):
             "/profiles/me",
             "/sellers",
             "/sellers/me",
+            "/sellers/me/completion",
             "/sellers/by-id/{seller_id}",
             "/sellers/{slug}",
             "/sellers/{slug}/listings/summary",
@@ -47,13 +48,26 @@ class OpenAPIContractTests(unittest.TestCase):
             "/notifications/admin/inventory-alerts/summaries",
             "/notifications/admin/inventory-alerts/events",
             "/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge",
+            "/notifications/admin/seller-inactivity/summaries",
+            "/notifications/admin/seller-inactivity/events",
+            "/notifications/admin/seller-inactivity/{seller_id}/acknowledge",
             "/notifications/admin/subscription-downgrades/sellers",
             "/notifications/admin/subscription-downgrades/events",
             "/notifications/admin/subscription-downgrades/{seller_id}/acknowledge",
+            "/notifications/admin/seller-profile-completion/events",
+            "/notifications/admin/seller-profile-completion/{seller_id}/acknowledge",
+            "/notifications/admin/order-fraud-watch/summaries",
+            "/notifications/admin/order-fraud-watch/events",
+            "/notifications/admin/order-fraud-watch/{buyer_id}/acknowledge",
             "/notifications/{delivery_id}/retry",
             "/notifications/bulk-retry",
             "/admin/users",
             "/admin/seller-trust/interventions",
+            "/admin/seller-profile-completion",
+            "/admin/monetization/watchlist/alerts",
+            "/admin/monetization/watchlist/summaries",
+            "/admin/monetization/watchlist/events",
+            "/admin/monetization/watchlist/{alert_id}/acknowledge",
         }
 
         self.assertTrue(expected_paths.issubset(paths.keys()))
@@ -66,6 +80,7 @@ class OpenAPIContractTests(unittest.TestCase):
             "CategoryRead",
             "ProfileRead",
             "SellerRead",
+            "SellerProfileCompletionRead",
             "SellerTrustScoreRead",
             "SellerTrustInterventionRead",
             "SellerListingSummaryRead",
@@ -83,8 +98,16 @@ class OpenAPIContractTests(unittest.TestCase):
             "DeliveryFailureEventRead",
             "InventoryAlertSummaryRead",
             "InventoryAlertEventRead",
+            "SellerInactivitySummaryRead",
+            "SellerInactivityEventRead",
             "SubscriptionDowngradeSellerSummaryRead",
             "SubscriptionDowngradeEventRead",
+            "SellerProfileCompletionEventRead",
+            "OrderFraudWatchBuyerSummaryRead",
+            "OrderFraudWatchEventRead",
+            "MonetizationWatchlistAlertRead",
+            "MonetizationWatchlistSummaryRead",
+            "MonetizationWatchlistEventRead",
             "AdminUserRead",
         ]:
             self.assertIn(schema_name, components)
@@ -113,6 +136,7 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("get", paths["/listings/admin"])
         self.assertIn("post", paths["/listings"])
         self.assertIn("get", paths["/sellers/by-id/{seller_id}"])
+        self.assertIn("get", paths["/sellers/me/completion"])
         self.assertIn("get", paths["/sellers/{slug}/listings/summary"])
         self.assertIn("get", paths["/sellers/{slug}/listings"])
         self.assertIn("patch", paths["/orders/{order_id}"])
@@ -133,12 +157,26 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertIn("get", paths["/notifications/admin/inventory-alerts/events"])
         self.assertIn("post", paths["/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge"])
         self.assertIn("delete", paths["/notifications/admin/inventory-alerts/{seller_id}/{listing_id}/acknowledge"])
+        self.assertIn("get", paths["/notifications/admin/seller-inactivity/summaries"])
+        self.assertIn("get", paths["/notifications/admin/seller-inactivity/events"])
+        self.assertIn("post", paths["/notifications/admin/seller-inactivity/{seller_id}/acknowledge"])
+        self.assertIn("delete", paths["/notifications/admin/seller-inactivity/{seller_id}/acknowledge"])
+        self.assertIn("get", paths["/notifications/admin/order-fraud-watch/summaries"])
+        self.assertIn("get", paths["/notifications/admin/order-fraud-watch/events"])
+        self.assertIn("post", paths["/notifications/admin/order-fraud-watch/{buyer_id}/acknowledge"])
+        self.assertIn("delete", paths["/notifications/admin/order-fraud-watch/{buyer_id}/acknowledge"])
         self.assertIn("get", paths["/notifications/admin/subscription-downgrades/sellers"])
         self.assertIn("get", paths["/notifications/admin/subscription-downgrades/events"])
         self.assertIn("post", paths["/notifications/admin/subscription-downgrades/{seller_id}/acknowledge"])
         self.assertIn("delete", paths["/notifications/admin/subscription-downgrades/{seller_id}/acknowledge"])
         self.assertIn("get", paths["/admin/users"])
         self.assertIn("get", paths["/admin/seller-trust/interventions"])
+        self.assertIn("get", paths["/admin/seller-profile-completion"])
+        self.assertIn("get", paths["/admin/monetization/watchlist/alerts"])
+        self.assertIn("get", paths["/admin/monetization/watchlist/summaries"])
+        self.assertIn("get", paths["/admin/monetization/watchlist/events"])
+        self.assertIn("post", paths["/admin/monetization/watchlist/{alert_id}/acknowledge"])
+        self.assertIn("delete", paths["/admin/monetization/watchlist/{alert_id}/acknowledge"])
 
     def test_listing_schema_exposes_real_contract_fields(self):
         schema = app.openapi()

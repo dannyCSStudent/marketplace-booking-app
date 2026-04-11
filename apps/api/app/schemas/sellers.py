@@ -1,5 +1,18 @@
 from pydantic import BaseModel, Field
 
+
+class SellerProfileCompletionRead(BaseModel):
+    seller_id: str
+    seller_slug: str
+    seller_display_name: str
+    total_checks: int = 0
+    completed_checks: int = 0
+    missing_checks: int = 0
+    completion_percent: int = 0
+    missing_fields: list[str] = Field(default_factory=list)
+    is_complete: bool = False
+    summary: str = ""
+
 class SellerTrustScoreRead(BaseModel):
     score: int
     label: str

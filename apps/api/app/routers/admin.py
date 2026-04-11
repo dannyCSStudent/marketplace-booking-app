@@ -1,7 +1,10 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
 
 from app.dependencies.admin import require_admin_user
 from app.schemas.admin import AdminUserRead
+from app.schemas.monetization import MonetizationWatchlistAlertRead, MonetizationWatchlistEventRead, MonetizationWatchlistSummaryRead
 from app.schemas.listings import (
     ListingPricingScopeCount,
     ListingPromotionDetail,
@@ -10,8 +13,7 @@ from app.schemas.listings import (
     ListingRead,
 )
 from app.schemas.platform_fees import DeliveryFeeHistoryPoint, PlatformFeeHistoryPoint
-from app.schemas.sellers import SellerLookupRead
-from app.schemas.sellers import SellerTrustInterventionRead
+from app.schemas.sellers import SellerLookupRead, SellerProfileCompletionRead, SellerTrustInterventionRead
 from app.schemas.subscriptions import (
     SellerSubscriptionAssign,
     SellerSubscriptionEventRead,
@@ -29,9 +31,15 @@ from app.services.listings import (
     set_listing_promotion,
 )
 from app.services.delivery_fees import list_delivery_fee_history
+from app.services.monetization_watchlist import (
+    acknowledge_monetization_watchlist_alert,
+    clear_monetization_watchlist_alert_acknowledgement,
+    list_monetization_watchlist_alerts,
+    list_monetization_watchlist_events,
+    list_monetization_watchlist_summaries,
+)
 from app.services.platform_fees import list_platform_fee_history
-from app.services.sellers import search_sellers
-from app.services.sellers import list_seller_trust_interventions
+from app.services.sellers import list_seller_profile_completions, list_seller_trust_interventions, search_sellers
 from app.services.subscriptions import (
     assign_seller_subscription,
     create_subscription_tier,
@@ -63,6 +71,15 @@ def read_seller_trust_interventions(
     current_user=Depends(require_admin_user),
 ) -> list[SellerTrustInterventionRead]:
     return list_seller_trust_interventions(limit=limit)
+
+
+@router.get("/seller-profile-completion", response_model=list[SellerProfileCompletionRead])
+def read_seller_profile_completions(
+    limit: int = Query(24, ge=1, le=100),
+    state: str | None = Query(None),
+    current_user=Depends(require_admin_user),
+) -> list[SellerProfileCompletionRead]:
+    return list_seller_profile_completions(limit=limit, state=state)
 
 
 @router.get(
@@ -194,3 +211,60 @@ def assign_admin_seller_subscription(
     current_user=Depends(require_admin_user),
 ) -> SellerSubscriptionRead:
     return assign_seller_subscription(payload, actor_user_id=current_user.id)
+
+
+@router.get(
+    "/monetization/watchlist/alerts",
+    response_model=list[MonetizationWatchlistAlertRead],
+)
+def read_monetization_watchlist_alerts(
+    since_at: datetime | None = Query(None),
+    current_user=Depends(require_admin_user),
+) -> list[MonetizationWatchlistAlertRead]:
+    return list_monetization_watchlist_alerts(since_at=since_at)
+
+
+@router.get(
+    "/monetization/watchlist/summaries",
+    response_model=list[MonetizationWatchlistSummaryRead],
+)
+def read_monetization_watchlist_summaries(
+    since_at: datetime | None = Query(None),
+    limit: int = Query(12, ge=1, le=50),
+    state: str | None = Query(None),
+    current_user=Depends(require_admin_user),
+) -> list[MonetizationWatchlistSummaryRead]:
+    return list_monetization_watchlist_summaries(since_at=since_at, limit=limit, state=state)
+
+
+@router.get(
+    "/monetization/watchlist/events",
+    response_model=list[MonetizationWatchlistEventRead],
+)
+def read_monetization_watchlist_events(
+    limit: int = Query(20, ge=1, le=100),
+    current_user=Depends(require_admin_user),
+) -> list[MonetizationWatchlistEventRead]:
+    return list_monetization_watchlist_events(limit=limit)
+
+
+@router.post(
+    "/monetization/watchlist/{alert_id}/acknowledge",
+    response_model=list[MonetizationWatchlistEventRead],
+)
+def acknowledge_monetization_watchlist_alert_route(
+    alert_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[dict[str, object]]:
+    return acknowledge_monetization_watchlist_alert(alert_id, actor_user_id=current_user.id)
+
+
+@router.delete(
+    "/monetization/watchlist/{alert_id}/acknowledge",
+    response_model=list[MonetizationWatchlistEventRead],
+)
+def clear_monetization_watchlist_alert_acknowledgement_route(
+    alert_id: str,
+    current_user=Depends(require_admin_user),
+) -> list[dict[str, object]]:
+    return clear_monetization_watchlist_alert_acknowledgement(alert_id, actor_user_id=current_user.id)
