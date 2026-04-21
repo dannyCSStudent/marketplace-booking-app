@@ -9,8 +9,7 @@ import {
   formatLocation,
   type PlatformFeeRateRead,
 } from '@/lib/api';
-import { setBuyerBrowseFilters } from '@/lib/session-storage';
-import { getBuyerRecentListings, setBuyerRecentListings } from '@/lib/session-storage';
+import { getBuyerRecentListings, setBuyerBrowseFilters, setBuyerRecentListings } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
 function getFulfillmentOptions(listing: {
@@ -48,14 +47,18 @@ function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }
 
 function getSuggestionSecondarySignal(listing: {
   duration_minutes?: number | null;
-  price_cents: number;
-  currency: string;
+  price_cents?: number | null;
+  currency?: string | null;
 }) {
   if (listing.duration_minutes) {
     return `${listing.duration_minutes} min`;
   }
 
-  return formatCurrency(listing.price_cents, listing.currency);
+  if (typeof listing.price_cents === 'number' && typeof listing.currency === 'string') {
+    return formatCurrency(listing.price_cents, listing.currency);
+  }
+
+  return 'Price unavailable';
 }
 
 function getSuggestionActionMode(listing: {
@@ -527,7 +530,10 @@ export default function ListingDetailScreen() {
       : 'Unavailable';
   const platformFeeAmountLabel =
     platformFee && platformFeeRateNumber > 0
-      ? formatCurrency(Math.round(listing.price_cents * platformFeeRateNumber), listing.currency)
+      ? formatCurrency(
+          Math.round((listing.price_cents ?? 0) * platformFeeRateNumber),
+          listing.currency ?? 'USD',
+        )
       : null;
   const platformFeeDetail = platformFeeLoading
     ? 'Connecting to the current rate'
@@ -541,8 +547,8 @@ export default function ListingDetailScreen() {
 
     try {
       const order = await createOrder({
-        sellerId: listing.seller_id,
-        listingId: listing.id,
+        sellerId: listing!.seller_id,
+        listingId: listing!.id,
         quantity: Number(quantity),
         fulfillment: selectedFulfillment,
         notes,
@@ -564,8 +570,8 @@ export default function ListingDetailScreen() {
       }
 
       const booking = await createBooking({
-        sellerId: listing.seller_id,
-        listingId: listing.id,
+        sellerId: listing!.seller_id,
+        listingId: listing!.id,
         scheduledStart: bookingWindow.start.toISOString(),
         scheduledEnd: bookingWindow.end.toISOString(),
         notes,

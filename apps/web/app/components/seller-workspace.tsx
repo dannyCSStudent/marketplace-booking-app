@@ -1687,7 +1687,7 @@ type DeliveryAlertFilter =
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [searchParams]);
 
   function updateResponseNote(id: string, value: string) {
     setResponseNotes((current) => ({
@@ -1896,7 +1896,7 @@ type DeliveryAlertFilter =
     } catch {
       window.sessionStorage.removeItem(SELLER_INVENTORY_ALERT_ACTIVITY_COLLAPSED_KEY);
     }
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2269,7 +2269,7 @@ type DeliveryAlertFilter =
         setInventoryAlertActivityFilter(fallbackActivityFilter);
       }
     }
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     const storedDeliveryAlertFilter = searchParams.get("deliveryAlert");
@@ -2980,6 +2980,7 @@ type DeliveryAlertFilter =
     execute: (accessToken: string) => Promise<Result>;
     successFeedback?: ActionFeedback;
     onSuccess?: (result: Result) => ActionFeedback | void;
+    onError?: (message: string) => void;
     onStart?: () => void;
     onFinally?: () => void;
     reloadWorkspace?: boolean;
@@ -3008,7 +3009,9 @@ type DeliveryAlertFilter =
           setActionFeedback(feedback);
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : args.errorMessage);
+        const message = err instanceof Error ? err.message : args.errorMessage;
+        setError(message);
+        args.onError?.(message);
         setActionFeedback(null);
       } finally {
         args.onFinally?.();
@@ -4888,47 +4891,6 @@ type DeliveryAlertFilter =
       );
   }, [notificationDeliveries]);
   const latestDeliveryFailureGroup = deliveryFailureGroups[0] ?? null;
-  const deliveryFailureQueuedCount = useMemo(
-    () =>
-      deliveryFailureGroups.reduce(
-        (count, group) =>
-          count + group.deliveries.filter((delivery) => delivery.delivery_status === "queued").length,
-        0,
-      ),
-    [deliveryFailureGroups],
-  );
-  const deliveryFailureSentCount = useMemo(
-    () =>
-      deliveryFailureGroups.reduce(
-        (count, group) =>
-          count + group.deliveries.filter((delivery) => delivery.delivery_status === "sent").length,
-        0,
-      ),
-    [deliveryFailureGroups],
-  );
-  const deliveryFailureFailedCount = useMemo(
-    () =>
-      deliveryFailureGroups.reduce(
-        (count, group) =>
-          count + group.deliveries.filter((delivery) => delivery.delivery_status === "failed").length,
-        0,
-      ),
-    [deliveryFailureGroups],
-  );
-  const filteredDeliveryFailureGroups = useMemo(
-    () =>
-      deliveryFailureGroups
-        .filter((group) => matchesDeliveryRecency(group.latestCreatedAt, deliveryRecencyFilter))
-        .filter((group) => {
-          if (deliveryStatusFilter === "all") {
-            return true;
-          }
-
-          return group.deliveries.some((delivery) => delivery.delivery_status === deliveryStatusFilter);
-        })
-        .slice(0, 4),
-    [deliveryFailureGroups, deliveryRecencyFilter, deliveryStatusFilter],
-  );
   const filteredDeliveryFailureActivity = useMemo(
     () => deliveryFailureActivity,
     [deliveryFailureActivity],
@@ -6295,7 +6257,6 @@ type DeliveryAlertFilter =
     listingAdjustmentFilter,
     listingWatchlistFilter,
     listingTrendFilter,
-    deliveryAlertFilter,
     workspace?.listings,
     workspacePreset,
   ]);
@@ -6412,12 +6373,13 @@ type DeliveryAlertFilter =
         sellerDisplayName: workspace.seller.display_name,
         completionPercent: workspace.profileCompletion.completed_checks
           ? Math.round(
-              (workspace.profileCompletion.completed_checks / workspace.profileCompletion.total_checks) *
+              (workspace.profileCompletion.completed_checks /
+                (workspace.profileCompletion.total_checks ?? workspace.profileCompletion.completed_checks)) *
                 100,
             )
           : 0,
-        missingFields: [...workspace.profileCompletion.missing_fields],
-        summary: workspace.profileCompletion.summary,
+        missingFields: [...(workspace.profileCompletion.missing_fields ?? [])],
+        summary: String(workspace.profileCompletion.summary ?? ""),
       };
 
       setSellerProfileCompletionActivity((current) => [
@@ -7704,6 +7666,7 @@ type DeliveryAlertFilter =
       | "delivery-drag"
       | "delivery-pressure"
       | "trust-watch"
+      | "seller-inactivity"
       | "recovery-lane"
       | "recovered-recently"
       | "focused-work",
@@ -8398,11 +8361,13 @@ type DeliveryAlertFilter =
                       Profile Completion Alert
                     </p>
                     <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
-                      {latestProfileCompletionDelivery.payload?.summary ??
-                        "Finish the remaining seller profile fields."}
+                      {String(
+                        latestProfileCompletionDelivery.payload?.summary ??
+                          "Finish the remaining seller profile fields.",
+                      )}
                     </p>
                     <p className="mt-1 text-sm text-foreground/64">
-                      {latestProfileCompletionDelivery.payload?.missing_fields?.length
+                      {Array.isArray(latestProfileCompletionDelivery.payload?.missing_fields)
                         ? `${latestProfileCompletionDelivery.payload.missing_fields.length} field${
                             latestProfileCompletionDelivery.payload.missing_fields.length === 1 ? "" : "s"
                           } still need attention`
@@ -8448,12 +8413,12 @@ type DeliveryAlertFilter =
                         : "border-amber-200 bg-amber-50 text-amber-700"
                     }`}
                   >
-                    {workspace.profileCompletion.completed_checks}/{workspace.profileCompletion.total_checks} complete
+                    {workspace.profileCompletion.completed_checks}/{workspace.profileCompletion.total_checks ?? workspace.profileCompletion.completed_checks} complete
                   </span>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {workspace.profileCompletion.missing_fields.length > 0 ? (
-                    workspace.profileCompletion.missing_fields.map((field) => (
+                  {(workspace.profileCompletion.missing_fields ?? []).length > 0 ? (
+                    (workspace.profileCompletion.missing_fields ?? []).map((field) => (
                       <span
                         key={field}
                         className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700"
@@ -9737,7 +9702,7 @@ type DeliveryAlertFilter =
             {sellerTrustScore ? (
               <div
                 className={`rounded-3xl border px-4 py-4 ${getSellerReviewPressureToneClass(
-                  sellerTrustScore.risk_level,
+                  sellerTrustScore.risk_level ?? null,
                 )}`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -9754,7 +9719,7 @@ type DeliveryAlertFilter =
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full border border-border bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60">
-                      {sellerTrustScore.risk_level}
+                      {sellerTrustScore.risk_level ?? "unknown"}
                     </span>
                     <button
                       className="rounded-full border border-foreground bg-foreground px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-background transition hover:opacity-90"
@@ -9781,9 +9746,9 @@ type DeliveryAlertFilter =
                     {sellerTrustScore.trend_direction}
                   </span>
                 </div>
-                {sellerTrustScore.risk_reasons.length > 0 ? (
+                {(sellerTrustScore.risk_reasons ?? []).length > 0 ? (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {sellerTrustScore.risk_reasons.slice(0, 3).map((reason) => (
+                    {(sellerTrustScore.risk_reasons ?? []).slice(0, 3).map((reason) => (
                       <span
                         key={reason}
                         className="rounded-full border border-border bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/60"
@@ -10739,7 +10704,6 @@ type DeliveryAlertFilter =
               <div className="mt-4 space-y-3">
                 {filteredBookingConflictGroups.length > 0 ? (
                   filteredBookingConflictGroups.map((group) => {
-                    const listing = workspace?.listings.find((item) => item.id === group.listingId) ?? null;
                     const bookingConflictSummary = bookingConflictSummaryByListingId[group.listingId] ?? null;
 
                     return (
@@ -12031,13 +11995,19 @@ type DeliveryAlertFilter =
                         ))}
                       </div>
                       <div className="flex items-center gap-2">
-                        <button
-                          className="rounded-full border border-foreground/40 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-foreground/80 hover:bg-foreground/5"
-                          onClick={() => applyCreateListingSuggestion(listingCreateAiState.suggestion)}
-                          type="button"
-                        >
-                          Use suggestion
-                        </button>
+                        {(() => {
+                          const suggestion = listingCreateAiState.suggestion;
+
+                          return suggestion ? (
+                          <button
+                            className="rounded-full border border-foreground/40 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-foreground/80 hover:bg-foreground/5"
+                            onClick={() => applyCreateListingSuggestion(suggestion)}
+                            type="button"
+                          >
+                            Use suggestion
+                          </button>
+                          ) : null;
+                        })()}
                         <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/60">
                           {listingCreateAiState.suggestion.summary}
                         </p>

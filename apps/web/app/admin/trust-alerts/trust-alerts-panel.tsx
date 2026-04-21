@@ -142,7 +142,7 @@ export function TrustAlertsPanel() {
       }
     }
     eventFilterInitialized.current = true;
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!eventFilterInitialized.current) {
@@ -644,10 +644,14 @@ export function TrustAlertsPanel() {
                       </span>
                     </div>
                     <p className="text-sm font-medium text-foreground">
-                      {delivery.payload?.subject ?? "Trust alert notification"}
+                      {String(delivery.payload?.subject ?? "Trust alert notification")}
                     </p>
                     <p className="text-sm leading-7 text-foreground/68">
-                      {delivery.payload?.body ?? delivery.payload?.intervention_reason ?? "Seller trust intervention notification."}
+                      {String(
+                        delivery.payload?.body ??
+                          delivery.payload?.intervention_reason ??
+                          "Seller trust intervention notification.",
+                      )}
                     </p>
                   </div>
 

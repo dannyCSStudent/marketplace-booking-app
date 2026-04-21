@@ -545,6 +545,10 @@ export function BuyerActivityPanel() {
     return dashboard.deliveries;
   }, [dashboard, view]);
   const watchlistAlerts = useMemo(() => {
+    if (!dashboard) {
+      return [];
+    }
+
     const alerts: Array<{
       id: string;
       lane: Exclude<BuyerWatchlistFilter, "all">;
@@ -651,7 +655,7 @@ export function BuyerActivityPanel() {
     }
 
     return alerts;
-  }, [dashboard.bookings, dashboard.deliveries, dashboard.orders]);
+  }, [dashboard]);
   const filteredWatchlistAlerts = useMemo(
     () =>
       watchlistAlerts.filter((alert) => watchlistFilter === "all" || alert.lane === watchlistFilter),

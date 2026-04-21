@@ -38,43 +38,56 @@ type PromotionOverviewRecentActivityEntry =
       windowDays: number;
     };
 
+type PromotionOverviewRecentActivityInput =
+  | {
+      kind: "focus";
+      label: string;
+      detail: string;
+      type: PromotionListingTypeFilter;
+    }
+  | {
+      kind: "window";
+      label: string;
+      detail: string;
+      windowDays: number;
+    };
+
 export default function PromotionOverviewCard() {
   const { preferences, setPromotionDashboard } = useMonetizationPreferences();
   const { summary, events, listingTypeById, status, error, lastUpdated } = usePromotionAnalytics();
   const { windowDays } = preferences.promotionDashboard;
-  const [recentActivity, setRecentActivity] = useState<PromotionOverviewRecentActivityEntry[]>([]);
-  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(PROMOTION_OVERVIEW_ACTIVITY_KEY);
-      if (!stored) {
-        return;
+  const [recentActivity, setRecentActivity] = useState<PromotionOverviewRecentActivityEntry[]>(
+    () => {
+      if (typeof window === "undefined") {
+        return [];
       }
 
-      const parsed = JSON.parse(stored) as PromotionOverviewRecentActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(PROMOTION_OVERVIEW_ACTIVITY_KEY);
-    }
-  }, []);
+      try {
+        const stored = window.sessionStorage.getItem(PROMOTION_OVERVIEW_ACTIVITY_KEY);
+        if (!stored) {
+          return [];
+        }
 
-  useEffect(() => {
+        const parsed = JSON.parse(stored) as PromotionOverviewRecentActivityEntry[];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        window.sessionStorage.removeItem(PROMOTION_OVERVIEW_ACTIVITY_KEY);
+        return [];
+      }
+    },
+  );
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>(() => {
     if (typeof window === "undefined") {
-      return;
+      return "all";
     }
 
     const stored = window.sessionStorage.getItem(PROMOTION_OVERVIEW_ACTIVITY_FILTER_KEY);
     if (stored === "all" || stored === "focus" || stored === "window") {
-      setRecentActivityFilter(stored);
+      return stored;
     }
-  }, []);
+
+    return "all";
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -108,7 +121,14 @@ export default function PromotionOverviewCard() {
 
   const metrics = useMemo(() => {
     const totalPromoted = summary.reduce((sum, bucket) => sum + bucket.count, 0);
-    const windowStart = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+    const latestTimestamp = events.reduce((currentLatest, event) => {
+      const createdAt = new Date(event.created_at).getTime();
+      if (Number.isNaN(createdAt)) {
+        return currentLatest;
+      }
+      return Math.max(currentLatest, createdAt);
+    }, 0);
+    const windowStart = latestTimestamp - windowDays * 24 * 60 * 60 * 1000;
     const counts: Record<PromotionListingTypeFilter, { added: number; removed: number }> = {
       all: { added: 0, removed: 0 },
       product: { added: 0, removed: 0 },
@@ -157,14 +177,14 @@ export default function PromotionOverviewCard() {
     };
   }, [events, listingTypeById, summary, windowDays]);
 
-  const recordRecentActivity = (entry: Omit<PromotionOverviewRecentActivityEntry, "id" | "createdAt">) => {
+  const recordRecentActivity = (entry: PromotionOverviewRecentActivityInput) => {
     setRecentActivity((current) =>
       [
         {
           ...entry,
           id: `${entry.kind}:${Date.now()}`,
           createdAt: new Date().toISOString(),
-        },
+        } as PromotionOverviewRecentActivityEntry,
         ...current,
       ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
     );

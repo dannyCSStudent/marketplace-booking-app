@@ -329,6 +329,9 @@ function normalizeTransactionSupportPreferences(value: unknown): TransactionSupp
                 listingHealth: rawSnapshot.listingHealth,
                 q: rawSnapshot.q,
                 focus: rawSnapshot.focus,
+                activity_filter: rawSnapshot.activity_filter,
+                activity_entry_limit: rawSnapshot.activity_entry_limit,
+                activity_collapsed_groups: rawSnapshot.activity_collapsed_groups,
               },
               focus_item_key:
                 typeof item.focus_item_key === "string" && item.focus_item_key.trim()
@@ -1051,7 +1054,7 @@ export function TransactionSupportPanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1214,6 +1217,9 @@ export function TransactionSupportPanel() {
       listingHealth: listingHealthFilter,
       q: searchQuery,
       focus: focusKey,
+      activity_filter: activityFilter,
+      activity_entry_limit: activityEntryLimit,
+      activity_collapsed_groups: collapsedActivityGroups,
     };
   }
 
@@ -1374,6 +1380,9 @@ export function TransactionSupportPanel() {
         listingHealth: next.listingHealth ?? "all",
         q: "",
         focus: "__AUTO__",
+        activity_filter: activityFilter,
+        activity_entry_limit: activityEntryLimit,
+        activity_collapsed_groups: collapsedActivityGroups,
       },
     });
   }
@@ -2082,7 +2091,14 @@ export function TransactionSupportPanel() {
           ).length
         : items.filter((item) => item.adminAssigneeUserId && (isStaleAssigned(item) || item.adminIsEscalated)).length,
     }),
-    [currentAdminUserId, getAssignedRole, hasFailedDelivery, isTrustDrivenItem, items],
+    [
+      counts.sellerTrustIntervention,
+      currentAdminUserId,
+      getAssignedRole,
+      hasFailedDelivery,
+      isTrustDrivenItem,
+      items,
+    ],
   );
 
   const filteredItems = useMemo(() => {

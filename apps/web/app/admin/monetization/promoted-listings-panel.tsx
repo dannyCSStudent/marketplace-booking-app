@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   PROMOTION_LISTING_FOCUS_EVENT,
   type PromotionListingFocusDetail,
-  type PromotionListingTypeFilter,
 } from "@/app/admin/monetization/promotion-listing-focus";
 import {
   PROMOTION_DASHBOARD_FILTER_EVENT,
@@ -19,8 +18,6 @@ import { highlightMonetizationSection, scrollToMonetizationSection } from "@/app
 import { useMonetizationPreferences } from "@/app/admin/monetization/monetization-preferences-context";
 import { usePromotionAnalytics } from "@/app/admin/monetization/promotion-analytics-context";
 import { escapeCsvValue } from "@/app/admin/monetization/promotion-formatting";
-
-type SellerSegmentFilter = "all" | "multi_listing_sellers" | "single_listing_sellers";
 
 export default function PromotedListingsPanel() {
   const { preferences, setPromotionDashboard } = useMonetizationPreferences();
@@ -40,7 +37,10 @@ export default function PromotedListingsPanel() {
       if (!detail?.type) {
         return;
       }
-      setPromotionDashboard((current) => ({ ...current, typeFilter: detail.type }));
+      setPromotionDashboard((current) => ({
+        ...current,
+        typeFilter: detail.type ?? "all",
+      }));
       scrollToMonetizationSection("promoted-listings-panel");
     };
 
@@ -59,7 +59,7 @@ export default function PromotedListingsPanel() {
       setPromotionDashboard((current) => ({
         ...current,
         typeFilter: detail.typeFilter ?? current.typeFilter,
-        segmentFilter: (detail.segmentFilter as SellerSegmentFilter | undefined) ?? current.segmentFilter,
+        segmentFilter: detail.segmentFilter ?? current.segmentFilter,
       }));
       scrollToMonetizationSection("promoted-listings-panel");
     };
@@ -69,39 +69,6 @@ export default function PromotedListingsPanel() {
       window.removeEventListener(PROMOTION_DASHBOARD_FILTER_EVENT, handleFilterEvent);
     };
   }, [setPromotionDashboard]);
-
-  const exportCsv = () => {
-    if (filteredListings.length === 0) {
-      return;
-    }
-    const rows = filteredListings.map((listing) => [
-      listing.id,
-      listing.title,
-      listing.seller_name,
-      listing.type,
-      "promoted",
-      segmentFilter,
-      typeFilter,
-    ]);
-    const csv = [[
-      "listing_id",
-      "title",
-      "seller_id",
-      "listing_type",
-      "status",
-      "active_segment",
-      "active_type_filter",
-    ], ...rows]
-      .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `promoted-listings-${segmentFilter}-${typeFilter}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
 
   const sellerListingCounts = useMemo(
     () =>
@@ -132,18 +99,49 @@ export default function PromotedListingsPanel() {
     [listings],
   );
 
-  const filteredListings = useMemo(() => {
-    return listings.filter((listing) => {
-      const matchesSegment =
-        segmentFilter === "all"
-          ? true
-          : segmentFilter === "multi_listing_sellers"
-            ? sellerListingCounts[listing.seller_name] > 1
-            : sellerListingCounts[listing.seller_name] === 1;
-      const matchesType = typeFilter === "all" ? true : listing.type === typeFilter;
-      return matchesSegment && matchesType;
-    });
-  }, [listings, segmentFilter, sellerListingCounts, typeFilter]);
+  const filteredListings = listings.filter((listing) => {
+    const matchesSegment =
+      segmentFilter === "all"
+        ? true
+        : segmentFilter === "multi_listing_sellers"
+          ? sellerListingCounts[listing.seller_name] > 1
+          : sellerListingCounts[listing.seller_name] === 1;
+    const matchesType = typeFilter === "all" ? true : listing.type === typeFilter;
+    return matchesSegment && matchesType;
+  });
+
+  const exportCsv = useCallback(() => {
+    if (filteredListings.length === 0) {
+      return;
+    }
+    const rows = filteredListings.map((listing) => [
+      listing.id,
+      listing.title,
+      listing.seller_name,
+      listing.type,
+      "promoted",
+      segmentFilter,
+      typeFilter,
+    ]);
+    const csv = [[
+      "listing_id",
+      "title",
+      "seller_id",
+      "listing_type",
+      "status",
+      "active_segment",
+      "active_type_filter",
+    ], ...rows]
+      .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `promoted-listings-${segmentFilter}-${typeFilter}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [filteredListings, segmentFilter, typeFilter]);
 
   useEffect(() => {
     const handleExportEvent = (event: Event) => {
@@ -159,7 +157,7 @@ export default function PromotedListingsPanel() {
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [filteredListings, segmentFilter, typeFilter]);
+  }, [exportCsv]);
 
   const renderBody = () => {
     if (!lastUpdated && !error && listings.length === 0) {

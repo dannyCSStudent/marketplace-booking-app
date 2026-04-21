@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 
 import {
   formatCurrency,
@@ -44,9 +44,10 @@ type SubscriptionSummaryRecentActivityEntry =
       label: string;
       detail: string;
       createdAt: string;
+      direction: SubscriptionHistoryFilterDetail["direction"];
       reason: string;
       destructiveOnly?: boolean;
-      destructiveType?: "value_drop" | "perk_removal";
+      destructiveType?: "all" | "value_drop" | "perk_removal";
       windowDays: SubscriptionHistoryWindowDays;
     }
   | {
@@ -58,7 +59,7 @@ type SubscriptionSummaryRecentActivityEntry =
       sellerSlug?: string;
       tierId?: string;
       tierName?: string;
-      reasonCode?: string;
+      reasonCode?: SubscriptionAssignmentFocusDetail["reasonCode"];
     }
   | {
       id: string;
@@ -69,10 +70,133 @@ type SubscriptionSummaryRecentActivityEntry =
       windowDays: SubscriptionHistoryWindowDays;
     };
 
+type SubscriptionSummarySnapshot = {
+  assignedMrrCents: number;
+  activeSubscriptions: number;
+  tierCounts: Array<[string, number]>;
+  recentReasonCounts: Array<[string, number]>;
+  destructiveChangeCount: number;
+  destructiveChangeCount7d: number;
+  destructiveChangeDeltaWindow: number;
+  destructiveValueDropCount: number;
+  destructiveValueDropCountInWindow: number;
+  destructiveValueDropCount7d: number;
+  destructivePerkRemovalCount: number;
+  destructivePerkRemovalCountInWindow: number;
+  destructivePerkRemovalCount7d: number;
+  destructiveReasonCounts: Array<[string, number]>;
+  destructivePerkCounts: Array<[string, number]>;
+  filteredChanges: SellerSubscriptionEventRead[];
+  trialConversionCount: number;
+  retentionSaveCount: number;
+  analyticsEnabledCount: number;
+  priorityVisibilityCount: number;
+  premiumStorefrontCount: number;
+  totalTiers: number;
+};
+
+function buildSubscriptionSummaryCsv(summary: SubscriptionSummarySnapshot, windowDays: SubscriptionHistoryWindowDays) {
+  const rows: Array<[string, string | number]> = [
+    ["assigned_mrr_usd", (summary.assignedMrrCents / 100).toFixed(2)],
+    ["active_subscriptions", summary.activeSubscriptions],
+    ["live_tiers", summary.totalTiers],
+    ["analytics_enabled_sellers", summary.analyticsEnabledCount],
+    ["priority_visibility_sellers", summary.priorityVisibilityCount],
+    ["premium_storefront_sellers", summary.premiumStorefrontCount],
+    [`trial_conversions_${windowDays}d`, summary.trialConversionCount],
+    [`retention_saves_${windowDays}d`, summary.retentionSaveCount],
+    [`destructive_changes_${windowDays}d`, summary.destructiveChangeCount],
+    ["destructive_changes_7d", summary.destructiveChangeCount7d],
+    [`destructive_change_delta_${windowDays}d`, summary.destructiveChangeDeltaWindow],
+    [`value_drops_${windowDays}d`, summary.destructiveValueDropCount],
+    [`value_drops_window_${windowDays}d`, summary.destructiveValueDropCountInWindow],
+    ["value_drops_7d", summary.destructiveValueDropCount7d],
+    [`perk_removals_${windowDays}d`, summary.destructivePerkRemovalCount],
+    [`perk_removals_window_${windowDays}d`, summary.destructivePerkRemovalCountInWindow],
+    ["perk_removals_7d", summary.destructivePerkRemovalCount7d],
+  ];
+
+  summary.destructiveReasonCounts.forEach(([label, count]) => {
+    rows.push([`destructive_reason:${label}`, count]);
+  });
+  summary.destructivePerkCounts.forEach(([label, count]) => {
+    rows.push([`destructive_perk:${label}`, count]);
+  });
+
+  return [["metric", "value"], ...rows]
+    .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+    .join("\n");
+}
+
+function performSubscriptionSummaryExport(args: {
+  summary: SubscriptionSummarySnapshot;
+  windowDays: SubscriptionHistoryWindowDays;
+  events: SellerSubscriptionEventRead[];
+  setRecentActivity: Dispatch<SetStateAction<SubscriptionSummaryRecentActivityEntry[]>>;
+}) {
+  const filteredChangeCount = args.events.filter((event) => {
+    const createdAt = new Date(event.created_at ?? "").getTime();
+    return Number.isFinite(createdAt) && createdAt >= args.windowDays * 24 * 60 * 60 * 1000;
+  }).length;
+
+  args.setRecentActivity((current) =>
+    [
+      {
+        id: `export:${Date.now()}`,
+        kind: "export" as const,
+        label: `${args.windowDays}d summary export`,
+        detail: `${filteredChangeCount} filtered changes`,
+        createdAt: new Date().toISOString(),
+        windowDays: args.windowDays,
+      },
+      ...current,
+    ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
+  );
+
+  const csv = buildSubscriptionSummaryCsv(args.summary, args.windowDays);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "subscription-summary.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function SubscriptionSummaryPanel() {
   const [windowDays, setWindowDays] = useState<SubscriptionHistoryWindowDays>(30);
-  const [recentActivity, setRecentActivity] = useState<SubscriptionSummaryRecentActivityEntry[]>([]);
-  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
+  const [recentActivity, setRecentActivity] = useState<SubscriptionSummaryRecentActivityEntry[]>(
+    () => {
+      if (typeof window === "undefined") {
+        return [];
+      }
+
+      try {
+        const stored = window.sessionStorage.getItem(SUBSCRIPTION_SUMMARY_ACTIVITY_KEY);
+        if (!stored) {
+          return [];
+        }
+
+        const parsed = JSON.parse(stored) as SubscriptionSummaryRecentActivityEntry[];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        window.sessionStorage.removeItem(SUBSCRIPTION_SUMMARY_ACTIVITY_KEY);
+        return [];
+      }
+    },
+  );
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>(() => {
+    if (typeof window === "undefined") {
+      return "all";
+    }
+
+    const stored = window.sessionStorage.getItem(SUBSCRIPTION_SUMMARY_ACTIVITY_FILTER_KEY);
+    if (stored === "all" || stored === "history" || stored === "assignment" || stored === "export") {
+      return stored;
+    }
+
+    return "all";
+  });
   const {
     tiers,
     subscriptions: allSubscriptions,
@@ -82,41 +206,7 @@ export default function SubscriptionSummaryPanel() {
     lastUpdated,
     refresh,
   } = useSubscriptionAnalytics();
-  const subscriptions = useMemo(
-    () => allSubscriptions.filter((subscription) => subscription.is_active),
-    [allSubscriptions],
-  );
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(SUBSCRIPTION_SUMMARY_ACTIVITY_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as SubscriptionSummaryRecentActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(SUBSCRIPTION_SUMMARY_ACTIVITY_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const stored = window.sessionStorage.getItem(SUBSCRIPTION_SUMMARY_ACTIVITY_FILTER_KEY);
-    if (stored === "all" || stored === "history" || stored === "assignment" || stored === "export") {
-      setRecentActivityFilter(stored);
-    }
-  }, []);
+  const subscriptions = allSubscriptions.filter((subscription) => subscription.is_active);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -145,10 +235,11 @@ export default function SubscriptionSummaryPanel() {
       [
         {
           id: `history:${Date.now()}`,
-          kind: "history",
+          kind: "history" as const,
           label: `${detail.windowDays ?? windowDays}d history`,
           detail: `${detail.reason} · ${detail.destructiveOnly ? "destructive" : "all changes"}`,
           createdAt: new Date().toISOString(),
+          direction: detail.direction,
           reason: detail.reason,
           destructiveOnly: detail.destructiveOnly,
           destructiveType: detail.destructiveType,
@@ -166,7 +257,7 @@ export default function SubscriptionSummaryPanel() {
       [
         {
           id: `assignment:${Date.now()}`,
-          kind: "assignment",
+          kind: "assignment" as const,
           label: detail.sellerSlug ?? detail.tierName ?? "Seller assignment",
           detail: [detail.tierName, detail.reasonCode].filter(Boolean).join(" · "),
           createdAt: new Date().toISOString(),
@@ -181,27 +272,22 @@ export default function SubscriptionSummaryPanel() {
     window.dispatchEvent(new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, { detail }));
   };
 
-  const recordExportActivity = () => {
-    setRecentActivity((current) =>
-      [
-        {
-          id: `export:${Date.now()}`,
-          kind: "export",
-          label: `${windowDays}d summary export`,
-          detail: `${summary.filteredChanges.length} filtered changes`,
-          createdAt: new Date().toISOString(),
-          windowDays,
-        },
-        ...current,
-      ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
-    );
-  };
+  const windowFilteredChanges = events.filter((event) => {
+    const createdAt = new Date(event.created_at ?? "").getTime();
+    return Number.isFinite(createdAt) && createdAt >= windowDays * 24 * 60 * 60 * 1000;
+  });
 
-  const summary = useMemo(() => {
-    const now = Date.now();
-    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const summary = (() => {
+    const latestTimestamp = events.reduce((currentLatest, event) => {
+      const createdAt = new Date(event.created_at ?? "").getTime();
+      if (Number.isNaN(createdAt)) {
+        return currentLatest;
+      }
+      return Math.max(currentLatest, createdAt);
+    }, 0);
+    const sevenDaysAgo = latestTimestamp - 7 * 24 * 60 * 60 * 1000;
     const windowMs = windowDays * 24 * 60 * 60 * 1000;
-    const windowStart = now - windowMs;
+    const windowStart = latestTimestamp - windowMs;
     const priorWindowStart = windowStart - windowMs;
 
     const assignedMrrCents = subscriptions.reduce(
@@ -308,6 +394,7 @@ export default function SubscriptionSummaryPanel() {
       destructivePerkCounts: Object.entries(destructivePerkCounts).sort(
         (left, right) => right[1] - left[1],
       ),
+      filteredChanges: windowFilteredChanges,
       trialConversionCount,
       retentionSaveCount,
       analyticsEnabledCount,
@@ -315,51 +402,15 @@ export default function SubscriptionSummaryPanel() {
       premiumStorefrontCount,
       totalTiers: tiers.length,
     };
-  }, [events, subscriptions, tiers, windowDays]);
-
-  const exportSummaryCsv = () => {
-    const rows: Array<[string, string | number]> = [
-      ["assigned_mrr_usd", (summary.assignedMrrCents / 100).toFixed(2)],
-      ["active_subscriptions", summary.activeSubscriptions],
-      ["live_tiers", summary.totalTiers],
-      ["analytics_enabled_sellers", summary.analyticsEnabledCount],
-      ["priority_visibility_sellers", summary.priorityVisibilityCount],
-      ["premium_storefront_sellers", summary.premiumStorefrontCount],
-      [`trial_conversions_${windowDays}d`, summary.trialConversionCount],
-      [`retention_saves_${windowDays}d`, summary.retentionSaveCount],
-      [`destructive_changes_${windowDays}d`, summary.destructiveChangeCount],
-      ["destructive_changes_7d", summary.destructiveChangeCount7d],
-      [`destructive_change_delta_${windowDays}d`, summary.destructiveChangeDeltaWindow],
-      [`value_drops_${windowDays}d`, summary.destructiveValueDropCount],
-      [`value_drops_window_${windowDays}d`, summary.destructiveValueDropCountInWindow],
-      ["value_drops_7d", summary.destructiveValueDropCount7d],
-      [`perk_removals_${windowDays}d`, summary.destructivePerkRemovalCount],
-      [`perk_removals_window_${windowDays}d`, summary.destructivePerkRemovalCountInWindow],
-      ["perk_removals_7d", summary.destructivePerkRemovalCount7d],
-    ];
-
-    summary.destructiveReasonCounts.forEach(([label, count]) => {
-      rows.push([`destructive_reason:${label}`, count]);
-    });
-    summary.destructivePerkCounts.forEach(([label, count]) => {
-      rows.push([`destructive_perk:${label}`, count]);
-    });
-
-    const csv = [["metric", "value"], ...rows]
-      .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "subscription-summary.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  };
+  })();
 
   const runExportSummaryCsv = () => {
-    recordExportActivity();
-    exportSummaryCsv();
+    performSubscriptionSummaryExport({
+      summary,
+      windowDays,
+      events,
+      setRecentActivity,
+    });
   };
 
   useEffect(() => {
@@ -369,14 +420,19 @@ export default function SubscriptionSummaryPanel() {
         return;
       }
       highlightMonetizationSection("subscription-summary-panel");
-      runExportSummaryCsv();
+      performSubscriptionSummaryExport({
+        summary,
+        windowDays,
+        events,
+        setRecentActivity,
+      });
     };
 
     window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [runExportSummaryCsv, summary, windowDays]);
+  }, [events, summary, windowDays]);
 
   const recentActivityCounts = useMemo(
     () => ({
@@ -509,6 +565,7 @@ export default function SubscriptionSummaryPanel() {
                       className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
                       onClick={() =>
                         openHistoryView({
+                          direction: entry.direction,
                           reason: entry.reason as SubscriptionHistoryFilterDetail["reason"],
                           destructiveOnly: entry.destructiveOnly,
                           destructiveType: entry.destructiveType,

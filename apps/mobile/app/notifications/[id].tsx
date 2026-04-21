@@ -22,7 +22,12 @@ function toggleRetryMode(mode: 'best_effort' | 'atomic') {
 export default function NotificationDeliveryDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { notificationDeliveries, notifications, retryNotificationDelivery } = useBuyerSession();
+  const {
+    notificationDeliveries,
+    notifications,
+    retryNotificationDelivery,
+    bulkRetryNotificationDeliveries,
+  } = useBuyerSession();
   const [retryingCurrent, setRetryingCurrent] = useState(false);
   const [retryingRelated, setRetryingRelated] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -128,7 +133,7 @@ export default function NotificationDeliveryDetailScreen() {
   );
 
   function retryCurrentDelivery() {
-    if (delivery.delivery_status !== 'failed') {
+    if (delivery!.delivery_status !== 'failed') {
       return;
     }
 
@@ -138,7 +143,7 @@ export default function NotificationDeliveryDetailScreen() {
         setActionMessage(null);
         setActionDetails([]);
         setRetryingCurrent(true);
-        await retryNotificationDelivery(delivery.id);
+        await retryNotificationDelivery(delivery!.id);
         setActionMessage('Retried this delivery.');
       } catch (error: unknown) {
         setActionError(error instanceof Error ? error.message : 'Unable to retry this delivery.');
@@ -159,7 +164,7 @@ export default function NotificationDeliveryDetailScreen() {
         setActionMessage(null);
         setActionDetails([]);
         setRetryingRelated(true);
-        const result = await retryNotificationDelivery(
+        const result = await bulkRetryNotificationDeliveries(
           failedRelatedDeliveries.map((item) => item.id),
           deliveryRetryMode,
         );

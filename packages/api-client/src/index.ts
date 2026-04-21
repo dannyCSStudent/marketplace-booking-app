@@ -235,6 +235,7 @@ export type ListingBookingSuggestionRead = {
   rationale: string;
 };
 export type ListingPromotionSummary = ApiSchemaMap["ListingPromotionSummary"];
+export type ListingPromotionDetail = ApiSchemaMap["ListingPromotionDetail"];
 export type ListingPromotionEvent = ApiSchemaMap["ListingPromotionEvent"];
 export type ListingPriceInsight = ApiSchemaMap["ListingPriceInsight"];
 export type OrderCreateInput = ApiSchemaMap["OrderCreate"];

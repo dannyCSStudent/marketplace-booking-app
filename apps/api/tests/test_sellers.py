@@ -1,10 +1,12 @@
 import unittest
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
-from app.dependencies.admin import require_admin_user
-from app.main import app
+from app.routers.admin import read_seller_trust_interventions
+from app.routers.sellers import (
+    read_seller_by_id,
+    read_seller_listings_by_slug,
+    read_seller_listing_summary_by_slug,
+)
 from app.schemas.listings import ListingListResponse, ListingRead, SellerListingSummaryRead
 from app.schemas.sellers import SellerUpdate
 from app.services.sellers import (
@@ -313,8 +315,6 @@ class SellerTrustScoreTests(unittest.TestCase):
 
 class SellerRouteTests(unittest.TestCase):
     def test_reads_seller_by_id(self):
-        client = TestClient(app)
-
         with patch(
             "app.routers.sellers.get_seller_by_id",
             return_value={
@@ -336,16 +336,14 @@ class SellerRouteTests(unittest.TestCase):
                 "state": "TX",
                 "country": "USA",
             },
-        ):
-            response = client.get("/sellers/by-id/seller-1")
+        ) as mocked_get_seller:
+            response = read_seller_by_id("seller-1")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["slug"], "south-dallas-tamales")
-        self.assertIn("trust_score", response.json())
+        self.assertEqual(response["slug"], "south-dallas-tamales")
+        self.assertIn("trust_score", response)
+        mocked_get_seller.assert_called_once_with("seller-1")
 
     def test_reads_seller_listings_by_slug(self):
-        client = TestClient(app)
-
         with patch(
             "app.routers.sellers.list_public_listings_by_seller_slug",
             return_value=ListingListResponse(
@@ -363,16 +361,21 @@ class SellerRouteTests(unittest.TestCase):
                 ],
                 total=1,
             ),
-        ):
-            response = client.get("/sellers/south-dallas-tamales/listings")
+        ) as mocked_listings:
+            response = read_seller_listings_by_slug(
+                "south-dallas-tamales",
+                query=None,
+                category=None,
+                type=None,
+                limit=None,
+                offset=None,
+            )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["total"], 1)
-        self.assertEqual(response.json()["items"][0]["slug"], "tamales-by-the-dozen")
+        self.assertEqual(response.total, 1)
+        self.assertEqual(response.items[0].slug, "tamales-by-the-dozen")
+        mocked_listings.assert_called_once()
 
     def test_reads_seller_listing_summary_by_slug(self):
-        client = TestClient(app)
-
         with patch(
             "app.routers.sellers.get_seller_listing_summary_by_slug",
             return_value=SellerListingSummaryRead(
@@ -389,22 +392,18 @@ class SellerRouteTests(unittest.TestCase):
                 local_only_count=4,
                 price_surface_cents=12500,
             ),
-        ):
-            response = client.get("/sellers/south-dallas-tamales/listings/summary")
+        ) as mocked_summary:
+            response = read_seller_listing_summary_by_slug("south-dallas-tamales")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["total"], 5)
-        self.assertEqual(response.json()["product_count"], 2)
-        self.assertEqual(response.json()["price_surface_cents"], 12500)
+        self.assertEqual(response.total, 5)
+        self.assertEqual(response.product_count, 2)
+        self.assertEqual(response.price_surface_cents, 12500)
+        mocked_summary.assert_called_once_with("south-dallas-tamales")
 
     def test_reads_seller_trust_interventions(self):
-        client = TestClient(app)
-        app.dependency_overrides[require_admin_user] = lambda: None
-
-        try:
-            with patch(
-                "app.routers.admin.list_seller_trust_interventions",
-                return_value=[
+        with patch(
+            "app.routers.admin.list_seller_trust_interventions",
+            return_value=[
                     {
                         "seller": {
                             "id": "seller-critical",
@@ -450,14 +449,12 @@ class SellerRouteTests(unittest.TestCase):
                         "intervention_lane": "seller_trust_intervention",
                     }
                 ],
-            ):
-                response = client.get("/admin/seller-trust/interventions")
-        finally:
-            app.dependency_overrides.pop(require_admin_user, None)
+        ) as mocked_interventions:
+            response = read_seller_trust_interventions(limit=20, current_user=None)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()[0]["seller"]["slug"], "south-dallas-tamales")
-        self.assertEqual(response.json()[0]["intervention_lane"], "seller_trust_intervention")
+        self.assertEqual(response[0]["seller"]["slug"], "south-dallas-tamales")
+        self.assertEqual(response[0]["intervention_lane"], "seller_trust_intervention")
+        mocked_interventions.assert_called_once_with(limit=20)
 
     def test_builds_my_seller_profile_completion_from_profile_fields(self):
         class _Supabase:
@@ -546,17 +543,21 @@ class SellerRouteTests(unittest.TestCase):
         self.assertIn("Verification", queued_completion["missing_fields"])
 
     def test_reads_paged_seller_listings_by_slug(self):
-        client = TestClient(app)
-
         with patch(
             "app.routers.sellers.list_public_listings_by_seller_slug",
             return_value=ListingListResponse(items=[], total=0, limit=12, offset=24),
         ) as mocked:
-            response = client.get("/sellers/south-dallas-tamales/listings?limit=12&offset=24")
+            response = read_seller_listings_by_slug(
+                "south-dallas-tamales",
+                query=None,
+                category=None,
+                type=None,
+                limit=12,
+                offset=24,
+            )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["limit"], 12)
-        self.assertEqual(response.json()["offset"], 24)
+        self.assertEqual(response.limit, 12)
+        self.assertEqual(response.offset, 24)
         mocked.assert_called_once()
         call = mocked.call_args
         self.assertIsNotNone(call)

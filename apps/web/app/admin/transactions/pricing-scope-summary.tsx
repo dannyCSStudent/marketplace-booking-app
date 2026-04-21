@@ -17,13 +17,80 @@ type PricingScopeActivityEntry = {
   createdAt: string;
 };
 
+function readStoredFocusedScope() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const stored = window.sessionStorage.getItem(PRICING_SCOPE_FOCUS_KEY);
+  return stored && stored.trim() ? stored : null;
+}
+
+function readStoredPricingScopeActivity() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const stored = window.sessionStorage.getItem(PRICING_SCOPE_ACTIVITY_KEY);
+    if (!stored) {
+      return [];
+    }
+
+    const parsed = JSON.parse(stored) as PricingScopeActivityEntry[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        typeof entry.scope === "string" &&
+        typeof entry.count === "number" &&
+        typeof entry.createdAt === "string",
+    );
+  } catch {
+    window.sessionStorage.removeItem(PRICING_SCOPE_ACTIVITY_KEY);
+    return [];
+  }
+}
+
+function readStoredCollapsedActivityGroups() {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const stored = window.sessionStorage.getItem(PRICING_SCOPE_ACTIVITY_GROUPS_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored) as Record<string, boolean>;
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch {
+    window.sessionStorage.removeItem(PRICING_SCOPE_ACTIVITY_GROUPS_KEY);
+  }
+
+  return {};
+}
+
 export default function PricingScopeSummarySection() {
   const [summary, setSummary] = useState<ListingPricingScopeCount[]>([]);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
-  const [focusedScope, setFocusedScope] = useState<string | null>(null);
-  const [recentActivity, setRecentActivity] = useState<PricingScopeActivityEntry[]>([]);
+  const [focusedScope, setFocusedScope] = useState<string | null>(readStoredFocusedScope);
+  const [recentActivity, setRecentActivity] = useState<PricingScopeActivityEntry[]>(
+    readStoredPricingScopeActivity,
+  );
+  const [collapsedActivityGroups, setCollapsedActivityGroups] = useState<Record<string, boolean>>(
+    readStoredCollapsedActivityGroups,
+  );
 
   function focusPricingScope(scope: string, count: number) {
     setFocusedScope(scope);
@@ -34,12 +101,9 @@ export default function PricingScopeSummarySection() {
         count,
         createdAt: new Date().toISOString(),
       },
-      ...current.filter((entry) => entry.scope !== scope),
-    ].slice(0, 5));
+        ...current.filter((entry) => entry.scope !== scope),
+      ].slice(0, 5));
   }
-  const [collapsedActivityGroups, setCollapsedActivityGroups] = useState<Record<string, boolean>>(
-    {},
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -79,65 +143,6 @@ export default function PricingScopeSummarySection() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const stored = window.sessionStorage.getItem(PRICING_SCOPE_FOCUS_KEY);
-    setFocusedScope(stored && stored.trim() ? stored : null);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(PRICING_SCOPE_ACTIVITY_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as PricingScopeActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(
-          parsed.filter(
-            (entry) =>
-              entry &&
-              typeof entry === "object" &&
-              typeof entry.id === "string" &&
-              typeof entry.scope === "string" &&
-              typeof entry.count === "number" &&
-              typeof entry.createdAt === "string",
-          ),
-        );
-      }
-    } catch {
-      window.sessionStorage.removeItem(PRICING_SCOPE_ACTIVITY_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(PRICING_SCOPE_ACTIVITY_GROUPS_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as Record<string, boolean>;
-      if (parsed && typeof parsed === "object") {
-        setCollapsedActivityGroups(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(PRICING_SCOPE_ACTIVITY_GROUPS_KEY);
-    }
   }, []);
 
   useEffect(() => {

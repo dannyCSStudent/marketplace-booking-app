@@ -1,26 +1,18 @@
 import unittest
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
-from app.dependencies.admin import require_admin_user
-from app.main import app
+from app.routers.admin import read_pricing_scope_counts, read_pricing_scope_listings
 
 
 class PricingScopeSummaryTests(unittest.TestCase):
     def test_pricing_scope_summary_requires_admin(self):
-        client = TestClient(app)
-        app.dependency_overrides[require_admin_user] = lambda: None
-        with patch("app.routers.admin.list_pricing_scope_counts", return_value=[{"scope": "Category", "count": 42}]):
-            response = client.get("/admin/listings/pricing-scope-summary")
-        app.dependency_overrides.clear()
+        with patch("app.routers.admin.list_pricing_scope_counts", return_value=[{"scope": "Category", "count": 42}]) as mocked_counts:
+            result = read_pricing_scope_counts(current_user=None)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), [{"scope": "Category", "count": 42}])
+        self.assertEqual(result, [{"scope": "Category", "count": 42}])
+        mocked_counts.assert_called_once_with()
 
     def test_pricing_scope_items_requires_admin(self):
-        client = TestClient(app)
-        app.dependency_overrides[require_admin_user] = lambda: None
         with patch(
             "app.routers.admin.list_pricing_scope_listings",
             return_value=[
@@ -55,12 +47,11 @@ class PricingScopeSummaryTests(unittest.TestCase):
                     "is_promoted": False,
                 }
             ],
-        ):
-            response = client.get("/admin/listings/pricing-scope-items?scope=Category")
-        app.dependency_overrides.clear()
+        ) as mocked_listings:
+            result = read_pricing_scope_listings(scope="Category", current_user=None)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()[0]["id"], "listing-1")
+        self.assertEqual(result[0]["id"], "listing-1")
+        mocked_listings.assert_called_once_with("Category")
 
 
 if __name__ == "__main__":

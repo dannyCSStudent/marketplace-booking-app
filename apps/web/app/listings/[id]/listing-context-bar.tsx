@@ -18,6 +18,61 @@ function getLocationLabel(parts: Array<string | null | undefined>) {
   return parts.filter(Boolean).join(", ") || "Location pending";
 }
 
+function readRecentListingHistory() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const stored = window.localStorage.getItem(RECENT_LISTING_HISTORY_KEY);
+    if (!stored) {
+      return [];
+    }
+
+    const parsed = JSON.parse(stored) as RecentListingEntry[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(
+      (entry): entry is RecentListingEntry =>
+        Boolean(
+          entry &&
+            typeof entry === "object" &&
+            typeof entry.id === "string" &&
+            typeof entry.title === "string" &&
+            typeof entry.summary === "string" &&
+            typeof entry.createdAt === "string",
+        ),
+    );
+  } catch {
+    window.localStorage.removeItem(RECENT_LISTING_HISTORY_KEY);
+    return [];
+  }
+}
+
+function readCollapsedRecentListingGroups() {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const stored = window.localStorage.getItem(RECENT_LISTING_GROUPS_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored) as Record<string, boolean>;
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch {
+    window.localStorage.removeItem(RECENT_LISTING_GROUPS_KEY);
+  }
+
+  return {};
+}
+
 type RecentListingEntry = {
   id: string;
   title: string;
@@ -55,8 +110,12 @@ export function ListingContextBar({
   const searchParams = useSearchParams();
   const [linkFeedback, setLinkFeedback] = useState<string | null>(null);
   const [historyFeedback, setHistoryFeedback] = useState<string | null>(null);
-  const [recentHistory, setRecentHistory] = useState<RecentListingEntry[]>([]);
-  const [collapsedRecentGroups, setCollapsedRecentGroups] = useState<Record<string, boolean>>({});
+  const [storedRecentHistory, setStoredRecentHistory] = useState<RecentListingEntry[]>(
+    readRecentListingHistory,
+  );
+  const [collapsedRecentGroups, setCollapsedRecentGroups] = useState<Record<string, boolean>>(
+    readCollapsedRecentListingGroups,
+  );
   const fromParam = searchParams.get("from");
   const safeFromHref =
     fromParam && fromParam.startsWith("/") && !fromParam.startsWith("//") ? fromParam : null;
@@ -110,13 +169,29 @@ export function ListingContextBar({
     listing.available_today,
     listing.city,
     listing.country,
-    listing.id,
     listing.requires_booking,
     listing.state,
-    listing.title,
     listing.type,
     sellerDisplayName,
   ]);
+  const currentListingEntry = useMemo<RecentListingEntry>(
+    () => ({
+      id: listing.id,
+      title: listing.title,
+      sellerName: sellerDisplayName,
+      summary: listingSummary,
+      createdAt: listing.id,
+    }),
+    [listing.id, listing.title, listingSummary, sellerDisplayName],
+  );
+  const recentHistory = useMemo(
+    () =>
+      [currentListingEntry, ...storedRecentHistory.filter((entry) => entry.id !== currentListingEntry.id)].slice(
+        0,
+        4,
+      ),
+    [currentListingEntry, storedRecentHistory],
+  );
   const groupedRecentHistory = useMemo<RecentListingGroup[]>(() => {
     const groups = new Map<string, RecentListingEntry[]>();
 
@@ -137,85 +212,12 @@ export function ListingContextBar({
     return [...groups.entries()]
       .map(([label, entries]) => ({ label, entries }))
       .sort((left, right) => left.label.localeCompare(right.label));
-  }, [recentHistory]);
+  }, [recentHistory, sellerDisplayName]);
   const hasCollapsedRecentGroups = useMemo(
     () => Object.values(collapsedRecentGroups).some(Boolean),
     [collapsedRecentGroups],
   );
   const latestRecentListing = recentHistory.find((entry) => entry.id !== listing.id) ?? null;
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.localStorage.getItem(RECENT_LISTING_HISTORY_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as RecentListingEntry[];
-        if (Array.isArray(parsed)) {
-          setRecentHistory(
-            parsed.filter(
-              (entry): entry is RecentListingEntry =>
-                Boolean(
-                  entry &&
-                    typeof entry === "object" &&
-                    typeof entry.id === "string" &&
-                    typeof entry.title === "string" &&
-                    typeof entry.summary === "string" &&
-                    typeof entry.createdAt === "string",
-                ),
-            ),
-          );
-        }
-      }
-    } catch {
-      window.localStorage.removeItem(RECENT_LISTING_HISTORY_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.localStorage.getItem(RECENT_LISTING_GROUPS_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as Record<string, boolean>;
-      if (parsed && typeof parsed === "object") {
-        setCollapsedRecentGroups(parsed);
-      }
-    } catch {
-      window.localStorage.removeItem(RECENT_LISTING_GROUPS_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const currentListingEntry: RecentListingEntry = {
-      id: listing.id,
-      title: listing.title,
-      sellerName: sellerDisplayName,
-      summary: listingSummary,
-      createdAt: new Date().toISOString(),
-    };
-
-    setRecentHistory((current) => {
-      const next = [
-        currentListingEntry,
-        ...current.filter((entry) => entry.id !== currentListingEntry.id),
-      ].slice(0, 4);
-      window.localStorage.setItem(RECENT_LISTING_HISTORY_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, [listing.id, listing.title, listingSummary]);
 
   function clearRecentListingHistory() {
     if (typeof window === "undefined") {
@@ -224,7 +226,7 @@ export function ListingContextBar({
 
     window.localStorage.removeItem(RECENT_LISTING_HISTORY_KEY);
     window.localStorage.removeItem(RECENT_LISTING_GROUPS_KEY);
-    setRecentHistory([]);
+    setStoredRecentHistory([]);
     setCollapsedRecentGroups({});
   }
 
@@ -239,6 +241,14 @@ export function ListingContextBar({
     setHistoryFeedback(`Reopened ${entry.title}`);
     window.setTimeout(() => setHistoryFeedback(null), 2000);
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(RECENT_LISTING_HISTORY_KEY, JSON.stringify(recentHistory));
+  }, [recentHistory]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

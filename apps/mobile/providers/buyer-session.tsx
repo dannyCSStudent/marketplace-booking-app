@@ -79,10 +79,13 @@ type BuyerSessionValue = {
     marketing_notifications_enabled?: boolean;
   }) => Promise<void>;
   syncPushToken: () => Promise<boolean>;
-  retryNotificationDelivery: (
-    deliveryIdOrIds: string | string[],
+  retryNotificationDelivery: {
+    (deliveryId: string): Promise<NotificationDelivery>;
+  };
+  bulkRetryNotificationDeliveries: (
+    deliveryIds: string[],
     executionMode?: 'best_effort' | 'atomic',
-  ) => Promise<void | NotificationDeliveryBulkRetryResult>;
+  ) => Promise<NotificationDeliveryBulkRetryResult>;
   createOrder: (input: {
     sellerId: string;
     listingId: string;
@@ -325,9 +328,31 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       throw new Error('Sign in before retrying notification deliveries.');
     }
 
+    if (Array.isArray(deliveryIdOrIds)) {
+      throw new Error('Use bulkRetryNotificationDeliveries for multiple deliveries.');
+    }
+
+    const result = await retryBuyerNotificationDelivery(session.access_token, deliveryIdOrIds);
+    const deliveries = await loadBuyerNotificationDeliveries(session.access_token);
+
+    startTransition(() => {
+      setNotificationDeliveries(deliveries);
+    });
+
+    return result;
+  }, [session]) as BuyerSessionValue["retryNotificationDelivery"];
+
+  const bulkRetryNotificationDeliveries = useCallback(async (
+    deliveryIds: string[],
+    executionMode: 'best_effort' | 'atomic' = 'best_effort',
+  ) => {
+    if (!session) {
+      throw new Error('Sign in before retrying notification deliveries.');
+    }
+
     const result = await retryBuyerNotificationDelivery(
       session.access_token,
-      deliveryIdOrIds,
+      deliveryIds,
       executionMode,
     );
     const deliveries = await loadBuyerNotificationDeliveries(session.access_token);
@@ -337,7 +362,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
     });
 
     return result;
-  }, [session]);
+  }, [session]) as BuyerSessionValue["bulkRetryNotificationDeliveries"];
 
   const syncPushToken = useCallback(async () => {
     if (!session?.access_token || !profile) {
@@ -401,7 +426,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
           await setBuyerRefreshToken(restoredSession.refresh_token);
         }
 
-        const [listings, profile, engagement, deliveries] = await Promise.all([
+        const [restoredListings, profile, engagement, deliveries] = await Promise.all([
           loadPublicListingsPage(MOBILE_PUBLIC_LISTING_LIMIT, 0),
           loadBuyerProfile(restoredSession.access_token),
           loadBuyerEngagementContext(restoredSession.access_token),
@@ -410,12 +435,12 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
 
         startTransition(() => {
           setSession(restoredSession);
-          setListings(listings);
+          setListings(restoredListings);
           setProfile(profile);
           setOrders(engagement.orders);
           setBookings(engagement.bookings);
           setNotificationDeliveries(deliveries);
-          setHasMoreListings(listings.length === MOBILE_PUBLIC_LISTING_LIMIT);
+          setHasMoreListings(restoredListings.length === MOBILE_PUBLIC_LISTING_LIMIT);
           setNotificationsSeenAtState(storedNotificationsSeenAt);
         });
       } catch (err) {
@@ -575,6 +600,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       updateNotificationPreferences,
       syncPushToken,
       retryNotificationDelivery,
+      bulkRetryNotificationDeliveries,
       createOrder,
       createBooking,
     }),
@@ -602,6 +628,7 @@ export function BuyerSessionProvider({ children }: { children: ReactNode }) {
       updateNotificationPreferences,
       syncPushToken,
       retryNotificationDelivery,
+      bulkRetryNotificationDeliveries,
       createOrder,
       createBooking,
     ],

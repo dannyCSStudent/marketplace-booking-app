@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -64,7 +57,7 @@ export function PromotionAnalyticsProvider({ children }: { children: ReactNode }
   const [removingId, setRemovingId] = useState<string | null>(null);
   const api = useMemo(() => createApiClient(CLIENT_API_BASE_URL), []);
 
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
     setStatus("loading");
     setError(null);
 
@@ -114,14 +107,14 @@ export function PromotionAnalyticsProvider({ children }: { children: ReactNode }
       setStatus("error");
       setError(caught instanceof ApiError ? caught.message : "Unable to load promotion analytics.");
     }
-  };
+  }, [api]);
 
   useEffect(() => {
     void (async () => {
       await Promise.resolve();
       await fetchAll();
     })();
-  }, []);
+  }, [fetchAll]);
 
   const removePromotion = async (listingId: string) => {
     setRemovingId(listingId);
@@ -148,21 +141,18 @@ export function PromotionAnalyticsProvider({ children }: { children: ReactNode }
     }
   };
 
-  const value = useMemo<PromotionAnalyticsContextValue>(
-    () => ({
-      events,
-      summary,
-      listingTypeById,
-      promotedListings,
-      status,
-      error,
-      lastUpdated,
-      refresh: fetchAll,
-      removePromotion,
-      removingId,
-    }),
-    [events, summary, listingTypeById, promotedListings, status, error, lastUpdated, removingId],
-  );
+  const value: PromotionAnalyticsContextValue = {
+    events,
+    summary,
+    listingTypeById,
+    promotedListings,
+    status,
+    error,
+    lastUpdated,
+    refresh: fetchAll,
+    removePromotion,
+    removingId,
+  };
 
   return (
     <PromotionAnalyticsContext.Provider value={value}>

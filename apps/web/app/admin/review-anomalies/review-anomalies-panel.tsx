@@ -212,12 +212,14 @@ export function ReviewAnomaliesPanel() {
       active: sellerSummaries.filter((summary) => {
         const delivery = latestNotificationBySeller.get(summary.seller_id);
         const acknowledgedSignature = acknowledgedAnomalies[summary.seller_id];
-        return !(delivery && acknowledgedSignature && acknowledgedSignature === String(delivery.payload?.alert_signature ?? "").trim());
+        const alertSignature = String(delivery?.payload?.alert_signature ?? "").trim();
+        return !(delivery && acknowledgedSignature && acknowledgedSignature === alertSignature);
       }).length,
       acknowledged: sellerSummaries.filter((summary) => {
         const delivery = latestNotificationBySeller.get(summary.seller_id);
         const acknowledgedSignature = acknowledgedAnomalies[summary.seller_id];
-        return Boolean(delivery) && Boolean(acknowledgedSignature) && acknowledgedSignature === String(delivery.payload?.alert_signature ?? "").trim();
+        const alertSignature = String(delivery?.payload?.alert_signature ?? "").trim();
+        return Boolean(delivery) && Boolean(acknowledgedSignature) && acknowledgedSignature === alertSignature;
       }).length,
     }),
     [acknowledgedAnomalies, latestNotificationBySeller, sellerSummaries],
@@ -625,15 +627,15 @@ export function ReviewAnomaliesPanel() {
                       <span className={`rounded-full border px-3 py-1 text-xs uppercase tracking-[0.18em] ${toneClasses(delivery.delivery_status === "failed" ? "high" : delivery.delivery_status === "queued" ? "medium" : "monitor")}`}>
                         {delivery.delivery_status}
                       </span>
-                      <span className="rounded-full border border-border bg-background px-3 py-1 text-xs uppercase tracking-[0.18em] text-foreground/56">
+                    <span className="rounded-full border border-border bg-background px-3 py-1 text-xs uppercase tracking-[0.18em] text-foreground/56">
                         {new Date(delivery.created_at).toLocaleString()}
                       </span>
                     </div>
                     <p className="text-sm font-medium text-foreground">
-                      {delivery.payload?.subject ?? "Review anomaly notification"}
+                      {String(delivery.payload?.subject ?? "Review anomaly notification")}
                     </p>
                     <p className="text-sm leading-7 text-foreground/68">
-                      {delivery.payload?.body ?? delivery.payload?.alert_type ?? "Backend review anomaly alert."}
+                      {String(delivery.payload?.body ?? delivery.payload?.alert_type ?? "Backend review anomaly alert.")}
                     </p>
                   </div>
 
@@ -693,8 +695,10 @@ export function ReviewAnomaliesPanel() {
                   </div>
 
                   <p className="text-sm leading-7 text-foreground/68">
-                    Latest · {group.deliveries[0]?.payload?.severity ?? "unknown"} ·{" "}
-                    {group.deliveries[0]?.payload?.reasons?.join(" · ") ?? "Review anomaly"}
+                    Latest · {String(group.deliveries[0]?.payload?.severity ?? "unknown")} ·{" "}
+                    {Array.isArray(group.deliveries[0]?.payload?.reasons)
+                      ? group.deliveries[0]?.payload?.reasons.join(" · ")
+                      : "Review anomaly"}
                   </p>
 
                   <div className="flex flex-wrap gap-2">

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from fastapi import HTTPException, status
 
@@ -211,19 +212,24 @@ def _get_seller_user_id(*, seller_id: str) -> str | None:
 def _get_seller_profile_summary(*, seller_id: str) -> dict[str, str] | None:
     supabase = get_supabase_client()
     try:
-        seller_profile = supabase.select(
-            "seller_profiles",
-            query={
-                "select": "id,slug,display_name,user_id",
-                "id": f"eq.{seller_id}",
-            },
-            use_service_role=True,
-            expect_single=True,
+        seller_profile = _normalize_single_row(
+            supabase.select(
+                "seller_profiles",
+                query={
+                    "select": "id,slug,display_name,user_id",
+                    "id": f"eq.{seller_id}",
+                },
+                use_service_role=True,
+                expect_single=True,
+            )
         )
     except SupabaseError as exc:
         if exc.status_code == 406:
             return None
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if not seller_profile:
+        return None
 
     return {
         "id": str(seller_profile.get("id") or ""),
@@ -236,24 +242,45 @@ def _get_seller_profile_summary(*, seller_id: str) -> dict[str, str] | None:
 def _get_buyer_profile_summary(*, buyer_id: str) -> dict[str, str] | None:
     supabase = get_supabase_client()
     try:
-        buyer_profile = supabase.select(
-            "profiles",
-            query={
-                "select": "id,display_name",
-                "id": f"eq.{buyer_id}",
-            },
-            use_service_role=True,
-            expect_single=True,
+        buyer_profile = _normalize_single_row(
+            supabase.select(
+                "profiles",
+                query={
+                    "select": "id,display_name",
+                    "id": f"eq.{buyer_id}",
+                },
+                use_service_role=True,
+                expect_single=True,
+            )
         )
     except SupabaseError as exc:
         if exc.status_code == 406:
             return None
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    if not buyer_profile:
+        return None
+
     return {
         "id": str(buyer_profile.get("id") or ""),
         "display_name": str(buyer_profile.get("display_name") or ""),
     }
+
+
+def _normalize_single_row(row: Any) -> dict[str, Any] | None:
+    if isinstance(row, list):
+        if not row:
+            return None
+        row = row[0]
+    return row if isinstance(row, dict) else None
+
+
+def _normalize_row_list(rows: Any) -> list[dict[str, Any]]:
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict)]
+    if isinstance(rows, dict):
+        return [rows]
+    return []
 
 
 def _queue_order_exception_notification(
@@ -306,6 +333,8 @@ def _queue_order_exception_notification(
         )
     except SupabaseError:
         existing_rows = []
+    else:
+        existing_rows = _normalize_row_list(existing_rows)
 
     existing_recipients = {
         str(row.get("recipient_user_id"))
@@ -325,6 +354,8 @@ def _queue_order_exception_notification(
         )
     except SupabaseError:
         profile_rows = []
+    else:
+        profile_rows = _normalize_row_list(profile_rows)
 
     profile_prefs = {
         str(row.get("id")): row
@@ -791,7 +822,10 @@ def update_order_status(current_user: CurrentUser, order_id: str, payload: Order
             actor_role=actor,
         )
 
-    return _get_order_by_id(order_id=order_id, access_token=current_user.access_token)
+    updated_order = _normalize_single_row(rows)
+    if updated_order is None:
+        return _get_order_by_id(order_id=order_id, access_token=current_user.access_token)
+    return _serialize_order(updated_order)
 
 
 def generate_order_response_ai_assist(current_user: CurrentUser, order_id: str):

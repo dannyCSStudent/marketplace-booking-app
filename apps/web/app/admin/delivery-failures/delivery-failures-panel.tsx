@@ -346,9 +346,11 @@ export function DeliveryFailuresPanel() {
     setAcknowledgingId(failedDeliveryId);
     try {
       if (acknowledged) {
-        await api.acknowledgeDeliveryFailure(failedDeliveryId, { accessToken: session.access_token });
+        await api.acknowledgeAdminDeliveryFailure(failedDeliveryId, {
+          accessToken: session.access_token,
+        });
       } else {
-        await api.clearDeliveryFailureAcknowledgement(failedDeliveryId, {
+        await api.clearAdminDeliveryFailureAcknowledgement(failedDeliveryId, {
           accessToken: session.access_token,
         });
       }

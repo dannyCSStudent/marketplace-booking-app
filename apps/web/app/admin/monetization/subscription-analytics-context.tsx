@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -48,7 +41,7 @@ export function SubscriptionAnalyticsProvider({ children }: { children: ReactNod
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const api = useMemo(() => createApiClient(CLIENT_API_BASE_URL), []);
 
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
     setStatus("loading");
     setError(null);
     try {
@@ -73,14 +66,14 @@ export function SubscriptionAnalyticsProvider({ children }: { children: ReactNod
       setStatus("error");
       setError(caught instanceof ApiError ? caught.message : "Unable to load subscription analytics.");
     }
-  };
+  }, [api]);
 
   useEffect(() => {
     void (async () => {
       await Promise.resolve();
       await fetchAll();
     })();
-  }, []);
+  }, [fetchAll]);
 
   const createTier = async (body: SubscriptionTierCreate) => {
     const session = await restoreAdminSession();
@@ -106,20 +99,17 @@ export function SubscriptionAnalyticsProvider({ children }: { children: ReactNod
     router.refresh();
   };
 
-  const value = useMemo<SubscriptionAnalyticsContextValue>(
-    () => ({
-      tiers,
-      subscriptions,
-      events,
-      status,
-      error,
-      lastUpdated,
-      refresh: fetchAll,
-      createTier,
-      assignSubscription,
-    }),
-    [tiers, subscriptions, events, status, error, lastUpdated],
-  );
+  const value: SubscriptionAnalyticsContextValue = {
+    tiers,
+    subscriptions,
+    events,
+    status,
+    error,
+    lastUpdated,
+    refresh: fetchAll,
+    createTier,
+    assignSubscription,
+  };
 
   return (
     <SubscriptionAnalyticsContext.Provider value={value}>

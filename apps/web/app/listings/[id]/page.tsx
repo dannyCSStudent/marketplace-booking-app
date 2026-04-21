@@ -209,7 +209,11 @@ export default async function ListingDetailPage({
 
               <Suspense fallback={null}>
                 <ListingContextBar
-                  listing={listing}
+                  listing={{
+                    ...listing,
+                    price_cents: listing.price_cents ?? null,
+                    currency: listing.currency ?? "USD",
+                  }}
                   sellerDisplayName={seller?.display_name ?? null}
                   storefrontHref={seller?.slug ? `/sellers/${seller.slug}` : null}
                 />

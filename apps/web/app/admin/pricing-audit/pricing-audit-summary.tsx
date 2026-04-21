@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
@@ -26,18 +26,114 @@ type PricingAuditActivityEntry = {
 
 type PricingAuditActivityFilter = "all" | "inspect" | "export";
 
+function readStoredPricingAuditActivity() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const stored = window.sessionStorage.getItem(PRICING_AUDIT_ACTIVITY_KEY);
+    if (!stored) {
+      return [];
+    }
+
+    const parsed = JSON.parse(stored) as PricingAuditActivityEntry[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        typeof entry.scope === "string" &&
+        typeof entry.summary === "string" &&
+        typeof entry.createdAt === "string",
+    );
+  } catch {
+    window.sessionStorage.removeItem(PRICING_AUDIT_ACTIVITY_KEY);
+    return [];
+  }
+}
+
+function readStoredPricingAuditActivityFilter() {
+  if (typeof window === "undefined") {
+    return "all" as const;
+  }
+
+  const stored = window.sessionStorage.getItem(PRICING_AUDIT_ACTIVITY_FILTER_KEY);
+  if (stored === "all" || stored === "inspect" || stored === "export") {
+    return stored;
+  }
+
+  return "all" as const;
+}
+
 export default function PricingAuditSummary() {
   const [summary, setSummary] = useState<ListingPricingScopeCount[]>([]);
   const [scopeListings, setScopeListings] = useState<Listing[]>([]);
   const [activeScope, setActiveScope] = useState<string | null>(null);
   const [restoredClearedScope, setRestoredClearedScope] = useState<string | null>(null);
-  const [activity, setActivity] = useState<PricingAuditActivityEntry[]>([]);
-  const [activityFilter, setActivityFilter] = useState<PricingAuditActivityFilter>("all");
+  const [activity, setActivity] = useState<PricingAuditActivityEntry[]>(readStoredPricingAuditActivity);
+  const [activityFilter, setActivityFilter] = useState<PricingAuditActivityFilter>(
+    readStoredPricingAuditActivityFilter,
+  );
   const [status, setStatus] = useState("loading");
   const [detailStatus, setDetailStatus] = useState("idle");
   const [error, setError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+
+  const recordActivity = useCallback((entry: Omit<PricingAuditActivityEntry, "id" | "createdAt">) => {
+    setActivity((current) => [
+      {
+        ...entry,
+        id: `${entry.kind}:${entry.scope}:${Date.now()}`,
+        createdAt: new Date().toISOString(),
+      },
+      ...current,
+    ].slice(0, 8));
+  }, []);
+
+  const openScope = useCallback(
+    async (scope: string, options?: { record?: boolean; restoredFromClear?: boolean }) => {
+    setActiveScope(scope);
+    setRestoredClearedScope(options?.restoredFromClear ? scope : null);
+    setDetailStatus("loading");
+    setDetailError(null);
+
+    try {
+      const session = await restoreAdminSession();
+      if (!session) {
+        setDetailStatus("error");
+        setDetailError("Sign in as an admin to inspect pricing scope listings.");
+        return;
+      }
+
+      const api = createApiClient(CLIENT_API_BASE_URL);
+      const rows = await api.listPricingScopeItems(scope, {
+        cache: "no-store",
+        accessToken: session.access_token,
+      });
+      setScopeListings(rows);
+      setDetailStatus("idle");
+      if (options?.record !== false) {
+        recordActivity({
+          kind: "inspect",
+          scope,
+          summary: options?.restoredFromClear
+            ? `Restored ${scope} pricing scope from cleared state`
+            : `Inspected ${scope} pricing scope`,
+        });
+      }
+    } catch (caught) {
+      setDetailStatus("error");
+      setDetailError(caught instanceof ApiError ? caught.message : "Unable to load pricing scope listings.");
+    }
+    },
+    [recordActivity],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -87,38 +183,7 @@ export default function PricingAuditSummary() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(PRICING_AUDIT_ACTIVITY_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as PricingAuditActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setActivity(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(PRICING_AUDIT_ACTIVITY_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const stored = window.sessionStorage.getItem(PRICING_AUDIT_ACTIVITY_FILTER_KEY);
-    if (stored === "all" || stored === "inspect" || stored === "export") {
-      setActivityFilter(stored);
-    }
-  }, []);
+  }, [openScope]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -220,53 +285,6 @@ export default function PricingAuditSummary() {
     }),
     [activity],
   );
-
-  function recordActivity(entry: Omit<PricingAuditActivityEntry, "id" | "createdAt">) {
-    setActivity((current) => [
-      {
-        ...entry,
-        id: `${entry.kind}:${entry.scope}:${Date.now()}`,
-        createdAt: new Date().toISOString(),
-      },
-      ...current,
-    ].slice(0, 8));
-  }
-
-  async function openScope(scope: string, options?: { record?: boolean; restoredFromClear?: boolean }) {
-    setActiveScope(scope);
-    setRestoredClearedScope(options?.restoredFromClear ? scope : null);
-    setDetailStatus("loading");
-    setDetailError(null);
-
-    try {
-      const session = await restoreAdminSession();
-      if (!session) {
-        setDetailStatus("error");
-        setDetailError("Sign in as an admin to inspect pricing scope listings.");
-        return;
-      }
-
-      const api = createApiClient(CLIENT_API_BASE_URL);
-      const rows = await api.listPricingScopeItems(scope, {
-        cache: "no-store",
-        accessToken: session.access_token,
-      });
-      setScopeListings(rows);
-      setDetailStatus("idle");
-      if (options?.record !== false) {
-        recordActivity({
-          kind: "inspect",
-          scope,
-          summary: options?.restoredFromClear
-            ? `Restored ${scope} pricing scope from cleared state`
-            : `Inspected ${scope} pricing scope`,
-        });
-      }
-    } catch (caught) {
-      setDetailStatus("error");
-      setDetailError(caught instanceof ApiError ? caught.message : "Unable to load pricing scope listings.");
-    }
-  }
 
   function exportScopeCsv() {
     if (!activeScope || scopeListings.length === 0) {
@@ -564,7 +582,7 @@ export default function PricingAuditSummary() {
                   {alert.scope ? (
                     <button
                       className="rounded-full border border-border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-foreground transition hover:border-accent hover:text-accent"
-                      onClick={() => openScope(alert.scope)}
+                      onClick={() => openScope(alert.scope!)}
                       type="button"
                     >
                       Inspect scope

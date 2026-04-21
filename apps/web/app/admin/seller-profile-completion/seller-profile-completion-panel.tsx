@@ -37,14 +37,6 @@ function toneClasses(percent: number) {
   return "border-danger/30 bg-danger/8 text-danger";
 }
 
-function parseStateFilter(value: string | null): StateFilter | null {
-  if (value === "all" || value === "incomplete" || value === "complete") {
-    return value;
-  }
-
-  return null;
-}
-
 function matchesSearch(profile: SellerProfileCompletionRead, searchQuery: string) {
   if (!searchQuery.trim()) {
     return true;
@@ -54,8 +46,8 @@ function matchesSearch(profile: SellerProfileCompletionRead, searchQuery: string
     profile.seller_display_name,
     profile.seller_slug,
     profile.summary,
-    profile.missing_fields.join(" "),
-    String(profile.completion_percent),
+    (profile.missing_fields ?? []).join(" "),
+    String(profile.completion_percent ?? 0),
   ]
     .filter(Boolean)
     .join(" ")
@@ -203,7 +195,7 @@ export function SellerProfileCompletionPanel() {
       total: profiles.length,
       complete: profiles.filter((profile) => profile.is_complete).length,
       incomplete: profiles.filter((profile) => !profile.is_complete).length,
-      verified: profiles.filter((profile) => profile.missing_fields.length === 0).length,
+      verified: profiles.filter((profile) => (profile.missing_fields ?? []).length === 0).length,
     }),
     [profiles],
   );
@@ -612,21 +604,21 @@ export function SellerProfileCompletionPanel() {
             <article key={profile.seller_id} className="rounded-[1.5rem] border border-border bg-white px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
-                    {profile.completion_percent}% complete
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/48">
+                    {profile.completion_percent ?? 0}% complete
                   </p>
                   <h2 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
                     {profile.seller_display_name}
                   </h2>
                   <p className="text-sm text-foreground/58">@{profile.seller_slug}</p>
                 </div>
-                <span className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${toneClasses(profile.completion_percent)}`}>
+                <span className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${toneClasses(profile.completion_percent ?? 0)}`}>
                   {profile.is_complete ? "Complete" : "Needs work"}
                 </span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                {profile.missing_fields.length > 0 ? (
-                  profile.missing_fields.map((field) => (
+                {(profile.missing_fields ?? []).length > 0 ? (
+                  (profile.missing_fields ?? []).map((field) => (
                     <span
                       key={field}
                       className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700"

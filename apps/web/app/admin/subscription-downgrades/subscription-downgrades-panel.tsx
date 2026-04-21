@@ -230,9 +230,7 @@ export function SubscriptionDowngradesPanel() {
 
     setRetryingDeliveryId(deliveryId);
     try {
-      await api.retryAdminNotificationDelivery(deliveryId, {
-        accessToken: session.access_token,
-      });
+      await api.retryAdminNotificationDelivery(deliveryId, session.access_token);
       setRefreshIndex((current) => current + 1);
     } finally {
       setRetryingDeliveryId(null);

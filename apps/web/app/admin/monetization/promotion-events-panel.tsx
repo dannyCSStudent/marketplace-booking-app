@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   PROMOTION_LISTING_FOCUS_EVENT,
@@ -52,43 +52,56 @@ type PromotionRecentActivityEntry =
       statusFilter: PromotionStatusFilter;
     };
 
+type PromotionRecentActivityInput =
+  | {
+      kind: "focus";
+      label: string;
+      detail: string;
+      type: PromotionListingTypeFilter;
+    }
+  | {
+      kind: "export";
+      label: string;
+      detail: string;
+      windowDays: number;
+      statusFilter: PromotionStatusFilter;
+    };
+
 export default function PromotionEventsPanel() {
   const { preferences, setPromotionDashboard } = useMonetizationPreferences();
   const { events, listingTypeById, status, error, lastUpdated, refresh } = usePromotionAnalytics();
   const { windowDays, statusFilter } = preferences.promotionDashboard;
-  const [recentActivity, setRecentActivity] = useState<PromotionRecentActivityEntry[]>([]);
-  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
-
-  useEffect(() => {
+  const recentActivitySequence = useRef(0);
+  const [recentActivity, setRecentActivity] = useState<PromotionRecentActivityEntry[]>(() => {
     if (typeof window === "undefined") {
-      return;
+      return [];
     }
 
     try {
       const stored = window.sessionStorage.getItem(PROMOTION_EVENTS_ACTIVITY_KEY);
       if (!stored) {
-        return;
+        return [];
       }
 
       const parsed = JSON.parse(stored) as PromotionRecentActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(parsed);
-      }
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       window.sessionStorage.removeItem(PROMOTION_EVENTS_ACTIVITY_KEY);
+      return [];
     }
-  }, []);
-
-  useEffect(() => {
+  });
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>(() => {
     if (typeof window === "undefined") {
-      return;
+      return "all";
     }
 
     const stored = window.sessionStorage.getItem(PROMOTION_EVENTS_ACTIVITY_FILTER_KEY);
     if (stored === "all" || stored === "focus" || stored === "export") {
-      setRecentActivityFilter(stored);
+      return stored;
     }
-  }, []);
+
+    return "all";
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -109,6 +122,18 @@ export default function PromotionEventsPanel() {
     window.sessionStorage.setItem(PROMOTION_EVENTS_ACTIVITY_FILTER_KEY, recentActivityFilter);
   }, [recentActivityFilter]);
 
+  const windowStart = useMemo(() => {
+    const latestTimestamp = events.reduce((currentLatest, event) => {
+      const createdAt = new Date(event.created_at).getTime();
+      if (Number.isNaN(createdAt)) {
+        return currentLatest;
+      }
+      return Math.max(currentLatest, createdAt);
+    }, 0);
+
+    return latestTimestamp - windowDays * 24 * 60 * 60 * 1000;
+  }, [events, windowDays]);
+
   const windowedEvents = useMemo(
     () =>
       events.filter((event) => {
@@ -116,9 +141,9 @@ export default function PromotionEventsPanel() {
         if (Number.isNaN(createdAt)) {
           return true;
         }
-        return createdAt >= Date.now() - windowDays * 24 * 60 * 60 * 1000;
+        return createdAt >= windowStart;
       }),
-    [events, windowDays],
+    [events, windowStart],
   );
 
   const eventSummary = useMemo(
@@ -176,18 +201,21 @@ export default function PromotionEventsPanel() {
       });
   }, [listingTypeById, windowedEvents]);
 
-  const recordRecentActivity = (entry: Omit<PromotionRecentActivityEntry, "id" | "createdAt">) => {
+  const recordRecentActivity = useCallback((entry: PromotionRecentActivityInput) => {
+    recentActivitySequence.current += 1;
+    const nextEntry: PromotionRecentActivityEntry = {
+      ...entry,
+      id: `${entry.kind}:${recentActivitySequence.current}`,
+      createdAt: new Date().toISOString(),
+    } as PromotionRecentActivityEntry;
+
     setRecentActivity((current) =>
       [
-        {
-          ...entry,
-          id: `${entry.kind}:${Date.now()}`,
-          createdAt: new Date().toISOString(),
-        },
+        nextEntry,
         ...current,
       ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
     );
-  };
+  }, []);
 
   const focusPromotedListings = (type: PromotionListingTypeFilter) => {
     recordRecentActivity({
@@ -203,7 +231,7 @@ export default function PromotionEventsPanel() {
     );
   };
 
-  const exportCsv = () => {
+  const exportCsv = useCallback(() => {
     if (visibleEvents.length === 0) {
       return;
     }
@@ -228,9 +256,9 @@ export default function PromotionEventsPanel() {
     link.download = `promotion-events-${statusFilter}-${windowDays}d.csv`;
     link.click();
     URL.revokeObjectURL(url);
-  };
+  }, [statusFilter, visibleEvents, windowDays]);
 
-  const runExport = () => {
+  const runExport = useCallback(() => {
     recordRecentActivity({
       kind: "export",
       label: `Exported ${visibleEvents.length} promotion events`,
@@ -239,7 +267,7 @@ export default function PromotionEventsPanel() {
       statusFilter,
     });
     exportCsv();
-  };
+  }, [exportCsv, recordRecentActivity, statusFilter, visibleEvents.length, windowDays]);
 
   useEffect(() => {
     const handleFilterEvent = (event: Event) => {
@@ -303,7 +331,7 @@ export default function PromotionEventsPanel() {
                 <p className="text-sm font-semibold text-foreground">{actionLabel}</p>
                 <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-foreground/60">
                   <span className="rounded-full border border-border/60 bg-[#f9f9f9] px-2 py-1">
-                    Listing {truncateId(event.listing_id)}
+                    Listing {truncatePromotionEntityId(event.listing_id)}
                   </span>
                   <span className="rounded-full border border-border/60 bg-[#f9f9f9] px-2 py-1">
                     Seller {truncatePromotionEntityId(event.seller_id)}

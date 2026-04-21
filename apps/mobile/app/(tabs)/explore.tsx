@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 
 import { formatCurrency, getApiBaseUrl } from '@/lib/api';
 import {
+  clearBuyerRecentNotificationDeliveries,
   clearBuyerWorkspaceResumeFilters,
   getBuyerDeliveryRetryMode,
   getBuyerRecentNotificationDeliveries,
@@ -113,6 +114,7 @@ export default function BuyerScreen() {
     updateNotificationPreferences,
     syncPushToken,
     retryNotificationDelivery,
+    bulkRetryNotificationDeliveries,
   } = useBuyerSession();
   const router = useRouter();
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in');
@@ -527,7 +529,7 @@ export default function BuyerScreen() {
         setActionMessage(null);
         setActionDetails([]);
         setRetryingFailedDeliveries(true);
-        const result = await retryNotificationDelivery(
+        const result = await bulkRetryNotificationDeliveries(
           failedDeliveries.map((delivery) => delivery.id),
           deliveryRetryMode,
         );
@@ -914,7 +916,7 @@ export default function BuyerScreen() {
                   <Text style={styles.activityMeta}>
                     {new Date(delivery.created_at).toLocaleString()} · attempts {delivery.attempts}
                   </Text>
-                  <Text style={styles.activityNote}>{delivery.payload.subject ?? getDeliveryRecipient(delivery.payload)}</Text>
+                  <Text style={styles.activityNote}>{getDeliverySummary(delivery.payload)}</Text>
                 </Pressable>
               ))}
             </View>
@@ -982,7 +984,7 @@ export default function BuyerScreen() {
           <Text style={styles.modeBadgeHint}>Tap to switch</Text>
         </Pressable>
         <View style={styles.modeRow}>
-          <Text style={styles.modeCaption}>Retry mode</Text>
+          <Text style={styles.modeBadgeLabel}>Retry mode</Text>
           <View style={styles.filterRow}>
             <FilterChip
               label={`Best Effort${deliveryRetryMode === 'best_effort' ? ' · Active' : ''}`}

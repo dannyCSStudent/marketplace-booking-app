@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   createApiClient,
@@ -32,7 +32,7 @@ function toneClasses(severity: string) {
 }
 
 function formatLastActive(summary: SellerInactivitySummaryRead) {
-  const kind = summary.last_active_kind.replaceAll("_", " ");
+  const kind = (summary.last_active_kind ?? "unknown").replaceAll("_", " ");
   const when = summary.last_active_at ? new Date(summary.last_active_at).toLocaleDateString() : "unknown";
   return `${kind} · ${when}`;
 }
@@ -67,7 +67,7 @@ export function SellerInactivityPanel() {
   });
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  function updateUrlFilter(name: string, value: string) {
+  const updateUrlFilter = useCallback((name: string, value: string) => {
     const nextParams = new URLSearchParams(searchParams.toString());
     if (value === "all") {
       nextParams.delete(name);
@@ -79,7 +79,7 @@ export function SellerInactivityPanel() {
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
       scroll: false,
     });
-  }
+  }, [pathname, router, searchParams]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -145,7 +145,7 @@ export function SellerInactivityPanel() {
 
     window.localStorage.setItem(STORAGE_KEY, stateFilter);
     updateUrlFilter("state", stateFilter);
-  }, [stateFilter]);
+  }, [stateFilter, updateUrlFilter]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -154,7 +154,7 @@ export function SellerInactivityPanel() {
 
     window.localStorage.setItem(STORAGE_KEY_SEVERITY, severityFilter);
     updateUrlFilter("severity", severityFilter);
-  }, [severityFilter]);
+  }, [severityFilter, updateUrlFilter]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -284,7 +284,7 @@ export function SellerInactivityPanel() {
   }
 
   function openLatestSellerInactivityAlert() {
-    if (latestEvent) {
+    if (topEvent) {
       document.getElementById("seller-inactivity-history")?.scrollIntoView({
         behavior: "smooth",
         block: "start",
@@ -477,10 +477,10 @@ export function SellerInactivityPanel() {
       {visibleSummaries.length > 0 ? (
         <div className="mt-5 grid gap-3 lg:grid-cols-2">
           {visibleSummaries.map((summary) => (
-            <article
+              <article
               id={`seller-inactivity-summary-${summary.seller_id}`}
               key={summary.seller_id}
-              className={`rounded-[1.6rem] border px-4 py-4 ${toneClasses(summary.severity)}`}
+              className={`rounded-[1.6rem] border px-4 py-4 ${toneClasses(summary.severity ?? "monitor")}`}
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -559,9 +559,9 @@ export function SellerInactivityPanel() {
               <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
                 {events.length} recent action{events.length === 1 ? "" : "s"}
               </span>
-              {latestEvent ? (
+              {topEvent ? (
                 <span className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/60">
-                  Latest · {latestEvent.seller_display_name}
+                  Latest · {topEvent.seller_display_name}
                 </span>
               ) : null}
             </div>

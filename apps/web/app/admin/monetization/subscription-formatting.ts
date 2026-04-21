@@ -1,6 +1,5 @@
 import type { SellerSubscriptionEventRead } from "@/app/lib/api";
 import type {
-  SubscriptionHistoryDirection,
   SubscriptionHistoryFilterDetail,
   SubscriptionHistoryReason,
 } from "@/app/admin/monetization/subscription-history-filters";
@@ -28,7 +27,9 @@ export function getSubscriptionReasonFilterFromLabel(
   return matched?.value ?? "all";
 }
 
-export function formatSubscriptionReasonLabel(reason: SellerSubscriptionEventRead["reason_code"]) {
+export function formatSubscriptionReasonLabel(
+  reason: SellerSubscriptionEventRead["reason_code"] | "all" | null | undefined,
+) {
   const matched = SUBSCRIPTION_REASON_OPTIONS.find((option) => option.value === reason);
   return matched?.label ?? "Unspecified";
 }

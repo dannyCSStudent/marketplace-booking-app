@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState, useTransition } from "react";
 
 import {
   ApiError,
@@ -15,8 +15,26 @@ import { highlightMonetizationSection } from "@/app/admin/monetization/monetizat
 import { useSubscriptionAnalytics } from "@/app/admin/monetization/subscription-analytics-context";
 import { escapeCsvValue } from "@/app/admin/monetization/subscription-formatting";
 
-type Status = "idle" | "loading" | "error";
 type RecentActivityFilter = "all" | "create" | "refresh" | "export";
+
+type SubscriptionTierRecentActivityInput =
+  | {
+      kind: "create";
+      label: string;
+      detail: string;
+      tierCode: string;
+      tierName: string;
+    }
+  | {
+      kind: "refresh";
+      label: string;
+      detail: string;
+    }
+  | {
+      kind: "export";
+      label: string;
+      detail: string;
+    };
 
 type SubscriptionTierRecentActivityEntry =
   | {
@@ -57,44 +75,80 @@ const SUBSCRIPTION_TIERS_ACTIVITY_KEY = "admin.subscription-tiers.recent-activit
 const SUBSCRIPTION_TIERS_ACTIVITY_FILTER_KEY = "admin.subscription-tiers.recent-activity-filter";
 const MAX_RECENT_ACTIVITY_ENTRIES = 4;
 
+type SubscriptionTierRecord = ReturnType<typeof useSubscriptionAnalytics>["tiers"][number];
+
+function downloadSubscriptionTiersCsv(tiers: SubscriptionTierRecord[]) {
+  const rows = tiers.map((tier) => [
+    tier.code,
+    tier.name,
+    tier.monthly_price_cents,
+    tier.perks_summary || "",
+    tier.analytics_enabled ? "yes" : "no",
+    tier.priority_visibility ? "yes" : "no",
+    tier.premium_storefront ? "yes" : "no",
+    tier.is_active ? "yes" : "no",
+  ]);
+  const csv = [
+    [
+      "code",
+      "name",
+      "monthly_price_cents",
+      "perks_summary",
+      "analytics_enabled",
+      "priority_visibility",
+      "premium_storefront",
+      "is_active",
+    ],
+    ...rows,
+  ]
+    .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "subscription-tiers.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function SubscriptionTiersPanel() {
   const [form, setForm] = useState<SubscriptionTierCreate>(EMPTY_FORM);
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const { tiers, status, error, lastUpdated, refresh, createTier } = useSubscriptionAnalytics();
-  const [recentActivity, setRecentActivity] = useState<SubscriptionTierRecentActivityEntry[]>([]);
-  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(SUBSCRIPTION_TIERS_ACTIVITY_KEY);
-      if (!stored) {
-        return;
+  const [recentActivity, setRecentActivity] = useState<SubscriptionTierRecentActivityEntry[]>(
+    () => {
+      if (typeof window === "undefined") {
+        return [];
       }
 
-      const parsed = JSON.parse(stored) as SubscriptionTierRecentActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(SUBSCRIPTION_TIERS_ACTIVITY_KEY);
-    }
-  }, []);
+      try {
+        const stored = window.sessionStorage.getItem(SUBSCRIPTION_TIERS_ACTIVITY_KEY);
+        if (!stored) {
+          return [];
+        }
 
-  useEffect(() => {
+        const parsed = JSON.parse(stored) as SubscriptionTierRecentActivityEntry[];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        window.sessionStorage.removeItem(SUBSCRIPTION_TIERS_ACTIVITY_KEY);
+        return [];
+      }
+    },
+  );
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>(() => {
     if (typeof window === "undefined") {
-      return;
+      return "all";
     }
 
     const stored = window.sessionStorage.getItem(SUBSCRIPTION_TIERS_ACTIVITY_FILTER_KEY);
     if (stored === "all" || stored === "create" || stored === "refresh" || stored === "export") {
-      setRecentActivityFilter(stored);
+      return stored;
     }
-  }, []);
+
+    return "all";
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -115,18 +169,18 @@ export default function SubscriptionTiersPanel() {
     window.sessionStorage.setItem(SUBSCRIPTION_TIERS_ACTIVITY_FILTER_KEY, recentActivityFilter);
   }, [recentActivityFilter]);
 
-  const recordRecentActivity = (entry: Omit<SubscriptionTierRecentActivityEntry, "id" | "createdAt">) => {
+  const recordRecentActivity = useCallback((entry: SubscriptionTierRecentActivityInput) => {
     setRecentActivity((current) =>
       [
         {
           ...entry,
           id: `${entry.kind}:${Date.now()}`,
           createdAt: new Date().toISOString(),
-        },
+        } as SubscriptionTierRecentActivityEntry,
         ...current,
       ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
     );
-  };
+  }, []);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -134,16 +188,18 @@ export default function SubscriptionTiersPanel() {
     startTransition(async () => {
       setMessage(null);
       const normalizedCode = form.code.trim().toLowerCase().replace(/\s+/g, "-");
+      const monthlyPriceCents = form.monthly_price_cents ?? 0;
       if (!normalizedCode || !form.name.trim()) {
         setMessage("Enter both a code and a display name.");
         return;
       }
-      if (!Number.isInteger(form.monthly_price_cents) || form.monthly_price_cents < 0) {
+      if (!Number.isInteger(monthlyPriceCents) || monthlyPriceCents < 0) {
         setMessage("Enter a non-negative monthly price in cents.");
         return;
       }
 
       try {
+        const monthlyPriceCents = form.monthly_price_cents ?? 0;
         await createTier(
           {
             ...form,
@@ -155,7 +211,7 @@ export default function SubscriptionTiersPanel() {
         recordRecentActivity({
           kind: "create",
           label: form.name.trim(),
-          detail: `${normalizedCode} · ${formatCurrency(form.monthly_price_cents, "USD")}/mo`,
+          detail: `${normalizedCode} · ${formatCurrency(monthlyPriceCents, "USD")}/mo`,
           tierCode: normalizedCode,
           tierName: form.name.trim(),
         });
@@ -167,16 +223,7 @@ export default function SubscriptionTiersPanel() {
     });
   };
 
-  const runRefresh = () => {
-    recordRecentActivity({
-      kind: "refresh",
-      label: "Refreshed tiers",
-      detail: `${tiers.length} tiers`,
-    });
-    void refresh();
-  };
-
-  const runExport = () => {
+  const handleExportTiers = () => {
     if (tiers.length === 0) {
       return;
     }
@@ -185,38 +232,7 @@ export default function SubscriptionTiersPanel() {
       label: `Exported ${tiers.length} tiers`,
       detail: `${tiers.filter((tier) => tier.is_active).length} active`,
     });
-    const rows = tiers.map((tier) => [
-      tier.code,
-      tier.name,
-      tier.monthly_price_cents,
-      tier.perks_summary || "",
-      tier.analytics_enabled ? "yes" : "no",
-      tier.priority_visibility ? "yes" : "no",
-      tier.premium_storefront ? "yes" : "no",
-      tier.is_active ? "yes" : "no",
-    ]);
-    const csv = [
-      [
-        "code",
-        "name",
-        "monthly_price_cents",
-        "perks_summary",
-        "analytics_enabled",
-        "priority_visibility",
-        "premium_storefront",
-        "is_active",
-      ],
-      ...rows,
-    ]
-      .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "subscription-tiers.csv";
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadSubscriptionTiersCsv(tiers);
   };
 
   useEffect(() => {
@@ -226,14 +242,19 @@ export default function SubscriptionTiersPanel() {
         return;
       }
       highlightMonetizationSection("subscription-tiers-panel");
-      runExport();
+      recordRecentActivity({
+        kind: "export",
+        label: `Exported ${tiers.length} tiers`,
+        detail: `${tiers.filter((tier) => tier.is_active).length} active`,
+      });
+      downloadSubscriptionTiersCsv(tiers);
     };
 
     window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [runExport, tiers]);
+  }, [recordRecentActivity, tiers]);
 
   const recentActivityCounts = useMemo(
     () => ({
@@ -359,7 +380,7 @@ export default function SubscriptionTiersPanel() {
                   ) : (
                     <button
                       className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
-                      onClick={runExport}
+                    onClick={handleExportTiers}
                       type="button"
                     >
                       Re-export slice

@@ -36,6 +36,8 @@ from app.schemas.notifications import (
 ORDER_FRAUD_WATCH_LOOKBACK_DAYS = 30
 ORDER_FRAUD_WATCH_RECENT_WINDOW_DAYS = 7
 ORDER_FRAUD_WATCH_MIN_EVENTS = 3
+# Keep the fraud-watch trigger gate aligned with the order service without importing it.
+ORDER_EXCEPTION_TRIGGER_STATUSES = {"confirmed", "preparing", "ready", "out_for_delivery"}
 
 
 def get_my_notification_deliveries(current_user: CurrentUser) -> list[NotificationDeliveryRead]:

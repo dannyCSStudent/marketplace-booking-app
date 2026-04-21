@@ -27,14 +27,18 @@ function getPrimaryImageUrl(listing: { images?: { image_url: string }[] | null }
 
 function getSuggestionSecondarySignal(listing: {
   duration_minutes?: number | null;
-  price_cents: number;
-  currency: string;
+  price_cents?: number | null;
+  currency?: string | null;
 }) {
   if (listing.duration_minutes) {
     return `${listing.duration_minutes} min`;
   }
 
-  return formatCurrency(listing.price_cents, listing.currency);
+  if (typeof listing.price_cents === 'number' && typeof listing.currency === 'string') {
+    return formatCurrency(listing.price_cents, listing.currency);
+  }
+
+  return 'Price unavailable';
 }
 
 function getSuggestionActionMode(listing: {
@@ -203,7 +207,15 @@ function getRecommendationMatch(
 export default function TransactionReceiptScreen() {
   const { kind, id } = useLocalSearchParams<{ kind: string; id: string }>();
   const router = useRouter();
-  const { session, listings, orders, bookings, notifications, notificationDeliveries, retryNotificationDelivery } = useBuyerSession();
+  const {
+    session,
+    listings,
+    orders,
+    bookings,
+    notifications,
+    notificationDeliveries,
+    bulkRetryNotificationDeliveries,
+  } = useBuyerSession();
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [receiptBooking, setReceiptBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(false);
@@ -413,7 +425,7 @@ export default function TransactionReceiptScreen() {
         setActionMessage(null);
         setActionDetails([]);
         setRetryingRelatedDeliveries(true);
-        const result = await retryNotificationDelivery(
+        const result = await bulkRetryNotificationDeliveries(
           failedRelatedDeliveries.map((delivery) => delivery.id),
           deliveryRetryMode,
         );

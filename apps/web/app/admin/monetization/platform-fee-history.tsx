@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ApiError, createApiClient, formatCurrency, type PlatformFeeHistoryPoint } from "@/app/lib/api";
 import {
@@ -63,7 +63,7 @@ export default function PlatformFeeHistory() {
     [history],
   );
 
-  const exportCsv = () => {
+  const exportCsv = useCallback(() => {
     if (history.length === 0) {
       return;
     }
@@ -83,7 +83,7 @@ export default function PlatformFeeHistory() {
     link.download = `platform-fee-history-${windowDays}d.csv`;
     link.click();
     URL.revokeObjectURL(url);
-  };
+  }, [history, windowDays]);
 
   useEffect(() => {
     const handleExportEvent = (event: Event) => {
@@ -99,7 +99,7 @@ export default function PlatformFeeHistory() {
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [history, windowDays]);
+  }, [exportCsv]);
 
   const renderBody = () => {
     if (!lastUpdated && !error && history.length === 0) {

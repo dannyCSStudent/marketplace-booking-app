@@ -3,6 +3,7 @@ export type MonetizationExportTarget =
   | "delivery_fee_history"
   | "subscription_summary"
   | "subscription_history"
+  | "subscription_tiers"
   | "promotion_heatmap"
   | "promotion_events"
   | "promoted_listings";

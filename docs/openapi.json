@@ -4808,6 +4808,270 @@
         }
       }
     },
+    "/notifications/admin/order-fraud-watch/summaries": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Order Fraud Watch Summaries",
+        "operationId": "read_admin_order_fraud_watch_summaries_notifications_admin_order_fraud_watch_summaries_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 6,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OrderFraudWatchBuyerSummaryRead"
+                  },
+                  "title": "Response Read Admin Order Fraud Watch Summaries Notifications Admin Order Fraud Watch Summaries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/order-fraud-watch/events": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Read Admin Order Fraud Watch Events",
+        "operationId": "read_admin_order_fraud_watch_events_notifications_admin_order_fraud_watch_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OrderFraudWatchEventRead"
+                  },
+                  "title": "Response Read Admin Order Fraud Watch Events Notifications Admin Order Fraud Watch Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/admin/order-fraud-watch/{buyer_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Acknowledge Order Fraud Watch",
+        "operationId": "acknowledge_order_fraud_watch_notifications_admin_order_fraud_watch__buyer_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "buyer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Buyer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Acknowledge Order Fraud Watch Notifications Admin Order Fraud Watch  Buyer Id  Acknowledge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Clear Order Fraud Watch Acknowledgement",
+        "operationId": "clear_order_fraud_watch_acknowledgement_notifications_admin_order_fraud_watch__buyer_id__acknowledge_delete",
+        "parameters": [
+          {
+            "name": "buyer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Buyer Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationDeliveryRead"
+                  },
+                  "title": "Response Clear Order Fraud Watch Acknowledgement Notifications Admin Order Fraud Watch  Buyer Id  Acknowledge Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications/admin/seller-inactivity/summaries": {
       "get": {
         "tags": [
@@ -11460,6 +11724,179 @@
           "latest_event_created_at"
         ],
         "title": "OrderExceptionSellerSummaryRead"
+      },
+      "OrderFraudWatchBuyerSummaryRead": {
+        "properties": {
+          "buyer_id": {
+            "type": "string",
+            "title": "Buyer Id"
+          },
+          "buyer_display_name": {
+            "type": "string",
+            "title": "Buyer Display Name"
+          },
+          "alert_delivery_count": {
+            "type": "integer",
+            "title": "Alert Delivery Count"
+          },
+          "latest_alert_delivery_status": {
+            "type": "string",
+            "title": "Latest Alert Delivery Status"
+          },
+          "latest_alert_delivery_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Latest Alert Delivery Created At"
+          },
+          "order_exception_count": {
+            "type": "integer",
+            "title": "Order Exception Count"
+          },
+          "recent_order_exception_count": {
+            "type": "integer",
+            "title": "Recent Order Exception Count"
+          },
+          "risk_level": {
+            "type": "string",
+            "title": "Risk Level"
+          },
+          "alert_reason": {
+            "type": "string",
+            "title": "Alert Reason"
+          },
+          "latest_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Order Id"
+          },
+          "latest_order_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Order Status"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "buyer_id",
+          "buyer_display_name",
+          "alert_delivery_count",
+          "latest_alert_delivery_status",
+          "latest_alert_delivery_created_at",
+          "order_exception_count",
+          "recent_order_exception_count",
+          "risk_level",
+          "alert_reason",
+          "acknowledged"
+        ],
+        "title": "OrderFraudWatchBuyerSummaryRead"
+      },
+      "OrderFraudWatchEventRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "buyer_id": {
+            "type": "string",
+            "title": "Buyer Id"
+          },
+          "buyer_display_name": {
+            "type": "string",
+            "title": "Buyer Display Name"
+          },
+          "delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "alert_signature": {
+            "type": "string",
+            "title": "Alert Signature"
+          },
+          "order_exception_count": {
+            "type": "integer",
+            "title": "Order Exception Count"
+          },
+          "recent_order_exception_count": {
+            "type": "integer",
+            "title": "Recent Order Exception Count"
+          },
+          "risk_level": {
+            "type": "string",
+            "title": "Risk Level"
+          },
+          "latest_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Order Id"
+          },
+          "latest_order_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Order Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "buyer_id",
+          "buyer_display_name",
+          "actor_user_id",
+          "action",
+          "alert_signature",
+          "order_exception_count",
+          "recent_order_exception_count",
+          "risk_level",
+          "created_at"
+        ],
+        "title": "OrderFraudWatchEventRead"
       },
       "OrderItemCreate": {
         "properties": {

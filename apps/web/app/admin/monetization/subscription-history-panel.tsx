@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   formatCurrency,
@@ -92,6 +92,79 @@ type SubscriptionHistoryRecentActivityEntry =
       destructiveType: "all" | "value_drop" | "perk_removal";
     };
 
+type SubscriptionHistoryRecentActivityInput =
+  | {
+      kind: "assignment";
+      label: string;
+      detail: string;
+      sellerSlug?: string;
+      tierId?: string;
+      tierName?: string;
+      reasonCode?: string;
+    }
+  | {
+      kind: "export";
+      label: string;
+      detail: string;
+      windowDays: SubscriptionHistoryWindowDays;
+      direction: DirectionFilter;
+      reason: ReasonFilter;
+      destructiveOnly: boolean;
+      destructiveType: "all" | "value_drop" | "perk_removal";
+    };
+
+function downloadSubscriptionHistoryCsv(args: {
+  filteredChanges: SellerSubscriptionEventRead[];
+  destructiveByEventId: Record<string, NonNullable<ReturnType<typeof buildSubscriptionEventDestructiveMeta>>>;
+}) {
+  const rows = args.filteredChanges.map((event) => {
+    const eventId = event.id ?? `${event.seller_id}-${event.to_tier_id}-${event.created_at ?? "row"}`;
+    const destructive = args.destructiveByEventId[eventId];
+    return [
+      event.created_at ?? "",
+      event.seller_display_name || "",
+      event.seller_slug || event.seller_id,
+      formatSubscriptionDirectionLabel(event.action),
+      formatSubscriptionReasonLabel(event.reason_code),
+      event.from_tier_name || event.from_tier_code || event.from_tier_id || "",
+      event.to_tier_name || event.to_tier_code || event.to_tier_id || "",
+      destructive?.isDestructive ? "yes" : "no",
+      destructive?.hasValueDrop ? "yes" : "no",
+      destructive?.hasPerkRemoval ? "yes" : "no",
+      destructive?.priceDeltaCents != null ? destructive.priceDeltaCents / 100 : "",
+      destructive?.lostPerks.join("; ") || "",
+      event.actor_name || event.actor_user_id,
+      event.note || "",
+    ];
+  });
+  const header = [
+    "created_at",
+    "seller_display_name",
+    "seller_slug",
+    "action",
+    "reason",
+    "from_tier",
+    "to_tier",
+    "is_destructive",
+    "has_value_drop",
+    "has_perk_removal",
+    "price_delta_dollars",
+    "lost_perks",
+    "actor",
+    "note",
+  ];
+  const csv = [header, ...rows]
+    .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "subscription-history.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function SubscriptionHistoryPanel() {
   const { preferences, setSubscriptionHistory } = useMonetizationPreferences();
   const { subscriptions, events, tiers, status, error, lastUpdated, refresh } =
@@ -103,39 +176,38 @@ export default function SubscriptionHistoryPanel() {
     destructiveType,
     windowDays,
   } = preferences.subscriptionHistory;
-  const [recentActivity, setRecentActivity] = useState<SubscriptionHistoryRecentActivityEntry[]>([]);
-  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(SUBSCRIPTION_HISTORY_ACTIVITY_KEY);
-      if (!stored) {
-        return;
+  const [recentActivity, setRecentActivity] = useState<SubscriptionHistoryRecentActivityEntry[]>(
+    () => {
+      if (typeof window === "undefined") {
+        return [];
       }
 
-      const parsed = JSON.parse(stored) as SubscriptionHistoryRecentActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(SUBSCRIPTION_HISTORY_ACTIVITY_KEY);
-    }
-  }, []);
+      try {
+        const stored = window.sessionStorage.getItem(SUBSCRIPTION_HISTORY_ACTIVITY_KEY);
+        if (!stored) {
+          return [];
+        }
 
-  useEffect(() => {
+        const parsed = JSON.parse(stored) as SubscriptionHistoryRecentActivityEntry[];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        window.sessionStorage.removeItem(SUBSCRIPTION_HISTORY_ACTIVITY_KEY);
+        return [];
+      }
+    },
+  );
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>(() => {
     if (typeof window === "undefined") {
-      return;
+      return "all";
     }
 
     const stored = window.sessionStorage.getItem(SUBSCRIPTION_HISTORY_ACTIVITY_FILTER_KEY);
     if (stored === "all" || stored === "assignment" || stored === "export") {
-      setRecentActivityFilter(stored);
+      return stored;
     }
-  }, []);
+
+    return "all";
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -176,154 +248,29 @@ export default function SubscriptionHistoryPanel() {
   );
   const latestActivity = recentActivity[0] ?? null;
 
-  const recordRecentActivity = (
-    entry: Omit<SubscriptionHistoryRecentActivityEntry, "id" | "createdAt">,
-  ) => {
+  const recordRecentActivity = useCallback((entry: SubscriptionHistoryRecentActivityInput) => {
     setRecentActivity((current) =>
       [
         {
           ...entry,
           id: `${entry.kind}:${Date.now()}`,
           createdAt: new Date().toISOString(),
-        },
+        } as SubscriptionHistoryRecentActivityEntry,
         ...current,
       ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
     );
-  };
+  }, []);
 
-  const openAssignmentView = (event: SellerSubscriptionEventRead) => {
-    const detail = {
-      sellerSlug: event.seller_slug || undefined,
-      tierId: event.to_tier_id || undefined,
-      tierName: event.to_tier_name || event.to_tier_code || undefined,
-      reasonCode: event.reason_code ?? undefined,
-    };
-
-    recordRecentActivity({
-      kind: "assignment",
-      label: event.seller_display_name || event.seller_slug || event.seller_id,
-      detail: `${event.action} · ${formatSubscriptionReasonLabel(event.reason_code)}`,
-      sellerSlug: detail.sellerSlug,
-      tierId: detail.tierId,
-      tierName: detail.tierName,
-      reasonCode: detail.reasonCode,
-    });
-
-    highlightMonetizationSection("subscription-assignment-panel");
-    window.dispatchEvent(
-      new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, {
-        detail,
-      }),
-    );
-  };
-
-  const openRecentAssignmentView = (entry: SubscriptionHistoryRecentActivityEntry) => {
-    if (entry.kind !== "assignment") {
-      return;
-    }
-
-    highlightMonetizationSection("subscription-assignment-panel");
-    window.dispatchEvent(
-      new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, {
-        detail: {
-          sellerSlug: entry.sellerSlug,
-          tierId: entry.tierId,
-          tierName: entry.tierName,
-          reasonCode: entry.reasonCode,
-        },
-      }),
-    );
-  };
-
-  const exportFilteredChanges = () => {
-    const rows = summary.filteredChanges.map((event) => {
-      const eventId = event.id ?? `${event.seller_id}-${event.to_tier_id}-${event.created_at ?? "row"}`;
-      const destructive = summary.destructiveByEventId[eventId];
-      return [
-        event.created_at ?? "",
-        event.seller_display_name || "",
-        event.seller_slug || event.seller_id,
-        formatSubscriptionDirectionLabel(event.action),
-        formatSubscriptionReasonLabel(event.reason_code),
-        event.from_tier_name || event.from_tier_code || event.from_tier_id || "",
-        event.to_tier_name || event.to_tier_code || event.to_tier_id || "",
-        destructive?.isDestructive ? "yes" : "no",
-        destructive?.hasValueDrop ? "yes" : "no",
-        destructive?.hasPerkRemoval ? "yes" : "no",
-        destructive?.priceDeltaCents != null ? destructive.priceDeltaCents / 100 : "",
-        destructive?.lostPerks.join("; ") || "",
-        event.actor_name || event.actor_user_id,
-        event.note || "",
-      ];
-    });
-    const header = [
-      "created_at",
-      "seller_display_name",
-      "seller_slug",
-      "action",
-      "reason",
-      "from_tier",
-      "to_tier",
-      "is_destructive",
-      "has_value_drop",
-      "has_perk_removal",
-      "price_delta_dollars",
-      "lost_perks",
-      "actor",
-      "note",
-    ];
-    const csv = [header, ...rows]
-      .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "subscription-history.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const runExport = () => {
-    recordRecentActivity({
-      kind: "export",
-      label: `Exported ${summary.filteredChanges.length} changes`,
-      detail: `${windowDays}d · ${formatSubscriptionDirectionLabel(directionFilter)} · ${formatSubscriptionReasonLabel(reasonFilter)}`,
-      windowDays,
-      direction: directionFilter,
-      reason: reasonFilter,
-      destructiveOnly,
-      destructiveType,
-    });
-    exportFilteredChanges();
-  };
-
-  useEffect(() => {
-    const handleFilterEvent = (event: Event) => {
-      const detail = (event as CustomEvent<SubscriptionHistoryFilterDetail>).detail;
-      if (!detail) {
-        return;
+  const summary = (() => {
+    const latestTimestamp = events.reduce((currentLatest, event) => {
+      const createdAt = new Date(event.created_at ?? "").getTime();
+      if (Number.isNaN(createdAt)) {
+        return currentLatest;
       }
-      setSubscriptionHistory((current) => ({
-        ...current,
-        direction: detail.direction,
-        reason: detail.reason,
-        destructiveOnly: Boolean(detail.destructiveOnly),
-        destructiveType: detail.destructiveType ?? "all",
-        windowDays: detail.windowDays ?? 30,
-      }));
-    };
-
-    window.addEventListener(SUBSCRIPTION_HISTORY_FILTER_EVENT, handleFilterEvent);
-    return () => {
-      window.removeEventListener(SUBSCRIPTION_HISTORY_FILTER_EVENT, handleFilterEvent);
-    };
-  }, [setSubscriptionHistory]);
-
-  const summary = useMemo(() => {
-    const now = Date.now();
-    const windowStart = now - windowDays * 24 * 60 * 60 * 1000;
-    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+      return Math.max(currentLatest, createdAt);
+    }, 0);
+    const windowStart = latestTimestamp - windowDays * 24 * 60 * 60 * 1000;
+    const weekAgo = latestTimestamp - 7 * 24 * 60 * 60 * 1000;
     const tiersById = Object.fromEntries(tiers.map((tier) => [tier.id ?? "", tier]));
     const destructiveByEventId = Object.fromEntries(
       events.map((event) => {
@@ -396,7 +343,90 @@ export default function SubscriptionHistoryPanel() {
         return matchesDirection && matchesReason && matchesDestructive && matchesDestructiveType;
       }),
     };
-  }, [destructiveOnly, destructiveType, directionFilter, events, reasonFilter, subscriptions, tiers, windowDays]);
+  })();
+
+  const openAssignmentView = (event: SellerSubscriptionEventRead) => {
+    const detail = {
+      sellerSlug: event.seller_slug || undefined,
+      tierId: event.to_tier_id || undefined,
+      tierName: event.to_tier_name || event.to_tier_code || undefined,
+      reasonCode: event.reason_code ?? undefined,
+    };
+
+    recordRecentActivity({
+      kind: "assignment",
+      label: event.seller_display_name || event.seller_slug || event.seller_id,
+      detail: `${event.action} · ${formatSubscriptionReasonLabel(event.reason_code)}`,
+      sellerSlug: detail.sellerSlug,
+      tierId: detail.tierId,
+      tierName: detail.tierName,
+      reasonCode: detail.reasonCode,
+    });
+
+    highlightMonetizationSection("subscription-assignment-panel");
+    window.dispatchEvent(
+      new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, {
+        detail,
+      }),
+    );
+  };
+
+  const openRecentAssignmentView = (entry: SubscriptionHistoryRecentActivityEntry) => {
+    if (entry.kind !== "assignment") {
+      return;
+    }
+
+    highlightMonetizationSection("subscription-assignment-panel");
+    window.dispatchEvent(
+      new CustomEvent(SUBSCRIPTION_ASSIGNMENT_FOCUS_EVENT, {
+        detail: {
+          sellerSlug: entry.sellerSlug,
+          tierId: entry.tierId,
+          tierName: entry.tierName,
+          reasonCode: entry.reasonCode,
+        },
+      }),
+    );
+  };
+
+  const exportCurrentSlice = () => {
+    recordRecentActivity({
+      kind: "export",
+      label: `Exported ${summary.filteredChanges.length} changes`,
+      detail: `${windowDays}d · ${formatSubscriptionDirectionLabel(directionFilter)} · ${formatSubscriptionReasonLabel(reasonFilter)}`,
+      windowDays,
+      direction: directionFilter,
+      reason: reasonFilter,
+      destructiveOnly,
+      destructiveType,
+    });
+    downloadSubscriptionHistoryCsv({
+      filteredChanges: summary.filteredChanges,
+      destructiveByEventId: summary.destructiveByEventId,
+    });
+  };
+
+  useEffect(() => {
+    const handleFilterEvent = (event: Event) => {
+      const detail = (event as CustomEvent<SubscriptionHistoryFilterDetail>).detail;
+      if (!detail) {
+        return;
+      }
+      setSubscriptionHistory((current) => ({
+        ...current,
+        direction: detail.direction,
+        reason: detail.reason,
+        destructiveOnly: Boolean(detail.destructiveOnly),
+        destructiveType: detail.destructiveType ?? "all",
+        windowDays: detail.windowDays ?? 30,
+      }));
+    };
+
+    window.addEventListener(SUBSCRIPTION_HISTORY_FILTER_EVENT, handleFilterEvent);
+    return () => {
+      window.removeEventListener(SUBSCRIPTION_HISTORY_FILTER_EVENT, handleFilterEvent);
+    };
+  }, [setSubscriptionHistory]);
 
   useEffect(() => {
     const handleExportEvent = (event: Event) => {
@@ -405,14 +435,17 @@ export default function SubscriptionHistoryPanel() {
         return;
       }
       highlightMonetizationSection("subscription-history-panel");
-      runExport();
+      downloadSubscriptionHistoryCsv({
+        filteredChanges: summary.filteredChanges,
+        destructiveByEventId: summary.destructiveByEventId,
+      });
     };
 
     window.addEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [destructiveOnly, destructiveType, directionFilter, reasonFilter, runExport, summary, windowDays]);
+  }, [summary.filteredChanges, summary.destructiveByEventId]);
 
   return (
     <section
@@ -454,7 +487,7 @@ export default function SubscriptionHistoryPanel() {
             type="button"
             disabled={summary.filteredChanges.length === 0}
             className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-foreground hover:text-foreground/90 disabled:border-border/30 disabled:text-foreground/40"
-            onClick={runExport}
+            onClick={exportCurrentSlice}
           >
             Export CSV
           </button>
@@ -543,7 +576,7 @@ export default function SubscriptionHistoryPanel() {
                 ) : (
                   <button
                     className="rounded-full border border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground transition hover:border-accent hover:text-accent"
-                    onClick={runExport}
+                    onClick={exportCurrentSlice}
                     type="button"
                   >
                     Re-export slice

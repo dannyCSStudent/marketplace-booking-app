@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   PROMOTION_LISTING_FOCUS_EVENT,
@@ -43,43 +43,56 @@ type PromotionHeatmapRecentActivityEntry =
       windowDays: number;
     };
 
+type PromotionHeatmapRecentActivityInput =
+  | {
+      kind: "focus";
+      label: string;
+      detail: string;
+      type: PromotionListingTypeFilter;
+    }
+  | {
+      kind: "export";
+      label: string;
+      detail: string;
+      windowDays: number;
+    };
+
 export default function PromotionHeatmap() {
   const { preferences, setPromotionDashboard } = useMonetizationPreferences();
   const { summary: buckets, events, listingTypeById, status, error } = usePromotionAnalytics();
   const { windowDays } = preferences.promotionDashboard;
-  const [recentActivity, setRecentActivity] = useState<PromotionHeatmapRecentActivityEntry[]>([]);
-  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(PROMOTION_HEATMAP_ACTIVITY_KEY);
-      if (!stored) {
-        return;
+  const [recentActivity, setRecentActivity] = useState<PromotionHeatmapRecentActivityEntry[]>(
+    () => {
+      if (typeof window === "undefined") {
+        return [];
       }
 
-      const parsed = JSON.parse(stored) as PromotionHeatmapRecentActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(PROMOTION_HEATMAP_ACTIVITY_KEY);
-    }
-  }, []);
+      try {
+        const stored = window.sessionStorage.getItem(PROMOTION_HEATMAP_ACTIVITY_KEY);
+        if (!stored) {
+          return [];
+        }
 
-  useEffect(() => {
+        const parsed = JSON.parse(stored) as PromotionHeatmapRecentActivityEntry[];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        window.sessionStorage.removeItem(PROMOTION_HEATMAP_ACTIVITY_KEY);
+        return [];
+      }
+    },
+  );
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>(() => {
     if (typeof window === "undefined") {
-      return;
+      return "all";
     }
 
     const stored = window.sessionStorage.getItem(PROMOTION_HEATMAP_ACTIVITY_FILTER_KEY);
     if (stored === "all" || stored === "focus" || stored === "export") {
-      setRecentActivityFilter(stored);
+      return stored;
     }
-  }, []);
+
+    return "all";
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -114,7 +127,14 @@ export default function PromotionHeatmap() {
   const grandTotal = useMemo(() => buckets.reduce((sum, bucket) => sum + bucket.count, 0), [buckets]);
 
   const trendByType = useMemo(() => {
-    const windowStart = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+    const latestTimestamp = events.reduce((currentLatest, event) => {
+      const createdAt = new Date(event.created_at).getTime();
+      if (Number.isNaN(createdAt)) {
+        return currentLatest;
+      }
+      return Math.max(currentLatest, createdAt);
+    }, 0);
+    const windowStart = latestTimestamp - windowDays * 24 * 60 * 60 * 1000;
     const counts: Record<PromotionListingTypeFilter, { added: number; removed: number }> = {
       all: { added: 0, removed: 0 },
       product: { added: 0, removed: 0 },
@@ -141,20 +161,20 @@ export default function PromotionHeatmap() {
     return counts;
   }, [events, listingTypeById, windowDays]);
 
-  const recordRecentActivity = (entry: Omit<PromotionHeatmapRecentActivityEntry, "id" | "createdAt">) => {
+  const recordRecentActivity = useCallback((entry: PromotionHeatmapRecentActivityInput) => {
     setRecentActivity((current) =>
       [
         {
           ...entry,
           id: `${entry.kind}:${Date.now()}`,
           createdAt: new Date().toISOString(),
-        },
+        } as PromotionHeatmapRecentActivityEntry,
         ...current,
       ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
     );
-  };
+  }, []);
 
-  const exportCsv = () => {
+  const exportCsv = useCallback(() => {
     if (buckets.length === 0) {
       return;
     }
@@ -178,9 +198,9 @@ export default function PromotionHeatmap() {
     link.download = `promotion-heatmap-${windowDays}d.csv`;
     link.click();
     URL.revokeObjectURL(url);
-  };
+  }, [buckets, trendByType, windowDays]);
 
-  const runExport = () => {
+  const runExport = useCallback(() => {
     recordRecentActivity({
       kind: "export",
       label: `Exported ${buckets.length} heatmap buckets`,
@@ -188,7 +208,7 @@ export default function PromotionHeatmap() {
       windowDays,
     });
     exportCsv();
-  };
+  }, [buckets.length, exportCsv, grandTotal, recordRecentActivity, windowDays]);
 
   useEffect(() => {
     const handleExportEvent = (event: Event) => {

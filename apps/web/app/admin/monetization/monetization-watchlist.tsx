@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { applyPromotionDashboardFilter, applySubscriptionHistoryFilter } from "@/app/admin/monetization/monetization-activity-actions";
 import { useMonetizationActivity } from "@/app/admin/monetization/monetization-activity-context";
@@ -55,13 +55,7 @@ export default function MonetizationWatchlist() {
   const [backendStatus, setBackendStatus] = useState<"idle" | "loading" | "error">("idle");
   const [backendError, setBackendError] = useState<string | null>(null);
   const [stateFilter, setStateFilter] = useState<"active" | "acknowledged" | "all">("active");
-  const severityRank: Record<WatchlistAlert["severity"], number> = {
-    high: 0,
-    medium: 1,
-    monitor: 2,
-  };
-
-  function recordWatchlistAction(
+  const recordWatchlistAction = useCallback((
     summary: string,
     replayKey:
       | "subscription_destructive"
@@ -69,7 +63,7 @@ export default function MonetizationWatchlist() {
       | "promotion_removals"
       | "promoted_listings"
       | null = null,
-  ) {
+  ) => {
     const createdAt = new Date().toISOString();
     setToolState((current) => ({
       ...current,
@@ -77,9 +71,9 @@ export default function MonetizationWatchlist() {
       watchlistLastActionAt: createdAt,
       watchlistLastActionReplayKey: replayKey,
     }));
-  }
+  }, [setToolState]);
 
-  const refreshWatchlist = async () => {
+  const refreshWatchlist = useCallback(async () => {
     const session = await restoreAdminSession();
     if (!session) {
       throw new ApiError(401, "Sign in as an admin to update monetization signals.");
@@ -93,7 +87,7 @@ export default function MonetizationWatchlist() {
     ]);
     setBackendSummaries(summaryRows);
     setBackendEvents(eventRows);
-  };
+  }, [api, lastWatchlistViewedAt, stateFilter]);
 
   const acknowledgeWatchlistAlert = async (alert: WatchlistAlert) => {
     setBackendStatus("loading");
@@ -190,7 +184,7 @@ export default function MonetizationWatchlist() {
     return () => {
       cancelled = true;
     };
-  }, [api, lastWatchlistViewedAt, stateFilter]);
+  }, [refreshWatchlist]);
 
   const alerts = useMemo<WatchlistAlert[]>(
     () =>
@@ -199,10 +193,10 @@ export default function MonetizationWatchlist() {
         signature: alert.signature,
         title: alert.title,
         detail: alert.detail,
-        severity: alert.severity,
-        tone: alert.tone,
+        severity: alert.severity ?? "monitor",
+        tone: alert.tone ?? "sky",
         actionLabel: alert.action_label,
-        acknowledged: alert.acknowledged,
+        acknowledged: Boolean(alert.acknowledged),
         onAction: () => {
           if (alert.replay_key === "subscription_destructive") {
             recordActivity({
@@ -278,7 +272,7 @@ export default function MonetizationWatchlist() {
           recordWatchlistAction(`Opened ${alert.title.toLowerCase()}`, alert.replay_key);
         },
       })),
-    [backendSummaries, recordActivity],
+    [backendSummaries, recordActivity, recordWatchlistAction],
   );
 
   const visibleAlerts = useMemo(
@@ -286,8 +280,15 @@ export default function MonetizationWatchlist() {
       alerts
         .filter((alert) => severityFilter === "all" || alert.severity === severityFilter)
         .filter((alert) => !newOnly || isVisitBasedAlert(alert))
-        .sort((left, right) => severityRank[left.severity] - severityRank[right.severity]),
-    [alerts, newOnly, severityFilter, severityRank],
+        .sort((left, right) => {
+          const severityRank: Record<WatchlistAlert["severity"], number> = {
+            high: 0,
+            medium: 1,
+            monitor: 2,
+          };
+          return severityRank[left.severity] - severityRank[right.severity];
+        }),
+    [alerts, newOnly, severityFilter],
   );
 
   const alertCounts = useMemo(() => {

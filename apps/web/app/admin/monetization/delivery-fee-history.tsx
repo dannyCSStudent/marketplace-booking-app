@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
@@ -50,44 +50,43 @@ function escapeCsvValue(value: string | number | null | undefined) {
 }
 
 export default function DeliveryFeeHistory() {
+  const [recentActivity, setRecentActivity] = useState<DeliveryFeeHistoryRecentActivityEntry[]>(
+    () => {
+      if (typeof window === "undefined") {
+        return [];
+      }
+
+      try {
+        const stored = window.sessionStorage.getItem(DELIVERY_FEE_HISTORY_ACTIVITY_KEY);
+        if (!stored) {
+          return [];
+        }
+
+        const parsed = JSON.parse(stored) as DeliveryFeeHistoryRecentActivityEntry[];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        window.sessionStorage.removeItem(DELIVERY_FEE_HISTORY_ACTIVITY_KEY);
+        return [];
+      }
+    },
+  );
+  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>(() => {
+    if (typeof window === "undefined") {
+      return "all";
+    }
+
+    const stored = window.sessionStorage.getItem(DELIVERY_FEE_HISTORY_ACTIVITY_FILTER_KEY);
+    if (stored === "all" || stored === "window" || stored === "export") {
+      return stored;
+    }
+
+    return "all";
+  });
   const [history, setHistory] = useState<DeliveryFeeHistoryPoint[]>([]);
   const [windowDays, setWindowDays] = useState<(typeof WINDOW_OPTIONS)[number]>(14);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-  const [recentActivity, setRecentActivity] = useState<DeliveryFeeHistoryRecentActivityEntry[]>([]);
-  const [recentActivityFilter, setRecentActivityFilter] = useState<RecentActivityFilter>("all");
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const stored = window.sessionStorage.getItem(DELIVERY_FEE_HISTORY_ACTIVITY_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as DeliveryFeeHistoryRecentActivityEntry[];
-      if (Array.isArray(parsed)) {
-        setRecentActivity(parsed);
-      }
-    } catch {
-      window.sessionStorage.removeItem(DELIVERY_FEE_HISTORY_ACTIVITY_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const stored = window.sessionStorage.getItem(DELIVERY_FEE_HISTORY_ACTIVITY_FILTER_KEY);
-    if (stored === "all" || stored === "window" || stored === "export") {
-      setRecentActivityFilter(stored);
-    }
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -152,7 +151,7 @@ export default function DeliveryFeeHistory() {
     [history],
   );
 
-  const recordRecentActivity = (entry: Omit<DeliveryFeeHistoryRecentActivityEntry, "id" | "createdAt">) => {
+  const recordRecentActivity = useCallback((entry: Omit<DeliveryFeeHistoryRecentActivityEntry, "id" | "createdAt">) => {
     setRecentActivity((current) =>
       [
         {
@@ -163,7 +162,7 @@ export default function DeliveryFeeHistory() {
         ...current,
       ].slice(0, MAX_RECENT_ACTIVITY_ENTRIES),
     );
-  };
+  }, []);
 
   const setWindowDaysWithActivity = (nextWindowDays: (typeof WINDOW_OPTIONS)[number]) => {
     recordRecentActivity({
@@ -175,7 +174,7 @@ export default function DeliveryFeeHistory() {
     setWindowDays(nextWindowDays);
   };
 
-  const exportCsv = () => {
+  const exportCsv = useCallback(() => {
     if (history.length === 0) {
       return;
     }
@@ -195,9 +194,9 @@ export default function DeliveryFeeHistory() {
     link.download = `delivery-fee-history-${windowDays}d.csv`;
     link.click();
     URL.revokeObjectURL(url);
-  };
+  }, [history, windowDays]);
 
-  const runExport = () => {
+  const runExport = useCallback(() => {
     recordRecentActivity({
       kind: "export",
       label: `Exported ${history.length} fee points`,
@@ -205,7 +204,7 @@ export default function DeliveryFeeHistory() {
       windowDays,
     });
     exportCsv();
-  };
+  }, [exportCsv, history.length, recordRecentActivity, totalCollected, windowDays]);
 
   useEffect(() => {
     const handleExportEvent = (event: Event) => {
@@ -221,7 +220,7 @@ export default function DeliveryFeeHistory() {
     return () => {
       window.removeEventListener(MONETIZATION_EXPORT_EVENT, handleExportEvent);
     };
-  }, [history, runExport, windowDays]);
+  }, [runExport]);
 
   const renderBody = () => {
     if (!lastUpdated && !error && history.length === 0) {

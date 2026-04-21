@@ -216,12 +216,11 @@ export function OrderFraudWatchPanel() {
         setSession(currentSession);
 
         const [summaryRows, eventRows] = await Promise.all([
-          api.listAdminOrderFraudWatchBuyerSummaries(currentSession.access_token, {
-            limit: 12,
-            state: stateFilter,
+          api.listAdminOrderFraudWatchBuyerSummaries(12, stateFilter, {
+            accessToken: currentSession.access_token,
           }),
-          api.listAdminOrderFraudWatchEvents(currentSession.access_token, {
-            limit: 20,
+          api.listAdminOrderFraudWatchEvents(20, {
+            accessToken: currentSession.access_token,
           }),
         ]);
 

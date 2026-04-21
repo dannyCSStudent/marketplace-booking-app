@@ -634,7 +634,7 @@ export function ReviewModerationPanel() {
         {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           kind: options.kind ?? "view",
-          label: options.recordLabel,
+          label: String(options.recordLabel),
           created_at: new Date().toISOString(),
           snapshot,
         },
@@ -775,7 +775,7 @@ export function ReviewModerationPanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!preferencesHydrated || loading || watchlistViewMarkedRef.current) {

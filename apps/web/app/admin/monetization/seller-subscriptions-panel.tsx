@@ -8,6 +8,7 @@ import {
   createApiClient,
   formatCurrency,
   type SellerLookupRead,
+  type SellerSubscriptionAssign,
 } from "@/app/lib/api";
 import { invalidateMarketplaceCaches } from "@/app/lib/cache-invalidation";
 import {
@@ -32,11 +33,11 @@ function formatSellerLocation(location: {
 export default function SellerSubscriptionsPanel() {
   const router = useRouter();
   const [sellerResults, setSellerResults] = useState<SellerLookupRead[]>([]);
-  const [destructiveChangeConfirmed, setDestructiveChangeConfirmed] = useState(false);
+  const [destructiveChangeConfirmedKey, setDestructiveChangeConfirmedKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const { preferences, setSubscriptionAssignmentDraft } = useMonetizationPreferences();
-  const { tiers, subscriptions, status, error, lastUpdated, refresh, assignSubscription } =
+  const { tiers, subscriptions, status, lastUpdated, refresh, assignSubscription } =
     useSubscriptionAnalytics();
   const { sellerSlug, selectedTierId, reasonCode, note } = preferences.subscriptionAssignmentDraft;
   const api = useMemo(() => createApiClient(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"), []);
@@ -95,6 +96,8 @@ export default function SellerSubscriptionsPanel() {
     [sellerResults, sellerSlug],
   );
   const normalizedSellerSlug = sellerSlug.trim().toLowerCase();
+  const destructiveConfirmationKey = `${normalizedSellerSlug}:${selectedTierId}`;
+  const destructiveChangeConfirmed = destructiveChangeConfirmedKey === destructiveConfirmationKey;
   const selectedTier = useMemo(
     () => tiers.find((tier) => (tier.id ?? "") === selectedTierId) ?? null,
     [selectedTierId, tiers],
@@ -210,10 +213,6 @@ export default function SellerSubscriptionsPanel() {
     };
   }, [setSubscriptionAssignmentDraft, tiers]);
 
-  useEffect(() => {
-    setDestructiveChangeConfirmed(false);
-  }, [normalizedSellerSlug, selectedTierId]);
-
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -243,7 +242,7 @@ export default function SellerSubscriptionsPanel() {
           {
             seller_slug: normalizedSellerSlug,
             tier_id: selectedTierId,
-            reason_code: reasonCode,
+            reason_code: reasonCode as SellerSubscriptionAssign["reason_code"],
             note: note.trim() || null,
           },
         );
@@ -469,7 +468,11 @@ export default function SellerSubscriptionsPanel() {
                 type="checkbox"
                 className="mt-0.5 size-4 rounded border-rose-300"
                 checked={destructiveChangeConfirmed}
-                onChange={(event) => setDestructiveChangeConfirmed(event.target.checked)}
+                onChange={(event) =>
+                  setDestructiveChangeConfirmedKey(
+                    event.target.checked ? destructiveConfirmationKey : null,
+                  )
+                }
               />
               <span>
                 <span className="block font-semibold">Confirm destructive change</span>

@@ -26,6 +26,7 @@ import type {
   SubscriptionAssignmentDraft,
   SubscriptionHistoryPreferences,
 } from "@/app/admin/monetization/monetization-preferences-types";
+export type { QuickAccessFilter } from "@/app/admin/monetization/monetization-preferences-types";
 
 const CLIENT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const SESSION_STORAGE_KEY = "admin.monetization.preferences-cache";
@@ -296,7 +297,7 @@ function normalizePreferences(value: unknown): MonetizationPreferences {
         typeof toolStateRecord.dismissed_watchlist_alert_signatures === "object"
           ? Object.fromEntries(
               Object.entries(toolStateRecord.dismissed_watchlist_alert_signatures).filter(
-                ([key, value]): value is string => typeof key === "string" && typeof value === "string",
+                (entry): entry is [string, string] => typeof entry[1] === "string",
               ),
             )
           : {},
@@ -500,7 +501,7 @@ export function MonetizationPreferencesProvider({ children }: { children: ReactN
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [preferences, readyToPersist]);
+  }, [preferences, readyToPersist, router]);
 
   const value = useMemo<MonetizationPreferencesContextValue>(
     () => ({

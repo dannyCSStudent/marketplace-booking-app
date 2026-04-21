@@ -631,6 +631,37 @@ export type OrderExceptionSellerSummaryRead = {
     latest_event_created_at: string;
   };
 
+export type OrderFraudWatchBuyerSummaryRead = {
+    buyer_id: string;
+    buyer_display_name: string;
+    alert_delivery_count: number;
+    latest_alert_delivery_status: string;
+    latest_alert_delivery_created_at: string;
+    order_exception_count: number;
+    recent_order_exception_count: number;
+    risk_level: string;
+    alert_reason: string;
+    latest_order_id?: string | null;
+    latest_order_status?: string | null;
+    acknowledged: boolean;
+  };
+
+export type OrderFraudWatchEventRead = {
+    id: string;
+    buyer_id: string;
+    buyer_display_name: string;
+    delivery_id?: string | null;
+    actor_user_id: string;
+    action: string;
+    alert_signature: string;
+    order_exception_count: number;
+    recent_order_exception_count: number;
+    risk_level: string;
+    latest_order_id?: string | null;
+    latest_order_status?: string | null;
+    created_at: string;
+  };
+
 export type OrderItemCreate = {
     listing_id: string;
     quantity: number;
@@ -1281,6 +1312,8 @@ export type ApiSchemaMap = {
   OrderCreate: OrderCreate;
   OrderExceptionEventRead: OrderExceptionEventRead;
   OrderExceptionSellerSummaryRead: OrderExceptionSellerSummaryRead;
+  OrderFraudWatchBuyerSummaryRead: OrderFraudWatchBuyerSummaryRead;
+  OrderFraudWatchEventRead: OrderFraudWatchEventRead;
   OrderItemCreate: OrderItemCreate;
   OrderItemRead: OrderItemRead;
   OrderRead: OrderRead;
@@ -1650,6 +1683,24 @@ export type ApiOperations = {
     };
   };
   "/notifications/admin/order-exceptions/{seller_id}/acknowledge": {
+    delete: {
+      response: NotificationDeliveryRead[];
+    };
+    post: {
+      response: NotificationDeliveryRead[];
+    };
+  };
+  "/notifications/admin/order-fraud-watch/events": {
+    get: {
+      response: OrderFraudWatchEventRead[];
+    };
+  };
+  "/notifications/admin/order-fraud-watch/summaries": {
+    get: {
+      response: OrderFraudWatchBuyerSummaryRead[];
+    };
+  };
+  "/notifications/admin/order-fraud-watch/{buyer_id}/acknowledge": {
     delete: {
       response: NotificationDeliveryRead[];
     };

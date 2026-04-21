@@ -652,7 +652,6 @@ def list_review_anomalies(*, limit: int = 8) -> list[ReviewAnomalyRead]:
 
         grouped.setdefault(report.seller_id, []).append(report)
 
-    now = datetime.now(timezone.utc)
     anomalies: list[ReviewAnomalyRead] = []
 
     for seller_id, seller_reports in grouped.items():
@@ -665,16 +664,17 @@ def list_review_anomalies(*, limit: int = 8) -> list[ReviewAnomalyRead]:
         hidden_open_reports = [
             report for report in active_reports if report.review.is_hidden and report.status != "resolved"
         ]
+        latest_report = max(active_reports, key=lambda report: _normalize_datetime(report.created_at))
+        latest_report_at = _normalize_datetime(latest_report.created_at)
         recent_reports = [
             report
             for report in active_reports
-            if now - _normalize_datetime(report.created_at) <= timedelta(days=3)
+            if latest_report_at - _normalize_datetime(report.created_at) <= timedelta(days=3)
         ]
 
         if len(active_reports) < 2 and not hidden_open_reports:
             continue
 
-        latest_report = max(active_reports, key=lambda report: _normalize_datetime(report.created_at))
         seller_row = active_reports[0]
 
         reasons: list[str] = []

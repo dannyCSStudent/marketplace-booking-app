@@ -346,15 +346,15 @@ export default async function SellerStorefrontPage({
                     <TrustScoreStat label="Reviews" value={`${seller.trust_score.review_count}`} />
                     <TrustScoreStat
                       label="Response"
-                      value={`${Math.round(seller.trust_score.response_rate * 100)}%`}
+                      value={`${Math.round((seller.trust_score.response_rate ?? 0) * 100)}%`}
                     />
                     <TrustScoreStat
                       label="Completion"
-                      value={`${Math.round(seller.trust_score.completion_rate * 100)}%`}
+                      value={`${Math.round((seller.trust_score.completion_rate ?? 0) * 100)}%`}
                     />
                     <TrustScoreStat
                       label="Delivery"
-                      value={`${Math.round(seller.trust_score.delivery_success_rate * 100)}%`}
+                      value={`${Math.round((seller.trust_score.delivery_success_rate ?? 0) * 100)}%`}
                     />
                   </div>
                 </div>

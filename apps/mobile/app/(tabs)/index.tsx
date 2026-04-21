@@ -12,6 +12,7 @@ import {
   setBuyerBrowseFilters,
   setBuyerBrowseResumeFilters,
   setBuyerRecentListings,
+  setBuyerRecentTransactionReceipts,
 } from '@/lib/session-storage';
 import { useBuyerSession } from '@/providers/buyer-session';
 
@@ -441,6 +442,22 @@ function getRecommendationScore(
   }
 
   return 0;
+}
+
+function getSuggestionSecondarySignal(listing: {
+  duration_minutes?: number | null;
+  price_cents?: number | null;
+  currency?: string | null;
+}) {
+  if (listing.duration_minutes) {
+    return `${listing.duration_minutes} min`;
+  }
+
+  if (typeof listing.price_cents === 'number' && typeof listing.currency === 'string') {
+    return formatCurrency(listing.price_cents, listing.currency);
+  }
+
+  return 'Price unavailable';
 }
 
 export default function BrowseScreen() {

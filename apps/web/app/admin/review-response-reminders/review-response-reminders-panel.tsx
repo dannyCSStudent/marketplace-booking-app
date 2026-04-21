@@ -11,18 +11,6 @@ type StatusFilter = "all" | "queued" | "sent" | "failed";
 type RecencyFilter = "today" | "7d" | "all";
 type EventFilter = "all" | "acknowledged" | "cleared";
 
-type ReviewResponseReminderSellerSummaryRead = {
-  seller_id: string;
-  seller_slug: string;
-  seller_display_name: string;
-  reminder_count: number;
-  latest_review_id?: string | null;
-  latest_review_rating?: number | null;
-  latest_alert_delivery_status: string;
-  latest_alert_delivery_created_at: string;
-  acknowledged: boolean;
-};
-
 type ReviewResponseReminderEventRead = {
   id: string;
   seller_id: string;
@@ -91,7 +79,9 @@ export function ReviewResponseRemindersPanel() {
   const [acknowledgingSellerId, setAcknowledgingSellerId] = useState<string | null>(null);
 
   useEffect(() => {
-    setSession(restoreAdminSession());
+    void (async () => {
+      setSession(await restoreAdminSession());
+    })();
   }, []);
 
   useEffect(() => {
@@ -146,10 +136,10 @@ export function ReviewResponseRemindersPanel() {
     setLoading(true);
     setError(null);
     Promise.all([
-      api.get<NotificationDelivery[]>("/notifications/admin", { accessToken: session.accessToken }),
+      api.get<NotificationDelivery[]>("/notifications/admin", { accessToken: session.access_token }),
       api.get<ReviewResponseReminderEventRead[]>(
         "/notifications/admin/review-response-reminders/events",
-        { accessToken: session.accessToken },
+        { accessToken: session.access_token },
       ),
     ])
       .then(([deliveryRows, eventRows]) => {
@@ -196,7 +186,7 @@ export function ReviewResponseRemindersPanel() {
 
         return true;
       }),
-    [deliveries, recencyFilter, statusFilter],
+    [deliveries, recencyFilter, stateFilter, statusFilter],
   );
 
   const groups = useMemo(() => {
@@ -277,23 +267,23 @@ export function ReviewResponseRemindersPanel() {
         ? api.post(
             `/notifications/admin/review-response-reminders/${group.sellerId}/acknowledge`,
             undefined,
-            { accessToken: session.accessToken },
+            { accessToken: session.access_token },
           )
         : fetch(
             `${apiBaseUrl}/notifications/admin/review-response-reminders/${group.sellerId}/acknowledge`,
             {
               method: "DELETE",
               headers: {
-                Authorization: `Bearer ${session.accessToken}`,
+                Authorization: `Bearer ${session.access_token}`,
                 "Content-Type": "application/json",
               },
             },
           ));
       const [deliveryRows, eventRows] = await Promise.all([
-        api.get<NotificationDelivery[]>("/notifications/admin", { accessToken: session.accessToken }),
+        api.get<NotificationDelivery[]>("/notifications/admin", { accessToken: session.access_token }),
         api.get<ReviewResponseReminderEventRead[]>(
           "/notifications/admin/review-response-reminders/events",
-          { accessToken: session.accessToken },
+          { accessToken: session.access_token },
         ),
       ]);
       setDeliveries(deliveryRows);
@@ -472,10 +462,10 @@ export function ReviewResponseRemindersPanel() {
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-foreground">
-                          {delivery.payload?.subject ?? "Review response reminder"}
+                          {String(delivery.payload?.subject ?? "Review response reminder")}
                         </p>
                         <p className="mt-1 text-sm text-foreground/70">
-                          {delivery.payload?.body ?? "Seller still needs to reply to a review."}
+                          {String(delivery.payload?.body ?? "Seller still needs to reply to a review.")}
                         </p>
                         <p className="mt-2 text-xs text-foreground/48">
                           {new Date(delivery.created_at).toLocaleString()}

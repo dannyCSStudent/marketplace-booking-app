@@ -705,7 +705,7 @@ export function OrderExceptionsPanel() {
                   </div>
 
                   <p className="text-sm leading-7 text-foreground/72">
-                    {group.deliveries[0]?.payload?.exception_reason ?? "Order exception"}
+                    {String(group.deliveries[0]?.payload?.exception_reason ?? "Order exception")}
                   </p>
 
                   <div className="flex flex-wrap gap-2 text-xs text-foreground/60">
@@ -719,7 +719,7 @@ export function OrderExceptionsPanel() {
                       Failed · {group.deliveries.filter((delivery) => delivery.delivery_status === "failed").length}
                     </span>
                     <span className="rounded-full border border-border bg-surface px-3 py-1">
-                      Actor · {formatFilterLabel(group.deliveries[0]?.payload?.actor_role ?? "unknown")}
+                      Actor · {formatFilterLabel(String(group.deliveries[0]?.payload?.actor_role ?? "unknown"))}
                     </span>
                   </div>
                 </div>

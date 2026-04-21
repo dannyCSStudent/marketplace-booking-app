@@ -40,6 +40,8 @@ type DeliveryWatchlistViewState = {
   severityFilter: DeliveryWatchlistSeverityFilter;
   newOnly: boolean;
   viewedAt: string;
+  watchlistSeverityFilter?: DeliveryWatchlistSeverityFilter;
+  watchlistNewOnly?: boolean;
 };
 type DeliveryOpsPreferences = {
   preset: DeliveryPreset;
@@ -88,6 +90,15 @@ type DeliveryOpsActivityEntry = {
   watchlistNewOnly?: boolean;
   activityFilterSnapshot?: DeliveryActivityFilter | null;
   activityEntryLimitSnapshot?: 6 | 10;
+};
+type WatchlistSummaryOption = {
+  key: string;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  hidden?: boolean;
+  classNameWhenInactive: string;
+  classNameWhenActive: string;
 };
 type DeliveryActivityFilter = "all" | "views" | "operations" | "watchlist";
 type ListingAdjustmentType = "pricing" | "local-fit" | "booking" | "fulfillment" | "other";
@@ -483,6 +494,13 @@ function normalizeWatchlistViewState(value: unknown): DeliveryWatchlistViewState
         : "all",
     newOnly: candidate.newOnly === true,
     viewedAt: candidate.viewedAt,
+    watchlistSeverityFilter:
+      candidate.severityFilter === "high" ||
+      candidate.severityFilter === "medium" ||
+      candidate.severityFilter === "monitor"
+        ? candidate.severityFilter
+        : "all",
+    watchlistNewOnly: candidate.newOnly === true,
   };
 }
 
@@ -523,7 +541,19 @@ const DELIVERY_SAVED_PRESETS: Array<{
   id: DeliverySavedPresetId;
   label: string;
   description: string;
-  apply: Omit<DeliveryOpsPreferences, "watchlistLastViewedAt" | "pinnedPresetIds" | "lastAppliedPresetId">;
+  apply: Pick<
+    DeliveryOpsPreferences,
+    | "preset"
+    | "status"
+    | "channel"
+    | "kind"
+    | "recency"
+    | "trust"
+    | "ownership"
+    | "listingHealth"
+    | "query"
+    | "mode"
+  >;
 }> = [
   {
     id: "needs_attention",
@@ -1041,7 +1071,7 @@ export function DeliveryOpsPanel() {
     );
     setSearchQuery(nextQuery ?? "");
     setExecutionMode(nextMode === "atomic" ? "atomic" : "best_effort");
-  }, []);
+  }, [applyQueueState, searchParams]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -1310,7 +1340,7 @@ export function DeliveryOpsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [searchParams]);
+  }, [applyQueueState, searchParams]);
 
   function applyPreset(nextPreset: DeliveryPreset) {
     setPreset(nextPreset);
@@ -1355,7 +1385,7 @@ export function DeliveryOpsPanel() {
     [sellerTrustInterventions],
   );
 
-  function applyQueueState(next: {
+  const applyQueueState = useCallback((next: {
     preset?: DeliveryPreset;
     status?: DeliveryStatusFilter;
     channel?: DeliveryChannelFilter;
@@ -1364,7 +1394,7 @@ export function DeliveryOpsPanel() {
     trust?: DeliveryTrustFilter;
     ownership?: DeliveryOwnershipFilter;
     listingHealth?: DeliveryListingHealthFilter;
-  }) {
+  }) => {
     setPreset(next.preset ?? "needs_attention");
     setStatusFilter(next.status ?? "all");
     setChannelFilter(next.channel ?? "all");
@@ -1373,7 +1403,7 @@ export function DeliveryOpsPanel() {
     setTrustFilter(next.trust ?? "all");
     setOwnershipFilter(next.ownership ?? "all");
     setListingHealthFilter(next.listingHealth ?? "all");
-  }
+  }, []);
 
   function applySavedPreset(presetDefinition: (typeof DELIVERY_SAVED_PRESETS)[number]) {
     applyQueueState({
@@ -1430,7 +1460,7 @@ export function DeliveryOpsPanel() {
     );
   }
 
-  function recordActivity(entry: Omit<DeliveryOpsActivityEntry, "id" | "createdAt">) {
+  const recordActivity = useCallback((entry: Omit<DeliveryOpsActivityEntry, "id" | "createdAt">) => {
     setActivityLog((current) => [
       {
         ...entry,
@@ -1439,7 +1469,7 @@ export function DeliveryOpsPanel() {
       },
       ...current,
     ].slice(0, 8));
-  }
+  }, []);
 
   const counts = useMemo(
     () => ({
@@ -2125,6 +2155,7 @@ export function DeliveryOpsPanel() {
       sinceReviewSummary,
     };
   }, [
+    applyQueueState,
     counts.trustDrivenOpen,
     counts.trustDrivenUnassigned,
     deliveries,
@@ -2397,6 +2428,8 @@ export function DeliveryOpsPanel() {
     counts.trustDrivenUnassigned,
     deliveries,
     deliverySummary,
+    applyQueueState,
+    recordWatchlistAlertAction,
     transactionSupportByKey,
     watchlistBaselineAt,
     workerHealth,
@@ -2507,7 +2540,7 @@ export function DeliveryOpsPanel() {
     }),
     [watchlistAlerts],
   );
-  const watchlistSummaryOptions = useMemo(
+  const watchlistSummaryOptions = useMemo<WatchlistSummaryOption[]>(
     () =>
       [
         {
@@ -2552,7 +2585,14 @@ export function DeliveryOpsPanel() {
           classNameWhenActive: "border-foreground bg-foreground text-background",
         },
       ] as const,
-    [hasActiveWatchlistFilters, watchlistBaselineAt, watchlistCounts, watchlistNewOnly, watchlistSeverityFilter],
+    [
+      applyWatchlistFilter,
+      hasActiveWatchlistFilters,
+      watchlistBaselineAt,
+      watchlistCounts,
+      watchlistNewOnly,
+      watchlistSeverityFilter,
+    ],
   );
   const watchlistFilterOptions = useMemo(
     () =>
@@ -3513,7 +3553,7 @@ export function DeliveryOpsPanel() {
             )}
             {renderDeliveryRowPill(
               `seller-risk-priority-${delivery.id}`,
-              sellerTrustIntervention.intervention_priority,
+              sellerTrustIntervention.intervention_priority ?? "unknown",
             )}
           </div>
         ) : null}
@@ -3924,11 +3964,11 @@ export function DeliveryOpsPanel() {
     scrollToDeliverySection("delivery-watchlist");
   }
 
-  function applyWatchlistFilter(
+  const applyWatchlistFilter = useCallback((
     nextSeverity: DeliveryWatchlistSeverityFilter,
     nextNewOnly: boolean,
     source: "summary" | "filters",
-  ) {
+  ) => {
     setWatchlistSeverityFilter(nextSeverity);
     setWatchlistNewOnly(nextNewOnly);
     setWatchlistLastView({
@@ -3959,7 +3999,7 @@ export function DeliveryOpsPanel() {
         watchlistNewOnly: nextNewOnly,
       });
     }
-  }
+  }, [recordActivity]);
 
   function reopenLatestWatchlistReview(entry: DeliveryOpsActivityEntry) {
     recordActivity({
@@ -4046,11 +4086,11 @@ export function DeliveryOpsPanel() {
     setWatchlistLastClearedView(null);
   }
 
-  function recordWatchlistAlertAction(
+  const recordWatchlistAlertAction = useCallback((
     title: string,
     tone: "neutral" | "warning",
     summary: string,
-  ) {
+  ) => {
     recordActivity({
       label: `Open ${title}`,
       summary,
@@ -4059,7 +4099,7 @@ export function DeliveryOpsPanel() {
       watchlistSeverityFilter: watchlistSeverityFilter,
       watchlistNewOnly: watchlistNewOnly,
     });
-  }
+  }, [recordActivity, watchlistNewOnly, watchlistSeverityFilter]);
 
   function renderDeliveryRowActions({
     delivery,
@@ -4308,7 +4348,7 @@ export function DeliveryOpsPanel() {
         label: "Retry delivery",
         summary: `Retried ${delivery.channel} delivery ${truncateId(delivery.id)} for ${delivery.transaction_kind} ${truncateId(delivery.transaction_id)}.`,
         tone: "success",
-        transactionKind: delivery.transaction_kind,
+        transactionKind: delivery.transaction_kind as DeliveryKindFilter,
         transactionId: delivery.transaction_id,
       });
       setFeedback({
@@ -4359,7 +4399,7 @@ export function DeliveryOpsPanel() {
         label: actionLabel,
         summary: `${actionLabel} updated for ${delivery.transaction_kind} ${truncateId(delivery.transaction_id)}.`,
         tone: actionLabel.toLowerCase().includes("trust") ? "warning" : "success",
-        transactionKind: delivery.transaction_kind,
+        transactionKind: delivery.transaction_kind as DeliveryKindFilter,
         transactionId: delivery.transaction_id,
       });
       setFeedback({
@@ -5110,7 +5150,7 @@ export function DeliveryOpsPanel() {
                 value: card.value,
                 detail: card.detail,
                 onClick: card.onClick,
-                tone: card.tone,
+                tone: (card.tone ?? "neutral") as "neutral" | "warning" | "danger",
                 surface: "muted",
                 detailSize: "xs",
               }),
@@ -5185,7 +5225,7 @@ export function DeliveryOpsPanel() {
                 label: card.label,
                 value: card.value,
                 detail: card.detail,
-                tone: card.tone,
+                tone: (card.tone ?? "neutral") as "neutral" | "warning" | "danger",
               }),
             )}
               </div>
@@ -5365,7 +5405,7 @@ export function DeliveryOpsPanel() {
             label: card.label,
             value: card.value,
             onClick: card.onClick,
-            tone: card.tone,
+            tone: (card.tone ?? "neutral") as "neutral" | "warning" | "danger",
           }),
         )
       )}
@@ -5533,7 +5573,7 @@ export function DeliveryOpsPanel() {
             value: card.value,
             detail: card.detail,
             onClick: card.onClick,
-            tone: card.tone,
+            tone: (card.tone ?? "neutral") as "neutral" | "warning" | "danger",
           }),
         )
       )}
@@ -5607,7 +5647,7 @@ export function DeliveryOpsPanel() {
             value: card.value,
             detail: card.detail,
             onClick: card.onClick,
-            tone: card.tone,
+            tone: (card.tone ?? "neutral") as "neutral" | "warning" | "danger",
           }),
         )
       )}

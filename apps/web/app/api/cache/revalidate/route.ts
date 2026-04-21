@@ -14,7 +14,7 @@ const CACHE_TAGS = [
 
 export async function POST() {
   for (const tag of CACHE_TAGS) {
-    revalidateTag(tag);
+    revalidateTag(tag, "max");
   }
 
   return NextResponse.json({ ok: true, tags: CACHE_TAGS });
