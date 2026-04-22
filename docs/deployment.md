@@ -128,3 +128,12 @@ After deploy:
 2. Queue a test notification:
    `pnpm --filter api notifications:queue-test --email you@example.com --channel email`
 3. Confirm the worker marks the delivery `sent` in `notification_deliveries`.
+
+
+## Production hosting choice
+
+- Web (Next.js): Vercel
+- API (FastAPI): Render Web Service
+- Notification worker: Render Background Worker
+- Mobile build/submission: Expo EAS
+- Database/Auth/Storage: Supabase
