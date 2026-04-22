@@ -252,7 +252,7 @@ export default function MonetizationExportCenter() {
           <button
             key={item.target}
             type="button"
-            className="rounded-[1.5rem] border border-border/60 bg-background px-4 py-4 text-left transition hover:border-foreground/30 hover:bg-white"
+            className="rounded-3xl border border-border/60 bg-background px-4 py-4 text-left transition hover:border-foreground/30 hover:bg-white"
               onClick={() => {
               triggerMonetizationExport(item.target);
               setToolState((current) => ({

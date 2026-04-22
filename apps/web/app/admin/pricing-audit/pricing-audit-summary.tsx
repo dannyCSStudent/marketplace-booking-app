@@ -381,7 +381,7 @@ export default function PricingAuditSummary() {
               key={row.scope}
               className={`rounded-2xl border px-4 py-3 transition ${
                 activeScope === row.scope
-                  ? "border-foreground/30 bg-foreground/[0.04]"
+                  ? "border-foreground/30 bg-foreground/4"
                   : "border-border/50 bg-background"
               }`}
             >
@@ -546,9 +546,9 @@ export default function PricingAuditSummary() {
   };
 
   return (
-    <section className="rounded-[2rem] border border-border bg-white p-6">
+    <section className="rounded-4xl border border-border bg-white p-6">
       {watchlistAlerts.length > 0 ? (
-        <div className="mb-6 rounded-[1.5rem] border border-border/70 bg-background/70 p-4">
+        <div className="mb-6 rounded-3xl border border-border/70 bg-background/70 p-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.24em] text-foreground/52">Audit watchlist</p>

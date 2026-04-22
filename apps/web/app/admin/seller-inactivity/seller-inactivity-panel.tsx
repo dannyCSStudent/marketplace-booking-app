@@ -368,7 +368,7 @@ export function SellerInactivityPanel() {
   }
 
   return (
-    <section className="rounded-[2rem] border border-border bg-white p-6 shadow-sm">
+    <section className="rounded-4xl border border-border bg-white p-6 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.24em] text-foreground/52">Phase 6</p>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
 import {
   ApiError,
@@ -1014,6 +1014,89 @@ export function DeliveryOpsPanel() {
   const hydratedFromProfileRef = useRef(false);
   const didMarkWatchlistViewedRef = useRef(false);
 
+  const applyQueueState = useCallback((next: {
+    preset?: DeliveryPreset;
+    status?: DeliveryStatusFilter;
+    channel?: DeliveryChannelFilter;
+    kind?: DeliveryKindFilter;
+    recency?: DeliveryRecencyFilter;
+    trust?: DeliveryTrustFilter;
+    ownership?: DeliveryOwnershipFilter;
+    listingHealth?: DeliveryListingHealthFilter;
+  }) => {
+    setPreset(next.preset ?? "needs_attention");
+    setStatusFilter(next.status ?? "all");
+    setChannelFilter(next.channel ?? "all");
+    setKindFilter(next.kind ?? "all");
+    setRecencyFilter(next.recency ?? "week");
+    setTrustFilter(next.trust ?? "all");
+    setOwnershipFilter(next.ownership ?? "all");
+    setListingHealthFilter(next.listingHealth ?? "all");
+  }, []);
+  const recordActivity = useCallback((entry: Omit<DeliveryOpsActivityEntry, "id" | "createdAt">) => {
+    setActivityLog((current) => [
+      {
+        ...entry,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: new Date().toISOString(),
+      },
+      ...current,
+    ].slice(0, 8));
+  }, []);
+  const applyWatchlistFilter = useCallback((
+    nextSeverity: DeliveryWatchlistSeverityFilter,
+    nextNewOnly: boolean,
+    source: "summary" | "filters",
+  ) => {
+    setWatchlistSeverityFilter(nextSeverity);
+    setWatchlistNewOnly(nextNewOnly);
+    setWatchlistLastView({
+      severityFilter: nextSeverity,
+      newOnly: nextNewOnly,
+      viewedAt: new Date().toISOString(),
+    });
+
+    if (source === "summary") {
+      const summary =
+        nextNewOnly
+          ? "Opened the new-since-review slice in the delivery watchlist."
+          : nextSeverity === "all"
+            ? "Opened the full delivery watchlist from the summary strip."
+            : `Opened the ${nextSeverity} severity slice in the delivery watchlist from the summary strip.`;
+
+      recordActivity({
+        label:
+          nextNewOnly
+            ? "Open new watchlist alerts"
+            : nextSeverity === "all"
+              ? "Open all watchlist alerts"
+              : `Open ${nextSeverity} watchlist alerts`,
+        summary,
+        tone: nextSeverity === "high" || nextNewOnly ? "warning" : "neutral",
+        watchlistTarget: "delivery-watchlist",
+        watchlistSeverityFilter: nextSeverity,
+        watchlistNewOnly: nextNewOnly,
+      });
+    }
+  }, [recordActivity]);
+  const recordWatchlistAlertAction = useCallback((
+    title: string,
+    tone: "neutral" | "warning",
+    summary: string,
+  ) => {
+    recordActivity({
+      label: `Open ${title}`,
+      summary,
+      tone,
+      watchlistTarget: "delivery-watchlist",
+      watchlistSeverityFilter: watchlistSeverityFilter,
+      watchlistNewOnly: watchlistNewOnly,
+    });
+  }, [recordActivity, watchlistNewOnly, watchlistSeverityFilter]);
+
+  
+
+
   useEffect(() => {
     const nextPreset = searchParams.get("preset");
     const nextStatus = searchParams.get("status");
@@ -1385,25 +1468,7 @@ export function DeliveryOpsPanel() {
     [sellerTrustInterventions],
   );
 
-  const applyQueueState = useCallback((next: {
-    preset?: DeliveryPreset;
-    status?: DeliveryStatusFilter;
-    channel?: DeliveryChannelFilter;
-    kind?: DeliveryKindFilter;
-    recency?: DeliveryRecencyFilter;
-    trust?: DeliveryTrustFilter;
-    ownership?: DeliveryOwnershipFilter;
-    listingHealth?: DeliveryListingHealthFilter;
-  }) => {
-    setPreset(next.preset ?? "needs_attention");
-    setStatusFilter(next.status ?? "all");
-    setChannelFilter(next.channel ?? "all");
-    setKindFilter(next.kind ?? "all");
-    setRecencyFilter(next.recency ?? "week");
-    setTrustFilter(next.trust ?? "all");
-    setOwnershipFilter(next.ownership ?? "all");
-    setListingHealthFilter(next.listingHealth ?? "all");
-  }, []);
+  
 
   function applySavedPreset(presetDefinition: (typeof DELIVERY_SAVED_PRESETS)[number]) {
     applyQueueState({
@@ -1460,16 +1525,7 @@ export function DeliveryOpsPanel() {
     );
   }
 
-  const recordActivity = useCallback((entry: Omit<DeliveryOpsActivityEntry, "id" | "createdAt">) => {
-    setActivityLog((current) => [
-      {
-        ...entry,
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: new Date().toISOString(),
-      },
-      ...current,
-    ].slice(0, 8));
-  }, []);
+  
 
   const counts = useMemo(
     () => ({
@@ -2879,7 +2935,7 @@ export function DeliveryOpsPanel() {
         key={key}
         type="button"
         onClick={onClick}
-        className={`rounded-[1.5rem] border p-4 text-left transition hover:border-foreground/28 ${
+        className={`rounded-3xl border p-4 text-left transition hover:border-foreground/28 ${
           surface === "elevated" ? "card-shadow " : ""
         }${toneClassName}`}
       >
@@ -2909,7 +2965,7 @@ export function DeliveryOpsPanel() {
         key={key}
         type="button"
         onClick={onClick}
-        className="card-shadow rounded-[1.5rem] border border-border bg-surface p-4 text-left transition hover:border-foreground/28"
+        className="card-shadow rounded-3xl border border-border bg-surface p-4 text-left transition hover:border-foreground/28"
       >
         <p className="text-xs uppercase tracking-[0.22em] text-foreground/48">{label}</p>
         <p className="mt-3 text-sm leading-6 text-foreground/72">{detail}</p>
@@ -3012,7 +3068,7 @@ export function DeliveryOpsPanel() {
     className?: string;
   }) {
     return (
-      <div key={key} className={`rounded-[1.5rem] border border-dashed border-border ${className}`}>
+      <div key={key} className={`rounded-3xl border border-dashed border-border ${className}`}>
         {message}
       </div>
     );
@@ -3101,7 +3157,7 @@ export function DeliveryOpsPanel() {
     return (
       <article
         key={key}
-        className={`rounded-[1.5rem] border p-4 ${
+        className={`rounded-3xl border p-4 ${
           surface === "elevated" ? "card-shadow " : ""
         }${toneClassName}`}
       >
@@ -3176,7 +3232,7 @@ export function DeliveryOpsPanel() {
       <section
         key={key}
         id={id}
-        className={`card-shadow rounded-[2rem] border border-border bg-surface p-5${className ? ` ${className}` : ""}`}
+        className={`card-shadow rounded-3xl border border-border bg-surface p-5${className ? ` ${className}` : ""}`}
       >
         {children}
       </section>
@@ -3188,7 +3244,7 @@ export function DeliveryOpsPanel() {
   ) {
     return (
       <section
-        className={`card-shadow rounded-[2rem] border p-6 text-sm ${
+        className={`card-shadow rounded-4xl border p-6 text-sm ${
           tone === "danger"
             ? "border-danger/30 bg-danger/8 text-danger"
             : "border-border bg-surface text-foreground/66"
@@ -3212,7 +3268,7 @@ export function DeliveryOpsPanel() {
     secondaryActionLabel: string;
   }) {
     return (
-      <article key={presetDefinition.id} className="rounded-[1.5rem] border border-border bg-background/70 p-4">
+      <article key={presetDefinition.id} className="rounded-3xl border border-border bg-background/70 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-foreground">{presetDefinition.label}</p>
@@ -3311,7 +3367,7 @@ export function DeliveryOpsPanel() {
   }
   function renderQueueSearchField(value: string, onChange: (nextValue: string) => void) {
     return (
-      <label className="flex min-w-[240px] flex-1 flex-col gap-2 text-sm text-foreground/72">
+      <label className="flex min-w-60 flex-1 flex-col gap-2 text-sm text-foreground/72">
         Search
         <input
           value={value}
@@ -3466,7 +3522,7 @@ export function DeliveryOpsPanel() {
           : "border-border bg-background/65";
 
     return (
-      <article key={key} className={`rounded-[1.5rem] border p-4 ${className}`}>
+      <article key={key} className={`rounded-3xl border p-4 ${className}`}>
         {children}
       </article>
     );
@@ -3680,7 +3736,7 @@ export function DeliveryOpsPanel() {
           padding: "sm",
           bodyClassName: "text-xs text-foreground/62",
           children: (
-            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono leading-6">
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-word font-mono leading-6">
               {JSON.stringify(delivery.payload, null, 2)}
             </pre>
           ),
@@ -3701,7 +3757,7 @@ export function DeliveryOpsPanel() {
                 }))
               }
               placeholder="Add support context before assigning or escalating this transaction"
-              className="mt-3 min-h-[96px] w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-foreground outline-none transition focus:border-foreground/30"
+              className="mt-3 min-h-24 w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-foreground outline-none transition focus:border-foreground/30"
             />
           ),
         })}
@@ -3964,42 +4020,7 @@ export function DeliveryOpsPanel() {
     scrollToDeliverySection("delivery-watchlist");
   }
 
-  const applyWatchlistFilter = useCallback((
-    nextSeverity: DeliveryWatchlistSeverityFilter,
-    nextNewOnly: boolean,
-    source: "summary" | "filters",
-  ) => {
-    setWatchlistSeverityFilter(nextSeverity);
-    setWatchlistNewOnly(nextNewOnly);
-    setWatchlistLastView({
-      severityFilter: nextSeverity,
-      newOnly: nextNewOnly,
-      viewedAt: new Date().toISOString(),
-    });
-
-    if (source === "summary") {
-      const summary =
-        nextNewOnly
-          ? "Opened the new-since-review slice in the delivery watchlist."
-          : nextSeverity === "all"
-            ? "Opened the full delivery watchlist from the summary strip."
-            : `Opened the ${nextSeverity} severity slice in the delivery watchlist from the summary strip.`;
-
-      recordActivity({
-        label:
-          nextNewOnly
-            ? "Open new watchlist alerts"
-            : nextSeverity === "all"
-              ? "Open all watchlist alerts"
-              : `Open ${nextSeverity} watchlist alerts`,
-        summary,
-        tone: nextSeverity === "high" || nextNewOnly ? "warning" : "neutral",
-        watchlistTarget: "delivery-watchlist",
-        watchlistSeverityFilter: nextSeverity,
-        watchlistNewOnly: nextNewOnly,
-      });
-    }
-  }, [recordActivity]);
+  
 
   function reopenLatestWatchlistReview(entry: DeliveryOpsActivityEntry) {
     recordActivity({
@@ -4086,21 +4107,7 @@ export function DeliveryOpsPanel() {
     setWatchlistLastClearedView(null);
   }
 
-  const recordWatchlistAlertAction = useCallback((
-    title: string,
-    tone: "neutral" | "warning",
-    summary: string,
-  ) => {
-    recordActivity({
-      label: `Open ${title}`,
-      summary,
-      tone,
-      watchlistTarget: "delivery-watchlist",
-      watchlistSeverityFilter: watchlistSeverityFilter,
-      watchlistNewOnly: watchlistNewOnly,
-    });
-  }, [recordActivity, watchlistNewOnly, watchlistSeverityFilter]);
-
+  
   function renderDeliveryRowActions({
     delivery,
     transactionHref,
@@ -4123,7 +4130,7 @@ export function DeliveryOpsPanel() {
     saveNoteActionKey: string;
   }) {
     return (
-      <div className="flex flex-col gap-2 lg:min-w-[220px]">
+      <div className="flex flex-col gap-2 lg:min-w-55">
         {renderQueueLinkAction(`open-transaction-${delivery.id}`, transactionHref, "Open Transaction")}
         {listingLaneHref
           ? renderQueueLinkAction(`open-listing-lane-${delivery.id}`, listingLaneHref, "Open Listing Lane")
@@ -4194,7 +4201,7 @@ export function DeliveryOpsPanel() {
   }
   function renderReliabilityOverview() {
     return (
-      <section className={`card-shadow rounded-[2rem] border p-5 ${reliabilityStatus.toneClass}`}>
+      <section className={`card-shadow rounded-4xl border p-5 ${reliabilityStatus.toneClass}`}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.24em]">Reliability status</p>
@@ -4746,7 +4753,7 @@ export function DeliveryOpsPanel() {
                   group.entries.map((entry) => (
                     <article
                       key={entry.id}
-                      className={`rounded-[1.5rem] border p-4 ${
+                      className={`rounded-3xl border p-4 ${
                         entry.tone === "danger"
                           ? "border-danger/30 bg-danger/8"
                           : entry.tone === "warning"
@@ -4888,7 +4895,7 @@ export function DeliveryOpsPanel() {
       {watchlistAlerts.length > 0 ? (
         <section
           id="delivery-watchlist"
-          className="card-shadow rounded-[2rem] border border-border bg-surface p-5"
+          className="card-shadow rounded-4xl border border-border bg-surface p-5"
         >
           {renderSurfaceSectionHeader({
             eyebrow: "Delivery watchlist",
@@ -5017,7 +5024,7 @@ export function DeliveryOpsPanel() {
                   filteredWatchlistAlerts.map((alert) => (
                     <article
                       key={alert.id}
-                      className={`rounded-[1.5rem] border p-4 ${
+                      className={`rounded-3xl border p-4 ${
                         alert.severity === "high"
                           ? "border-danger/30 bg-danger/8"
                           : alert.severity === "medium"
@@ -5276,7 +5283,7 @@ export function DeliveryOpsPanel() {
             {failureDiagnostics.topReasons.map((item) => (
               <article
                 key={item.reason}
-                className="rounded-[1.5rem] border border-border bg-background/70 p-4"
+                className="rounded-3xl border border-border bg-background/70 p-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <p className="text-sm font-semibold text-foreground">{item.reason}</p>
@@ -5696,7 +5703,7 @@ export function DeliveryOpsPanel() {
         )
       )}
 
-      <div className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
+      <div className="card-shadow rounded-4xl border border-border bg-surface p-5">
         {renderQueuePresetStrip(preset, applyPreset)}
         {renderCurrentSlicePanel(() =>
           applyQueueState({
@@ -5853,7 +5860,7 @@ export function DeliveryOpsPanel() {
         </div>
       </div>
 
-      <section className="card-shadow rounded-[2rem] border border-border bg-surface p-5">
+      <section className="card-shadow rounded-4xl border border-border bg-surface p-5">
         {renderDeliveryQueueHeader(filteredDeliveries.length)}
         {renderCurrentSlicePanel(() =>
           applyQueueState({
